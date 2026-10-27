@@ -4,7 +4,7 @@
   <p align="center">面向硬件工程师的 C++ 可视化上位机设计器 · 基于 <a href="https://github.com/txp666/FluentQtWidgets">FluentQtWidgets</a></p>
 </p>
 
-FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 的 C++/Qt 6 重写版：拖拽控件、配置属性、绑定串口、TCP 或 MQTT 数据，然后把设计导出成一个**不需要编译器**就能运行的独立应用。
+FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 的 C++/Qt 6 重写版：拖拽控件、配置属性、绑定串口、TCP 或 MQTT 数据，然后把设计导出成一个**不需要编译器**就能运行的独立应用。和 Python 版相比，安装包更小，启动约快一倍，导出不到一秒，还能在应用内更新（见[与 Python 版相比](#与-python-版相比)）。
 
 ## 界面预览
 
@@ -28,11 +28,29 @@ FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Design
 
 ![控件一览（深色）](docs/images/widgets-dark.jpg)
 
-## 与 Python 版的关系
+## 与 Python 版相比
+
+两者使用同一种工程格式，控件和协议规则一致：
 
 - **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的 9 个示例工程都能打开、预览，并按原样保存。
 - **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 帧、Modbus RTU、Modbus TCP 四种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / Modbus 三种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
-- **导出方式不同**：Python 版生成源码，再用 Nuitka 编译。这里预览和导出的应用使用同一个预编译的 `FluentHMIRuntime`，导出时只复制这个程序，再放入 `project.uidp` 和工程用到的图片，并以应用名重命名，因此不再需要 C/C++ 编译器。
+
+不同之处在实现和导出方式：
+
+| | FluentHMI Studio 0.1.0 | PyQt UI Designer 0.1.6 |
+| --- | --- | --- |
+| 实现 | C++17 / Qt 6，原生编译 | Python / PyQt5（Qt 5），用 Nuitka 打包 |
+| 导出应用 | 复制预编译的运行器，再放入工程和图片，约 0.3 秒，不需要 Python 和编译器 | 生成 Python 源码，再用 Nuitka 编译；下载的设计器要打包时需另装 Python 与编译工具 |
+| 预览与导出 | 预览和导出的应用是同一个运行器，预览看到的就是导出后的效果 | 预览在设计器内运行，导出的是另外生成的代码 |
+| macOS 安装包 | 一个 universal 包，32.7 MB（解压后 76 MB），Apple Silicon 与 Intel 通用；导出的应用同样是 universal | arm64、x64 各一个包，53.8 / 62.8 MB（arm64 版解压后 155 MB）；打包只生成本机架构的程序 |
+| Windows 安装包 | 16.7 MB | 54.2 MB |
+| 启动到出现窗口 | 0.7–1.1 秒 | 1.5–2.2 秒 |
+| 启动后内存 | 71–85 MB | 126–137 MB |
+| 更新 | 应用内检查、下载、校验并替换，可设为启动时检查 | 设置页手动检查，有新版本时打开下载页 |
+
+安装包大小取自两者的 GitHub Release。启动和内存在同一台 Mac（Apple M5 Pro，48 GB，macOS 27.0.1）上用两个版本的 Apple Silicon 程序测得：空工程，各启动 4 次，取后 3 次（第一次分别为 2.0 秒和 3.9 秒）；内存为窗口出现 5 秒后的常驻内存。导出时间是导出 `examples/demo.uidp` 三次的耗时（0.26–0.41 秒）。
+
+Python 版目前仍有、这里还没有的：导出可以继续修改的源码工程，实时曲线的游标和数据保存 / 加载（见下方路线图）。
 
 ## 架构
 
