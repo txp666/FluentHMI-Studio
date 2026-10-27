@@ -71,6 +71,8 @@ add_library(fhmi_core STATIC
     src/core/protocol_parser.h
     src/core/widget_meta.cpp
     src/core/widget_meta.h
+    src/core/widget_reference.cpp
+    src/core/widget_reference.h
 )
 target_include_directories(fhmi_core PUBLIC src)
 target_link_libraries(fhmi_core PUBLIC Qt6::Core)
@@ -251,4 +253,13 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_update PRIVATE Qt6::Network Qt6::Test)
     target_compile_definitions(tst_update PRIVATE FHMI_VERSION="${PROJECT_VERSION}")
     add_test(NAME update COMMAND tst_update)
+
+    # docs/uidp-format.md ends with a widget reference generated from the registry: uidp_reference
+    # rewrites it, and the docs test fails while it is out of date.
+    add_executable(uidp_reference tools/uidp_reference.cpp)
+    target_link_libraries(uidp_reference PRIVATE fhmi_core)
+    add_executable(tst_docs tests/tst_docs.cpp)
+    target_link_libraries(tst_docs PRIVATE fhmi_core Qt6::Test)
+    target_compile_definitions(tst_docs PRIVATE FHMI_DOCS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs")
+    add_test(NAME docs COMMAND tst_docs)
 endif()
