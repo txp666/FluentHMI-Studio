@@ -199,7 +199,7 @@ FluentHMIStudio --export <输出目录> motor.uidp
 
 ## 容器
 
-`HBoxLayout`、`VBoxLayout`、`FlexLayout`、`GroupBox`、`CardContainer`、`TabWidget` 可以放子控件，写在 `children` 里，坐标相对容器。`TabWidget` 的页名在 `tabNames`（多行文本，一行一页），子控件用 `tabIndex` 指定页。
+`HBoxLayout`、`VBoxLayout`、`FlexLayout`、`GroupBox`、`CardContainer`、`TabWidget` 可以放子控件，写在 `children` 里，坐标相对容器。`TabWidget` 的页名在 `tabNames`（多行文本，一行一页），子控件用 `tabIndex` 指定页。每页的布局写成 `_tabLayout_{页号}`，可选 `"自由"` `"垂直"` `"水平"` `"弹性(Flex)"`；控件参考里的 `tabLayout` 是属性面板编辑当前页用的，写文件时不需要。
 
 ## 常见错误
 
