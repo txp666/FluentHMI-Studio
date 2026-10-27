@@ -14,15 +14,21 @@ using namespace fhmi;
 
 namespace {
 
-// docs/uidp-format.md, the guide that lets people and AI assistants write .uidp files by hand.
-QString guide()
+// A file in docs/: uidp-format.md is the guide that lets people and AI assistants write .uidp files by hand,
+// uidp-widgets.md its widget reference.
+QString doc(const QString &name)
 {
-    QFile file(QStringLiteral(FHMI_DOCS_DIR "/uidp-format.md"));
+    QFile file(QStringLiteral(FHMI_DOCS_DIR "/") + name);
     if (!file.open(QIODevice::ReadOnly)) {
         return QString();
     }
     // A Windows checkout may turn the line endings into CRLF.
     return QString::fromUtf8(file.readAll()).replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+}
+
+QString guide()
+{
+    return doc(QStringLiteral("uidp-format.md"));
 }
 
 // The first ```json block after the heading of the complete example.
@@ -45,14 +51,35 @@ class TestDocs : public QObject
     Q_OBJECT
 
   private slots:
-    void widgetReferenceIsCurrent()
+    void generatedPartIsCurrent_data()
     {
-        const QString document = guide();
-        QVERIFY2(!document.isEmpty(), "docs/uidp-format.md not found");
-        const QString updated = withWidgetReference(document);
-        QVERIFY2(!updated.isEmpty(), "docs/uidp-format.md has lost the marker line of its widget reference");
-        QVERIFY2(updated == document, "The widget reference in docs/uidp-format.md is out of date: run "
-                                      "<build dir>/uidp_reference docs/uidp-format.md from the source directory");
+        QTest::addColumn<QString>("name");
+        QTest::addColumn<QString>("generated");
+        QTest::newRow("widget list") << QStringLiteral("uidp-format.md") << widgetIndex();
+        QTest::newRow("widget reference") << QStringLiteral("uidp-widgets.md") << widgetReference();
+    }
+
+    void generatedPartIsCurrent()
+    {
+        QFETCH(QString, name);
+        QFETCH(QString, generated);
+        const QString document = doc(name);
+        QVERIFY2(!document.isEmpty(), qPrintable(QStringLiteral("docs/%1 not found").arg(name)));
+        const QString updated = withGenerated(document, generated);
+        QVERIFY2(!updated.isEmpty(), qPrintable(QStringLiteral("docs/%1 has lost the marker line of its "
+                                                               "generated part").arg(name)));
+        QVERIFY2(updated == document, qPrintable(QStringLiteral("docs/%1 is out of date: run <build dir>/uidp_reference "
+                                                                "docs from the source directory").arg(name)));
+    }
+
+    // An AI assistant reads the guide with one command. In a test the 32 KB guide came back as "output too
+    // large", and the assistant cloned the whole repository to read it, which took several more steps; with
+    // the widget reference moved out, the 16 KB guide came back whole.
+    void guideFitsOneRead()
+    {
+        const qsizetype size = guide().toUtf8().size();
+        QVERIFY2(size < 20000, qPrintable(QStringLiteral("docs/uidp-format.md is %1 bytes: keep it under 20 000, "
+                                                         "details belong in uidp-widgets.md").arg(size)));
     }
 
     // The example is what an AI copies from first, so it must load and use only real names and values:

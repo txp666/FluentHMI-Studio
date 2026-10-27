@@ -30,7 +30,13 @@ FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Design
 
 ## 让 AI 写工程
 
-`.uidp` 是 JSON 文件。把 [docs/uidp-format.md](docs/uidp-format.md) 和你的需求一起交给 Claude、Codex 等 AI，它就能直接写出工程文件；写完用 `FluentHMIRuntime 工程.uidp --check` 检查，再用 Studio 打开、预览和导出。说明里有一个完整的例子，以及由程序生成的全部控件属性。
+`.uidp` 是 JSON 文件。把需求和下面这个链接一起交给 Claude、Codex 等 AI，它就能直接写出工程文件：
+
+```text
+https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.md
+```
+
+这是 [docs/uidp-format.md](docs/uidp-format.md) 的原始文本，AI 一次就能读完，不用打开网页或克隆仓库。说明里有规则、一个完整的例子和控件一览；每个控件的全部属性在 [docs/uidp-widgets.md](docs/uidp-widgets.md)，由程序生成，说明里有它的链接，用到时再读。写完用 `FluentHMIRuntime 工程.uidp --check` 检查，再用 Studio 打开、预览和导出。
 
 ## 与 Python 版相比
 
@@ -65,7 +71,7 @@ src/runtime   fhmi_runtime  基于 FluentQtWidgets 的运行时控件、RuntimeS
 src/designer  fhmi_designer 画布（QGraphicsScene）、控件面板、属性编辑器、对齐与容器嵌套
 src/studio    FluentHMIStudio   设计器应用：界面设计 / 预览运行 / 设置，导出服务
 src/player    FluentHMIRuntime  导出应用的运行器：读取自身旁边（或 .app 内）的 project.uidp
-tools         uidp_reference    从控件注册表重新生成 docs/uidp-format.md 末尾的控件参考
+tools         uidp_reference    从控件注册表重新生成 docs/uidp-widgets.md 和 docs/uidp-format.md 末尾的控件一览
 ```
 
 设计画布上显示的就是真实的运行时控件，套在 QGraphicsProxyWidget 里且不响应鼠标。预览和导出应用把同一批控件挂到 RuntimeContext 上，由它接收链路数据、执行绑定、发送命令。

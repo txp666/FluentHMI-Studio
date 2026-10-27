@@ -56,6 +56,28 @@ QString valueText(const QJsonValue &value)
 
 } // namespace
 
+QString widgetIndex()
+{
+    QString out;
+    QStringList line;
+    WidgetCategory category{};
+    for (const WidgetMeta &meta : WidgetRegistry::instance().all()) {
+        if (!line.isEmpty() && meta.category != category) {
+            out += QStringLiteral("- %1：%2\n").arg(categoryTitle(category), line.join(QStringLiteral("、")));
+            line.clear();
+        }
+        category = meta.category;
+        line << QStringLiteral("`%1` %2（%3×%4）")
+                    .arg(meta.typeName, meta.displayName)
+                    .arg(meta.defaultWidth)
+                    .arg(meta.defaultHeight);
+    }
+    if (!line.isEmpty()) {
+        out += QStringLiteral("- %1：%2\n").arg(categoryTitle(category), line.join(QStringLiteral("、")));
+    }
+    return QLatin1Char('\n') + out;
+}
+
 QString widgetReference()
 {
     QString out;
@@ -99,13 +121,13 @@ QString widgetReference()
     return out;
 }
 
-QString withWidgetReference(const QString &document)
+QString withGenerated(const QString &document, const QString &generated)
 {
-    const qsizetype at = document.indexOf(WidgetReferenceMarker);
+    const qsizetype at = document.indexOf(GeneratedMarker);
     if (at < 0) {
         return QString();
     }
-    return document.left(at + WidgetReferenceMarker.size()) + QLatin1Char('\n') + widgetReference();
+    return document.left(at + GeneratedMarker.size()) + QLatin1Char('\n') + generated;
 }
 
 } // namespace fhmi

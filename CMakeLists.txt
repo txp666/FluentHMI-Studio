@@ -254,8 +254,8 @@ if(FHMI_BUILD_TESTS)
     target_compile_definitions(tst_update PRIVATE FHMI_VERSION="${PROJECT_VERSION}")
     add_test(NAME update COMMAND tst_update)
 
-    # docs/uidp-format.md ends with a widget reference generated from the registry: uidp_reference
-    # rewrites it, and the docs test fails while it is out of date.
+    # docs/uidp-widgets.md and the widget list that ends docs/uidp-format.md are generated from the
+    # registry: uidp_reference rewrites them, and the docs test fails while they are out of date.
     add_executable(uidp_reference tools/uidp_reference.cpp)
     target_link_libraries(uidp_reference PRIVATE fhmi_core)
     add_executable(tst_docs tests/tst_docs.cpp)
