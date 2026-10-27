@@ -1,0 +1,11 @@
+build/
+.vs/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+CMakeUserPresets.json
+*.user
+*.autosave
+.DS_Store
+*.partial/
+dist/

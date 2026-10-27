@@ -1,0 +1,3 @@
+[submodule "third_party/FluentQtWidgets"]
+	path = third_party/FluentQtWidgets
+	url = https://github.com/txp666/FluentQtWidgets.git

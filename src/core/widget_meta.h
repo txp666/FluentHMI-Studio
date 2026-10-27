@@ -1,0 +1,93 @@
+#pragma once
+
+#include <QtCore/QJsonObject>
+#include <QtCore/QJsonValue>
+#include <QtCore/QList>
+#include <QtCore/QString>
+#include <QtCore/QStringList>
+
+#include <optional>
+
+namespace fhmi {
+
+enum class PropType
+{
+    String,
+    Int,
+    Float,
+    Bool,
+    Color,
+    Enum,
+    Text,    // multi-line string
+    Command, // a command string sent to the device
+};
+
+struct PropDef
+{
+    QString name;
+    QString label;
+    PropType type = PropType::String;
+    QJsonValue defaultValue;
+    QStringList options; // Enum only
+    std::optional<double> minimum;
+    std::optional<double> maximum;
+    bool bindable = false;
+};
+
+enum class WidgetCategory
+{
+    Basic,
+    Layout,
+    Display,
+    Chart,
+    Comm,
+    Composite,
+};
+
+QString categoryTitle(WidgetCategory category);
+
+struct WidgetMeta
+{
+    QString typeName;
+    QString displayName;
+    WidgetCategory category = WidgetCategory::Basic;
+    QString icon; // FluentIcon name, e.g. "Send"
+    int defaultWidth = 120;
+    int defaultHeight = 40;
+    QList<PropDef> properties;
+    bool resizable = true;
+    int minWidth = 30;
+    int minHeight = 20;
+    bool container = false;
+
+    QJsonObject defaultProperties() const;
+    const PropDef *prop(const QString &name) const;
+    // The property a data binding writes into, or empty if the widget cannot be bound.
+    QString bindProperty() const;
+};
+
+class WidgetRegistry
+{
+  public:
+    static const WidgetRegistry &instance();
+
+    const WidgetMeta *find(const QString &typeName) const;
+    const QList<WidgetMeta> &all() const { return m_widgets; }
+    QList<const WidgetMeta *> byCategory(WidgetCategory category) const;
+    QList<WidgetCategory> categories() const;
+
+  private:
+    WidgetRegistry();
+
+    QList<WidgetMeta> m_widgets;
+};
+
+// Keep the range endpoints and the initial value of Slider/SpinBox/GaugeMeter consistent.
+// `changed` names the property the user just edited, so that endpoint wins.
+QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject properties,
+                                      const QString &changed = QString());
+
+// Registered in builtin_widgets.cpp.
+QList<WidgetMeta> builtinWidgets();
+
+} // namespace fhmi
