@@ -11,6 +11,7 @@
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
 
 #include <QtCore/QSignalBlocker>
+#include <QtGui/QMouseEvent>
 #include <QtWidgets/QHBoxLayout>
 
 namespace fhmi {
@@ -273,17 +274,50 @@ void SliderWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
     }
 }
 
+// A drag sends once, when the mouse lets go, instead of a command for every value the handle passes;
+// keys and the wheel move in steps and send each one.
 void SliderWidget::onAttached()
 {
     if (!flag("sendOnChange") && text("commandMode") != QLatin1String("Modbus")) {
         return;
     }
+    // FluentQt's slider never sets QSlider::isSliderDown(), and a drag that starts on the groove
+    // emits no pressed/released signals, so the mouse is watched on the slider and its handle.
+    m_slider->installEventFilter(this);
+    m_slider->handle()->installEventFilter(this);
     live(connect(m_slider, &QSlider::valueChanged, this, [this](int value) {
-        if (m_quiet) {
-            return;
+        if (!m_quiet && !m_held) {
+            sendValue(value);
         }
-        context()->send(CommandEncoder::encode(properties(), QString::number(value)));
     }));
+}
+
+void SliderWidget::onDetached()
+{
+    m_slider->removeEventFilter(this);
+    m_slider->handle()->removeEventFilter(this);
+    m_held = false;
+}
+
+bool SliderWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    const bool left = (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease)
+                      && static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton;
+    if (left && event->type() == QEvent::MouseButtonPress) {
+        m_held = true;
+        m_pressValue = m_slider->value(); // before a press on the groove moves it
+    } else if (left && m_held) {
+        m_held = false;
+        if (m_slider->value() != m_pressValue) {
+            sendValue(m_slider->value());
+        }
+    }
+    return HmiWidget::eventFilter(watched, event);
+}
+
+void SliderWidget::sendValue(int value)
+{
+    context()->send(CommandEncoder::encode(properties(), QString::number(value)));
 }
 
 // ---------------------------------------------------------------------------

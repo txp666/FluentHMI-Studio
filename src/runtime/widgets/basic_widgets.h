@@ -90,10 +90,16 @@ class SliderWidget : public HmiWidget
   protected:
     void apply() override;
     void onAttached() override;
+    void onDetached() override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
   private:
+    void sendValue(int value);
+
     FluentQt::Slider *m_slider = nullptr;
     bool m_quiet = false;
+    bool m_held = false; // the mouse is down on the slider: a drag sends once, on release
+    int m_pressValue = 0;
 };
 
 class SpinBoxWidget : public HmiWidget

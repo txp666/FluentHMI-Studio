@@ -8,6 +8,7 @@
 #include "studio/export_service.h"
 
 #include <FluentQtWidgets/Widgets/Button.h>
+#include <FluentQtWidgets/Widgets/Slider.h>
 
 #include <QtCore/QDirIterator>
 #include <QtCore/QJsonArray>
@@ -168,6 +169,61 @@ class TestRuntime : public QObject
         QVERIFY(button);
         button->click();
         QCOMPARE(link.sent, QList<QByteArray>{QByteArray("RUN\n")});
+        surface.context()->hub()->removeLink(&link);
+    }
+
+    // A drag sends one command when the mouse lets go, whether it starts on the handle or on the
+    // groove; arrow keys send each step; device feedback moving the handle sends nothing.
+    void sliderSendsOnRelease()
+    {
+        Project project;
+        project.widgets = QJsonArray{QJsonObject{
+            {"id", "speed"},
+            {"type", "Slider"},
+            {"geometry", QJsonObject{{"x", 10}, {"y", 10}, {"w", 320}, {"h", 36}}},
+            {"properties", QJsonObject{{"minimum", 0}, {"maximum", 3000}, {"value", 0}, {"sendOnChange", true},
+                                       {"commandTemplate", "SPEED={value}"}}},
+            {"binding", QJsonObject{{"parseMode", "键值匹配"}, {"key", "rpm"}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.resize(400, 120);
+        surface.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&surface));
+        FakeLink link;
+        surface.context()->hub()->addLink(&link);
+        auto *slider = surface.findChild<FluentQt::Slider *>();
+        QVERIFY(slider);
+        const int y = slider->height() / 2;
+
+        // from the handle (at value 0, the left end)
+        QTest::mousePress(slider->handle(), Qt::LeftButton, {}, slider->handle()->rect().center());
+        for (int x = 40; x <= 240; x += 20) {
+            QTest::mouseMove(slider, QPoint(x, y));
+        }
+        QVERIFY(slider->value() > 1000);
+        QVERIFY(link.sent.isEmpty());
+        QTest::mouseRelease(slider->handle(), Qt::LeftButton, {}, slider->handle()->rect().center());
+        QCOMPARE(link.sent.size(), 1);
+        QVERIFY(link.sent.first().startsWith("SPEED=" + QByteArray::number(slider->value())));
+
+        // from the groove: the press moves the value, the release sends it
+        link.sent.clear();
+        QTest::mousePress(slider, Qt::LeftButton, {}, QPoint(slider->width() - 30, y));
+        QTest::mouseMove(slider, QPoint(slider->width() - 60, y));
+        QVERIFY(link.sent.isEmpty());
+        QTest::mouseRelease(slider, Qt::LeftButton, {}, QPoint(slider->width() - 60, y));
+        QCOMPARE(link.sent.size(), 1);
+
+        link.sent.clear();
+        slider->setFocus();
+        QTest::keyClick(slider, Qt::Key_Right);
+        QTest::keyClick(slider, Qt::Key_Right);
+        QCOMPARE(link.sent.size(), 2);
+
+        link.sent.clear();
+        link.inject("rpm=1500\n");
+        QCOMPARE(slider->value(), 1500);
+        QVERIFY(link.sent.isEmpty());
         surface.context()->hub()->removeLink(&link);
     }
 
