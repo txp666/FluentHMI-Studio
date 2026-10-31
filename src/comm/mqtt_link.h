@@ -28,8 +28,9 @@ struct MqttSettings
 };
 
 // An MQTT 3.1.1 client as a link. Every message is one complete frame: a line-mode
-// payload without a trailing newline is still parsed, a bare value is also reported under
-// its topic name (so it can be bound by topic), and HEX frames buffer per topic. Commands
+// payload without its record terminator is still parsed, a bare value is also reported under
+// its topic name (so it can be bound by topic), HEX frames buffer per topic, and a HEX
+// parser that frames on silence is flushed after each message, a burst of its own. Commands
 // are published to the publish topic. After a connection that worked drops, the link keeps
 // reconnecting until it is closed; a first attempt that fails is reported and given up.
 class MqttLink : public Link

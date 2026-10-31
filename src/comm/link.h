@@ -2,11 +2,14 @@
 
 #include "core/protocol_parser.h"
 
+#include <QtCore/QHash>
 #include <QtCore/QJsonObject>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
 #include <memory>
+
+class QTimer;
 
 namespace fhmi {
 
@@ -32,6 +35,9 @@ class Link : public QObject
 
     bool setParser(const QString &type, const QJsonObject &config, QString *error = nullptr);
     QString parserType() const { return m_parserType; }
+    QJsonObject parserConfig() const { return m_parserConfig; }
+    // The encoding of the text this link receives: the line parser's, UTF-8 for every other parser.
+    QString textEncoding() const;
 
   signals:
     void connectedChanged(bool connected);
@@ -47,14 +53,22 @@ class Link : public QObject
     virtual qint64 writeBytes(const QByteArray &bytes) = 0;
     // A fresh parser for one incoming stream (a TCP server keeps one per client).
     std::unique_ptr<Parser> createStreamParser() const;
+    // Frames bytes read from one stream and reports each complete unit: rawReceived() with
+    // the unit, then messageReceived() for each of its messages. A parser that frames on
+    // silence gets an idle timer, restarted by every read, that reports what flush() returns.
     void deliver(Parser *parser, const QByteArray &bytes);
+    void deliverUnits(Parser *parser, const QList<QByteArray> &units);
+    // Stops and forgets the idle timer of a parser about to be destroyed.
+    void dropStream(Parser *parser);
     Parser *defaultParser() const { return m_parser.get(); }
     void resetDefaultParser();
 
   private:
     QString m_parserType = QStringLiteral("line");
     QJsonObject m_parserConfig{{QStringLiteral("separator"), QStringLiteral(",")}};
+    std::shared_ptr<ModbusRequests> m_modbusRequests = std::make_shared<ModbusRequests>();
     std::unique_ptr<Parser> m_parser;
+    QHash<Parser *, QTimer *> m_idleTimers;
 };
 
 } // namespace fhmi

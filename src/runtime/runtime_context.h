@@ -40,7 +40,8 @@ class RuntimeContext : public QObject
     bool isActive() const { return m_active; }
 
     // Sends a widget's command over every connected link, or explains why not.
-    bool send(const CommandResult &result);
+    // `sent` collects the frames the links accepted, for a status line.
+    bool send(const CommandResult &result, QList<QByteArray> *sent = nullptr);
     void notify(const QString &title, const QString &content, const QString &type = NotifyType::Info,
                 int durationMs = 2000);
 

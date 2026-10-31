@@ -71,6 +71,60 @@ class TestProject : public QObject
         QVERIFY(!error.isEmpty());
     }
 
+    // A link card's own frame format is checked as the card would build its parser.
+    void checksCardFrameFormats_data()
+    {
+        QTest::addColumn<QByteArray>("json");
+        QTest::addColumn<QString>("error");
+        QTest::newRow("not an object")
+            << QByteArray(
+                   R"json({"widgets":[{"type":"SerialConfigCard","id":"uart","properties":{"parserConfig":[]}}]})json")
+            << QStringLiteral("卡片 uart 的 parserConfig 必须是对象");
+        QTest::newRow("own mode")
+            << QByteArray(R"json({"widgets":[{"type":"TcpConfigCard","id":"tcp","properties":{"defaultParser":"hex",
+                "parserConfig":{"checksum":"CRC32"}}}]})json")
+            << QStringLiteral("卡片 tcp: HEX 校验设置无效");
+        QTest::newRow("project mode")
+            << QByteArray(R"json({"serial":{"parser":"hex","parserConfig":{}},"widgets":[{"type":"MqttConfigCard",
+                "id":"mqtt","properties":{"parserConfig":{"footer":""}}}]})json")
+            << QStringLiteral("卡片 mqtt: HEX 帧需要帧尾、长度字段、固定帧长或空闲超时之一来分帧");
+        QTest::newRow("line")
+            << QByteArray(R"json({"widgets":[{"type":"VBoxLayout","children":[{"type":"SerialConfigCard","id":"s",
+                "properties":{"defaultParser":"line","parserConfig":{"separator":""}}}]}]})json")
+            << QStringLiteral("卡片 s: 行分隔符不能为空");
+        QTest::newRow("line encoding")
+            << QByteArray(R"json({"widgets":[{"type":"TcpConfigCard","id":"t","properties":{"defaultParser":"line",
+                "parserConfig":{"encoding":"latin-1"}}}]})json")
+            << QStringLiteral("卡片 t: 编码只能是 utf-8、gbk 或 ascii");
+        QTest::newRow("project line keys")
+            << QByteArray(R"json({"serial":{"parser":"line","parserConfig":{"kvSeparator":"=>"}}})json")
+            << QStringLiteral("键值分隔符只能是 = 或 :");
+        QTest::newRow("project terminator")
+            << QByteArray(R"json({"serial":{"parser":"line","parserConfig":{"terminator":""}}})json")
+            << QStringLiteral("行结束符不能为空");
+        QTest::newRow("modbus ascii")
+            << QByteArray(R"json({"serial":{"parser":"modbus_ascii"},"widgets":[{"type":"SerialConfigCard","id":"a",
+                "properties":{"defaultParser":"modbus_ascii","parserConfig":{}}},
+                {"type":"MqttConfigCard","id":"m","properties":{"defaultParser":"line",
+                "parserConfig":{"terminator":";","kvSeparator":":","encoding":"GBK"}}}]})json")
+            << QString();
+        QTest::newRow("valid")
+            << QByteArray(R"json({"widgets":[{"type":"SerialConfigCard","id":"a","properties":{"defaultParser":"hex",
+                "parserConfig":{"header":"7E","footer":"","idleTimeout":20}}},
+                {"type":"TcpConfigCard","id":"b","properties":{"parserConfig":{}}}]})json")
+            << QString();
+    }
+
+    void checksCardFrameFormats()
+    {
+        QFETCH(QByteArray, json);
+        QFETCH(QString, error);
+        QString message;
+        Project project;
+        QCOMPARE(Project::fromJson(QJsonDocument::fromJson(json).object(), &project, &message), error.isEmpty());
+        QCOMPARE(message, error);
+    }
+
     void defaultsFillMissingFields()
     {
         Project project;

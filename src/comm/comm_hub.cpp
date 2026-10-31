@@ -1,8 +1,15 @@
 #include "comm/comm_hub.h"
 
+#include "core/protocol_parser.h"
+
 namespace fhmi {
 
 CommHub::CommHub(QObject *parent) : QObject(parent) {}
+
+QString CommHub::decodeRaw(const QByteArray &bytes) const
+{
+    return LineParser::decode(bytes, m_rawEncoding);
+}
 
 void CommHub::configure(const QJsonObject &projectSerial)
 {
@@ -20,7 +27,10 @@ void CommHub::addLink(Link *link)
     }
     m_links.append(link);
     connect(link, &Link::messageReceived, this, &CommHub::messageReceived);
-    connect(link, &Link::rawReceived, this, &CommHub::rawReceived);
+    connect(link, &Link::rawReceived, this, [this, link](const QByteArray &bytes) {
+        m_rawEncoding = link->textEncoding();
+        emit rawReceived(bytes);
+    });
     connect(link, &Link::bytesSent, this, &CommHub::bytesSent);
     connect(link, &Link::errorOccurred, this, &CommHub::linkError);
     connect(link, &Link::infoMessage, this, &CommHub::linkInfo);
@@ -64,30 +74,45 @@ bool CommHub::isConnected() const
     return !connectedLinks().isEmpty();
 }
 
-int CommHub::send(const QByteArray &bytes)
+int CommHub::send(const QByteArray &bytes, QList<QByteArray> *sent)
 {
     int accepted = 0;
     for (Link *link : connectedLinks()) {
-        accepted += link->send(bytes) ? 1 : 0;
+        if (link->send(bytes)) {
+            ++accepted;
+            if (sent) {
+                sent->append(bytes);
+            }
+        }
     }
     return accepted;
 }
 
-int CommHub::sendModbus(const ModbusRequest &request)
+int CommHub::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent)
 {
     int accepted = 0;
     for (Link *link : connectedLinks()) {
-        const QByteArray frame = link->parserType() == QLatin1String("modbus_tcp")
+        // Framed the way the link parses its replies: MBAP for Modbus TCP, ':' and LRC for
+        // Modbus ASCII, CRC-terminated RTU otherwise.
+        const QString type = link->parserType();
+        const QByteArray frame = type == QLatin1String("modbus_tcp")
                                      ? CommandEncoder::tcpFrame(request, CommandEncoder::nextTransaction())
-                                     : CommandEncoder::rtuFrame(request);
-        accepted += link->send(frame) ? 1 : 0;
+                                 : type == QLatin1String("modbus_ascii") ? CommandEncoder::asciiFrame(request)
+                                                                         : CommandEncoder::rtuFrame(request);
+        if (link->send(frame)) {
+            ++accepted;
+            if (sent) {
+                sent->append(frame);
+            }
+        }
     }
     return accepted;
 }
 
-int CommHub::send(const EncodedCommand &command)
+int CommHub::send(const EncodedCommand &command, QList<QByteArray> *sent)
 {
-    return command.kind == EncodedCommand::Kind::Modbus ? sendModbus(command.modbus) : send(command.bytes);
+    return command.kind == EncodedCommand::Kind::Modbus ? sendModbus(command.modbus, sent)
+                                                        : send(command.bytes, sent);
 }
 
 void CommHub::disconnectAll()

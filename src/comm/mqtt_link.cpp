@@ -259,7 +259,6 @@ void MqttLink::handleMessage(const Mqtt::PublishMessage &message)
     if (!m_up) {
         return;
     }
-    emit rawReceived(message.payload);
     auto it = m_parsers.find(message.topic);
     if (it == m_parsers.end()) {
         if (m_parsers.size() >= kMaxTopicParsers) {
@@ -267,18 +266,32 @@ void MqttLink::handleMessage(const Mqtt::PublishMessage &message)
         }
         it = m_parsers.insert(message.topic, std::shared_ptr<Parser>(createStreamParser()));
     }
-    if (!*it) {
+    const std::shared_ptr<Parser> parser = *it; // a slot may reconnect and clear m_parsers
+    if (!parser) {
+        emit rawReceived(message.payload);
         return;
     }
-    QByteArray data = message.payload;
-    if (parserType() == QLatin1String("line") && !data.endsWith('\n')) {
-        data.append('\n'); // each MQTT message is a whole line
-    }
-    for (Message parsed : (*it)->feed(data)) {
-        if (parsed.size() == 1 && parsed.contains(QStringLiteral("ch0"))) {
-            parsed.insert(message.topic, parsed.value(QStringLiteral("ch0")));
+    // Each MQTT message is a whole record: a line parser gets its terminator if it is missing.
+    const QByteArray terminator = parserType() == QLatin1String("line") ? lineTerminator(parserConfig()) : QByteArray();
+    const auto report = [this, &message, &parser, &terminator](const QList<QByteArray> &units) {
+        for (const QByteArray &unit : units) {
+            emit rawReceived(unit);
+            QByteArray data = unit;
+            if (!terminator.isEmpty() && !data.endsWith(terminator)) {
+                data.append(terminator);
+            }
+            for (Message parsed : parser->parse(data)) {
+                if (parsed.size() == 1 && parsed.contains(QStringLiteral("ch0"))) {
+                    parsed.insert(message.topic, parsed.value(QStringLiteral("ch0")));
+                }
+                emit messageReceived(parsed);
+            }
         }
-        emit messageReceived(parsed);
+    };
+    report(parser->frames(message.payload));
+    // A message arrives whole, so a parser that frames on silence has its frame now.
+    if (parser->idleTimeout() > 0) {
+        report(parser->flush());
     }
 }
 

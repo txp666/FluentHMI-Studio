@@ -112,14 +112,101 @@ const QString kHexError = QStringLiteral("HEX 格式错误，请检查内容、�
 
 } // namespace
 
-int functionCode(const QString &option)
+namespace {
+
+// Every function code option, in the order the designer lists them.
+const QList<QPair<QString, int>> &functionTable()
 {
-    static const QHash<QString, int> codes = {
+    static const QList<QPair<QString, int>> table = {
         {QStringLiteral("01 读线圈"), 0x01},       {QStringLiteral("02 读离散输入"), 0x02},
         {QStringLiteral("03 读保持寄存器"), 0x03}, {QStringLiteral("04 读输入寄存器"), 0x04},
         {QStringLiteral("05 写单线圈"), 0x05},     {QStringLiteral("06 写单寄存器"), 0x06},
+        {QStringLiteral("16 写多个寄存器"), 0x10},
     };
-    return codes.value(option, 0x06);
+    return table;
+}
+
+} // namespace
+
+int functionCode(const QString &option)
+{
+    for (const auto &[name, code] : functionTable()) {
+        if (name == option) {
+            return code;
+        }
+    }
+    return 0x06;
+}
+
+QStringList functionOptions(const QList<int> &codes)
+{
+    QStringList out;
+    for (const auto &[name, code] : functionTable()) {
+        if (codes.isEmpty() || codes.contains(code)) {
+            out.append(name);
+        }
+    }
+    return out;
+}
+
+QStringList dataTypes()
+{
+    return {QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"), QStringLiteral("int32"),
+            QStringLiteral("float32")};
+}
+
+QStringList registerOrders()
+{
+    return {QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")};
+}
+
+std::optional<QList<quint16>> modbusRegisters(const QString &value, const QString &dataType,
+                                              const QString &regOrder, QString *error)
+{
+    const auto fail = [error](const QString &message) {
+        if (error) {
+            *error = message;
+        }
+        return std::nullopt;
+    };
+    if (!dataTypes().contains(dataType)) {
+        return fail(QStringLiteral("未知的 Modbus 数据类型: %1").arg(dataType));
+    }
+    const QString invalid = QStringLiteral("Modbus 值无效或超出 %1 的范围").arg(dataType);
+    quint32 bits = 0;
+    if (dataType == QLatin1String("float32")) {
+        bool ok = false;
+        const double d = value.trimmed().toDouble(&ok);
+        // Below this, a double rounds to a finite float; converting one beyond it is undefined.
+        if (!ok || !std::isfinite(d) || std::abs(d) >= 0x1.ffffffp+127) {
+            return fail(invalid);
+        }
+        const float number = float(d);
+        std::memcpy(&bits, &number, sizeof bits);
+    } else {
+        const auto number = integerText(value);
+        struct Range
+        {
+            qint64 lo, hi;
+        };
+        static const QHash<QString, Range> ranges = {{QStringLiteral("uint16"), {0, 65535}},
+                                                     {QStringLiteral("int16"), {-32768, 32767}},
+                                                     {QStringLiteral("uint32"), {0, 4294967295LL}},
+                                                     {QStringLiteral("int32"), {-2147483648LL, 2147483647LL}}};
+        const Range range = ranges.value(dataType);
+        if (!number || *number < range.lo || *number > range.hi) {
+            return fail(invalid);
+        }
+        bits = quint32(*number);
+    }
+    if (dataType == QLatin1String("uint16") || dataType == QLatin1String("int16")) {
+        return QList<quint16>{quint16(bits)};
+    }
+    QList<quint16> registers{quint16(bits >> 16), quint16(bits)};
+    if (regOrder != registerOrders().first()) {
+        std::swap(registers[0], registers[1]);
+    }
+    return registers;
 }
 
 std::optional<QByteArray> hexFrame(const QString &command, const QString &header, const QString &tail)
@@ -157,18 +244,96 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
     if (!valid) {
         return fail(QStringLiteral("Modbus 值或读取数量超出功能码允许范围"));
     }
-    return ModbusRequest{int(slave), int(func), int(address), int(value)};
+    return ModbusRequest{int(slave), int(func), int(address), int(value), {}};
+}
+
+std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 address, const QString &value,
+                                           const QString &dataType, const QString &regOrder, QString *error)
+{
+    const auto fail = [error](const QString &message) {
+        if (error) {
+            *error = message;
+        }
+        return std::nullopt;
+    };
+    if (func != 0x06 && func != 0x10) {
+        const auto number = integerText(value);
+        if (!number) {
+            return fail(QStringLiteral("Modbus 地址和值必须是整数"));
+        }
+        return modbusRequest(slave, func, address, *number, error);
+    }
+    if (slave < 1 || slave > 247 || address < 0 || address > 65535) {
+        return fail(QStringLiteral("Modbus 从站地址或寄存器地址超出范围"));
+    }
+    if (func == 0x06 && dataType != QLatin1String("uint16") && dataType != QLatin1String("int16")) {
+        return fail(QStringLiteral("32 位数据占两个寄存器，请用 16 写多个寄存器"));
+    }
+    const auto registers = modbusRegisters(value, dataType, regOrder, error);
+    if (!registers) {
+        return std::nullopt;
+    }
+    if (address + registers->size() > 65536) {
+        return fail(QStringLiteral("Modbus 从站地址或寄存器地址超出范围"));
+    }
+    if (func == 0x06) {
+        return ModbusRequest{int(slave), 0x06, int(address), registers->first(), {}};
+    }
+    return ModbusRequest{int(slave), 0x10, int(address), int(registers->size()), *registers};
+}
+
+std::optional<QList<ModbusRequest>> modbusPollTable(const QString &text, QString *error)
+{
+    QList<ModbusRequest> requests;
+    int number = 0;
+    for (QString line : QString(text).replace(QLatin1Char(';'), QLatin1Char('\n')).split(QLatin1Char('\n'))) {
+        line = line.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
+            continue;
+        }
+        ++number;
+        const QStringList fields = line.replace(QStringLiteral("，"), QStringLiteral(",")).split(QLatin1Char(','));
+        QList<qint64> numbers;
+        for (const QString &field : fields) {
+            if (const auto n = integerText(field)) {
+                numbers.append(*n);
+            }
+        }
+        if (fields.size() != 4 || numbers.size() != 4 || numbers.at(1) < 1 || numbers.at(1) > 4) {
+            if (error) {
+                *error = QStringLiteral("轮询表第 %1 条应为 从站,功能码(1–4),地址,数量").arg(number);
+            }
+            return std::nullopt;
+        }
+        QString why; // the line is well formed; say what is wrong with its values
+        const auto request = modbusRequest(numbers.at(0), numbers.at(1), numbers.at(2), numbers.at(3), &why);
+        if (!request) {
+            if (error) {
+                *error = QStringLiteral("轮询表第 %1 条：%2").arg(number).arg(why);
+            }
+            return std::nullopt;
+        }
+        requests.append(*request);
+    }
+    return requests;
 }
 
 QByteArray rtuFrame(const ModbusRequest &request)
 {
-    return buildModbusRtuFrame(request.slave, request.func, request.address, request.value, request.value);
+    return buildModbusRtuFrame(request.slave, request.func, request.address, request.value, request.value,
+                               request.registers);
 }
 
 QByteArray tcpFrame(const ModbusRequest &request, int transaction)
 {
     return buildModbusTcpFrame(request.slave, request.func, request.address, request.value, request.value,
-                               transaction);
+                               transaction, request.registers);
+}
+
+QByteArray asciiFrame(const ModbusRequest &request)
+{
+    return buildModbusAsciiFrame(request.slave, request.func, request.address, request.value, request.value,
+                                 request.registers);
 }
 
 int nextTransaction()
@@ -181,13 +346,15 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
 {
     const auto slave = integerProp(props, "mbSlave", 1);
     const auto address = integerProp(props, "mbAddress", 0);
-    const auto amount = value ? integerText(*value) : integerProp(props, "mbValue", 1);
-    if (!slave || !address || !amount) {
+    const auto amount = integerProp(props, "mbValue", 1);
+    if (!slave || !address || (!value && !amount)) {
         return CommandResult::failure(QStringLiteral("Modbus 地址和值必须是整数"));
     }
     const int func = functionCode(prop(props, "mbFunc", QStringLiteral("06 写单寄存器")));
     QString error;
-    const auto request = modbusRequest(*slave, func, *address, *amount, &error);
+    const auto request = modbusRequest(*slave, func, *address, value ? *value : QString::number(*amount),
+                                       prop(props, "mbDataType", QStringLiteral("uint16")),
+                                       prop(props, "mbRegOrder", registerOrders().first()), &error);
     if (!request) {
         return CommandResult::failure(error);
     }

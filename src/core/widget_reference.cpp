@@ -29,6 +29,8 @@ QString typeText(PropType type)
         return QStringLiteral("多行文本");
     case PropType::Command:
         return QStringLiteral("命令");
+    case PropType::Object:
+        return QStringLiteral("对象");
     }
     return QString();
 }
@@ -50,6 +52,10 @@ QString valueText(const QJsonValue &value)
     }
     if (value.isDouble()) {
         return QStringLiteral("`%1`").arg(value.toDouble());
+    }
+    if (value.isObject()) {
+        return QStringLiteral("`%1`").arg(
+            QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact)));
     }
     return QStringLiteral("`\"\"`");
 }
@@ -106,7 +112,8 @@ QString widgetReference()
             out += QStringLiteral("- `%1`（%2，%3）默认 %4")
                        .arg(prop.name, prop.label, typeText(prop.type), valueText(prop.defaultValue));
             if (prop.minimum && prop.maximum) {
-                out += QStringLiteral("，范围 %1–%2").arg(*prop.minimum).arg(*prop.maximum);
+                out += QStringLiteral("，范围 %1–%2")  // whole numbers in full, as in the Python reference
+                           .arg(QString::number(*prop.minimum, 'g', 15), QString::number(*prop.maximum, 'g', 15));
             }
             if (!prop.options.isEmpty()) {
                 QStringList options;
@@ -114,6 +121,9 @@ QString widgetReference()
                     options << jsonString(option);
                 }
                 out += QStringLiteral("，可选 ") + options.join(QLatin1Char(' '));
+            }
+            if (!prop.description.isEmpty()) {
+                out += QStringLiteral("，") + prop.description;
             }
             out += QLatin1Char('\n');
         }
