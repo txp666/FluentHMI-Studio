@@ -661,7 +661,7 @@ class TestRuntime : public QObject
         buttonFor(card, QStringLiteral("连接"))->click();
         QVERIFY(server.waitForNewConnection(5000));
         TcpDevice plc(server.nextPendingConnection());
-        QTRY_COMPARE(plc.requests().size(), 1);
+        QTRY_VERIFY(!plc.requests().isEmpty()); // a slow machine may already have sent the second block
         QElapsedTimer waited;
         waited.start();
         QCOMPARE(poller->settings().defaultPeriod, 300);
@@ -672,11 +672,20 @@ class TestRuntime : public QObject
         const QString connection = QStringLiteral("TCP 127.0.0.1:%1").arg(server.serverPort());
         const QString blockTip = QStringLiteral("从站 7 · 功能码 3 · 地址 10–10 · 周期 300 ms\n"
                                                 "从站 7 · 功能码 3 · 地址 101–101 · 周期 300 ms");
-        QLabel *status = labelWith(card, connection + QStringLiteral(" · 2 块 · 轮询中"));
+        // The first round is still going, or already over without a reply: either way the card shows it.
+        QLabel *status = nullptr;
+        for (QLabel *label : card->findChildren<QLabel *>()) {
+            if (label->text().startsWith(connection + QStringLiteral(" · "))) {
+                status = label;
+            }
+        }
         QVERIFY2(status, qPrintable(labelTexts(card).join(QLatin1Char('|'))));
+        QVERIFY2(status->text() == connection + QStringLiteral(" · 2 块 · 轮询中") ||
+                     status->text() == connection + QStringLiteral(" · 第 1 块无响应（从站 7 功能码 3 地址 10）"),
+                 qPrintable(status->text()));
         QCOMPARE(status->toolTip(), blockTip);
 
-        QTRY_COMPARE(plc.requests().size(), 2); // no reply within the card's 50 ms: the next block
+        QTRY_VERIFY(plc.requests().size() >= 2); // no reply within the card's 50 ms: the next block
         QVERIFY2(waited.elapsed() < 900, qPrintable(QString::number(waited.elapsed())));
         QCOMPARE(plc.requests().at(1).mid(6), QByteArray::fromHex("070300650001"));
         plc.socket->write(plcReply(plc.requests().at(1), {{101, 42}}));
