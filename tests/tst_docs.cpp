@@ -82,6 +82,30 @@ class TestDocs : public QObject
                                                          "details belong in uidp-widgets.md").arg(size)));
     }
 
+    // The README's widget screenshots (docs/images/widgets-light.jpg and widgets-dark.jpg) are this project
+    // rendered by FluentHMIRuntime <project> --theme light|dark --screenshot <png>, then made JPEG. It holds
+    // every widget type and no other, so adding or removing one fails here until the screenshots follow.
+    void galleryHoldsEveryWidget()
+    {
+        Project project;
+        QString error;
+        QVERIFY2(Project::load(QStringLiteral(FHMI_DOCS_DIR "/images/widgets.uidp"), &project, &error),
+                 qPrintable(error));
+        QStringList shown;
+        visitWidgets(project.widgets, [&shown](const QJsonObject &widget) {
+            shown.append(widget.value(QStringLiteral("type")).toString());
+            return true;
+        });
+        shown.removeDuplicates();
+        shown.sort();
+        QStringList registered;
+        for (const WidgetMeta &meta : WidgetRegistry::instance().all()) {
+            registered.append(meta.typeName);
+        }
+        registered.sort();
+        QCOMPARE(shown, registered);
+    }
+
     // The example is what an AI copies from first, so it must load and use only real names and values:
     // a misspelt property or option is not an error when loading, it just does nothing.
     void exampleProjectIsValid()
