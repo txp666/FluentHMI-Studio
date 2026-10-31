@@ -262,6 +262,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.mbRegOrder = binding.value(QStringLiteral("mbRegOrder")).toString(QStringLiteral("大端(AB CD)"));
     entry.mbFcFilter = binding.value(QStringLiteral("mbFcFilter")).toInt(-1);
     entry.mbArea = binding.value(QStringLiteral("mbArea")).toString(ModbusArea::InResponse);
+    entry.mbPeriod = binding.value(QStringLiteral("mbPeriod")).toInt(0);
     entry.displayFormat = props.value(QStringLiteral("displayFormat")).toString(QStringLiteral("自动"));
     entry.decimals = props.value(QStringLiteral("decimals")).toVariant().toString();
     if (entry.decimals.isEmpty()) {

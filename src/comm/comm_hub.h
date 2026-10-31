@@ -1,6 +1,7 @@
 #pragma once
 
 #include "comm/link.h"
+#include "comm/modbus_master.h"
 #include "core/command_encoder.h"
 
 #include <QtCore/QJsonObject>
@@ -9,6 +10,17 @@
 #include <QtCore/QPointer>
 
 namespace fhmi {
+
+// How sendModbus() queues a request on the links that parse Modbus.
+struct ModbusSend
+{
+    int timeoutMs = 1000;
+    ModbusMaster::Priority priority = ModbusMaster::Priority::Write;
+    ModbusMaster::Done done; // once per link that queued the request
+    const void *owner = nullptr; // for ModbusMaster::cancelQueued()
+    bool modbusLinksOnly = false; // leave out the links that do not parse Modbus
+    QList<QPointer<ModbusMaster>> *queuedOn = nullptr; // collects the masters that queued it
+};
 
 // Every link of a running surface reports here. Bindings, charts, tables and logs
 // listen to the hub, and commands go out over every connected link.
@@ -33,9 +45,10 @@ class CommHub : public QObject
 
     // Returns how many links accepted the bytes; `sent` collects the frames they accepted.
     int send(const QByteArray &bytes, QList<QByteArray> *sent = nullptr);
-    // Frames the request per link: MBAP where the link parses Modbus TCP, ASCII where it parses
-    // Modbus ASCII, RTU elsewhere.
-    int sendModbus(const ModbusRequest &request, QList<QByteArray> *sent = nullptr);
+    // A link that parses Modbus queues the request in its master (a write by default, with a 1000 ms
+    // timeout), which frames it as MBAP, ASCII or RTU; any other link is sent the RTU frame right away.
+    // A queued request counts as accepted.
+    int sendModbus(const ModbusRequest &request, QList<QByteArray> *sent = nullptr, const ModbusSend &how = {});
     int send(const EncodedCommand &command, QList<QByteArray> *sent = nullptr);
 
     void disconnectAll();
@@ -50,6 +63,7 @@ class CommHub : public QObject
     void rawReceived(const QByteArray &bytes);
     void bytesSent(const QByteArray &bytes);
     void linkConnected(const QString &description);
+    void linkUp(fhmi::Link *link); // right after linkConnected, for slots that need the link itself
     void linkDisconnected(const QString &description);
     void linkError(const QString &message);
     void linkInfo(const QString &message);

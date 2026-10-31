@@ -87,6 +87,8 @@ add_library(fhmi_comm STATIC
     src/comm/comm_hub.h
     src/comm/link.cpp
     src/comm/link.h
+    src/comm/modbus_master.cpp
+    src/comm/modbus_master.h
     src/comm/mqtt_link.cpp
     src/comm/mqtt_link.h
     src/comm/serial_link.cpp
@@ -241,6 +243,12 @@ if(FHMI_BUILD_TESTS)
     add_executable(tst_mqtt tests/tst_mqtt.cpp)
     target_link_libraries(tst_mqtt PRIVATE fhmi_comm Qt6::Test)
     add_test(NAME mqtt COMMAND tst_mqtt)
+
+    # The Modbus block planner (against the golden vectors shared with PyQt UI Designer) and master queue.
+    add_executable(tst_modbus tests/tst_modbus.cpp)
+    target_link_libraries(tst_modbus PRIVATE fhmi_comm Qt6::Test)
+    target_compile_definitions(tst_modbus PRIVATE FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+    add_test(NAME modbus COMMAND tst_modbus)
 
     add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)

@@ -13,6 +13,8 @@ class QTimer;
 
 namespace fhmi {
 
+class ModbusMaster;
+
 // One transport to a device (a serial port, a TCP connection, ...). Every link frames
 // its incoming bytes with its own parser and reports the same signals, so the hub,
 // bindings, charts, tables and logs never care which transport the data came over.
@@ -38,6 +40,11 @@ class Link : public QObject
     QJsonObject parserConfig() const { return m_parserConfig; }
     // The encoding of the text this link receives: the line parser's, UTF-8 for every other parser.
     QString textEncoding() const;
+    // Whether the link parses Modbus replies (modbus, modbus_tcp or modbus_ascii), so its master can
+    // pair each request with its reply.
+    bool parsesModbus() const;
+    // The queue every Modbus request on this link goes through, one on the line at a time.
+    ModbusMaster *modbusMaster() const { return m_modbusMaster; }
 
   signals:
     void connectedChanged(bool connected);
@@ -69,6 +76,7 @@ class Link : public QObject
     std::shared_ptr<ModbusRequests> m_modbusRequests = std::make_shared<ModbusRequests>();
     std::unique_ptr<Parser> m_parser;
     QHash<Parser *, QTimer *> m_idleTimers;
+    ModbusMaster *m_modbusMaster = nullptr;
 };
 
 } // namespace fhmi

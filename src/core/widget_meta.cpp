@@ -129,4 +129,13 @@ QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject props
     return props;
 }
 
+QJsonObject upgradedProperties(const QString &typeName, QJsonObject props)
+{
+    if (typeName == QLatin1String("ModbusConfigCard") && !props.contains(QStringLiteral("pollMode")) &&
+        !props.value(QStringLiteral("pollList")).toString().isEmpty()) {
+        props.insert(QStringLiteral("pollMode"), QStringLiteral("轮询表"));
+    }
+    return props;
+}
+
 } // namespace fhmi

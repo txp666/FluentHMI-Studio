@@ -2,6 +2,7 @@
 #include "core/widget_meta.h"
 
 #include <QtCore/QDirIterator>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QTemporaryDir>
 #include <QtTest/QtTest>
@@ -60,6 +61,12 @@ class TestProject : public QObject
         QTest::newRow("parser") << QByteArray(R"({"serial":{"parser":"xml"}})");
         QTest::newRow("tab index") << QByteArray(R"({"widgets":[{"type":"Label","tabIndex":-1}]})");
         QTest::newRow("nested") << QByteArray(R"({"widgets":[{"type":"TabWidget","children":[{"type":"Bad"}]}]})");
+        QTest::newRow("poll mode")
+            << QByteArray(R"({"widgets":[{"type":"ModbusConfigCard","properties":{"pollMode":"auto"}}]})");
+        QTest::newRow("auto start")
+            << QByteArray(R"({"widgets":[{"type":"ModbusConfigCard","properties":{"autoStart":1}}]})");
+        QTest::newRow("period")
+            << QByteArray(R"({"widgets":[{"type":"Label","binding":{"parseMode":"Modbus","mbPeriod":60001}}]})");
     }
 
     void rejectsInvalidDocuments()
@@ -123,6 +130,35 @@ class TestProject : public QObject
         Project project;
         QCOMPARE(Project::fromJson(QJsonDocument::fromJson(json).object(), &project, &message), error.isEmpty());
         QCOMPARE(message, error);
+    }
+
+    // A Modbus card saved before pollMode existed keeps polling its table; one without a table, and every
+    // card that names its mode, load as they are. mbPeriod is a whole number of ms from 0 to 60000.
+    void modbusCardsKeepTheirPollMode()
+    {
+        const QByteArray json = R"json({"widgets":[
+            {"type":"ModbusConfigCard","id":"old","properties":{"defaultPoll":500,"pollList":"1,3,0,2"}},
+            {"type":"GroupBox","id":"box","children":[
+                {"type":"ModbusConfigCard","id":"nested","properties":{"pollList":"1,1,0,4"}}]},
+            {"type":"ModbusConfigCard","id":"plain","properties":{"title":"Modbus"}},
+            {"type":"ModbusConfigCard","id":"chosen","properties":{"pollMode":"自动","autoStart":false,
+                "pollList":"1,3,0,2"}},
+            {"type":"NumericDisplay","id":"pv",
+                "binding":{"parseMode":"Modbus","mbArea":"保持寄存器","mbPeriod":250}}]})json";
+        Project project;
+        QString error;
+        QVERIFY2(Project::fromJson(QJsonDocument::fromJson(json).object(), &project, &error), qPrintable(error));
+        QVERIFY(error.isEmpty());
+        const auto props = [&project](int index) {
+            return project.widgets.at(index).toObject().value("properties").toObject();
+        };
+        QCOMPARE(props(0).value("pollMode").toString(), QStringLiteral("轮询表"));
+        QCOMPARE(project.widgets.at(1).toObject().value("children").toArray().at(0).toObject().value("properties")
+                     .toObject().value("pollMode").toString(),
+                 QStringLiteral("轮询表"));
+        QVERIFY(!props(2).contains("pollMode")); // the default, 自动
+        QCOMPARE(props(3).value("pollMode").toString(), QStringLiteral("自动"));
+        QVERIFY(Project::validate(project.toJson(), &error));
     }
 
     void defaultsFillMissingFields()

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "comm/modbus_master.h"
 #include "runtime/hmi_widget.h"
+
+#include <functional>
 
 class QGridLayout;
 class QHBoxLayout;
@@ -135,6 +138,10 @@ class MqttConfigCardWidget : public LinkCardBase
     MqttLink *m_link = nullptr;
 };
 
+// Reads and writes Modbus over the links that parse it. Polling has two modes (pollMode): 自动 plans
+// read blocks from the project's Modbus bindings and chart curves and reads each at its period; 轮询表
+// reads the requests of pollList in rounds. Every request queues in its link's ModbusMaster, so writes
+// from other widgets go out between two reads.
 class ModbusConfigCardWidget : public HmiWidget
 {
   public:
@@ -147,24 +154,63 @@ class ModbusConfigCardWidget : public HmiWidget
     void paintEvent(QPaintEvent *event) override;
 
   private:
+    // A request of this card waiting for every link that queued it; `complete` gets the first success,
+    // else the first failure.
+    struct Pending
+    {
+        int token = 0;
+        std::function<void(const ModbusResult &)> complete;
+        QList<QPointer<ModbusMaster>> waiting;
+        QList<const ModbusMaster *> reported; // results that came in before `waiting` was known
+        bool armed = false;
+        std::optional<ModbusResult> result;
+    };
+
+    bool autoMode() const;
     // Whether a connected link parses Modbus, so replies to the requests sent can be recognised.
-    // Without one, each poll tick sends the next request without waiting, as the card always did.
+    // Without one, each poll-table tick sends the next request without waiting, as the card always did.
     bool expectsReplies() const;
-    // Sends one request and waits for its reply; false after reporting why it was not sent.
-    bool sendRequest(const ModbusRequest &request);
+    // The connected links that parse Modbus and can send now: where automatic polling reads.
+    QList<Link *> modbusLinks() const;
     void setStatus(const QString &text);
     // 已发送 with the first frame's bytes and how many links took one, as PyQt UI Designer shows it.
     QString sentStatus() const;
     std::optional<ModbusRequest> fieldRequest();
-    void onMessage(const Message &message);
-    // A reply, or its absence, to the request being waited for: `problem` is empty on success.
-    void replied(const QString &problem);
-    void pollTick();
+    // The 轮询ms field; automatic polling takes 0 as 500.
+    int defaultPeriod() const;
+
+    // Queues `request` on the links; `pending` then waits for their replies. `announce` shows 已发送 once
+    // the links took it. False after explaining why no link took it.
+    bool queue(const ModbusRequest &request, ModbusMaster::Priority priority, std::optional<Pending> &pending,
+               std::function<void(const ModbusResult &)> complete, bool announce, bool modbusLinksOnly = false);
+    void report(std::optional<Pending> &pending, int token, const ModbusResult &result);
+    // Completes `pending` once no link it waits for is left (a link that went away never reports).
+    void finishIfSettled(std::optional<Pending> &pending);
+    void sendFields();
+    void manualDone(const ModbusResult &result);
+
     void togglePolling();
+    void startPolling(bool automatic);
     void stopPolling();
+    void maybeAutoStart(Link *link);
+    void pollTick();
+
+    // 轮询表
+    void tableTick();
+    void sendNextInRound();
+    void tableDone(int item, const ModbusResult &result);
+
+    // 自动
+    void schedule();
+    void replan();
+    void blockDone(int block, int plan, const ModbusResult &result);
+    void roundDone();
+    void setAutoStatus(const QString &text);
+
     void updateValueLabel();
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
+    FluentQt::CaptionLabel *m_modeHint = nullptr;
     FluentQt::CaptionLabel *m_status = nullptr;
     FluentQt::LineEdit *m_slave = nullptr;
     FluentQt::ComboBox *m_function = nullptr;
@@ -174,15 +220,23 @@ class ModbusConfigCardWidget : public HmiWidget
     FluentQt::LineEdit *m_poll = nullptr;
     FluentQt::PrimaryPushButton *m_send = nullptr;
     FluentQt::PushButton *m_pollButton = nullptr;
-    QTimer *m_timer = nullptr;      // poll rounds
-    QTimer *m_replyTimer = nullptr; // the reply timeout of the request being waited for
-    QList<ModbusRequest> m_table;   // the reads of each round; empty: the request in the fields
-    QList<ModbusRequest> m_round;   // still to send in this round
+    QTimer *m_timer = nullptr; // poll ticks
+    QList<QByteArray> m_lastSent; // the frames of the last request, one per link that took it
+    int m_token = 0;
+    std::optional<Pending> m_read;   // the polled read on its way
+    std::optional<Pending> m_manual; // the 发送 request on its way
+    bool m_autoPolling = false;
+
+    QList<ModbusRequest> m_table; // the reads of each round; empty: the request in the fields
+    QList<ModbusRequest> m_round; // still to send in this round
     int m_roundSize = 0;
     QList<QPair<int, QString>> m_roundProblems; // (1-based entry, problem)
-    std::optional<ModbusRequest> m_waiting;
-    QList<QByteArray> m_lastSent; // the frames of the last request, one per link that took it
     int m_next = 0; // the request a poll tick sends when nothing waits for replies
+
+    QList<ModbusBlock> m_blocks;
+    QList<qint64> m_due; // per block: when it is read next
+    QList<std::optional<ModbusResult>> m_blockResults; // per block, in this round
+    int m_plan = 0; // counts plans, so a block read under an older plan does not count in this round
 };
 
 } // namespace fhmi
