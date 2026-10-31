@@ -31,13 +31,19 @@ class CommHub : public QObject
     QList<Link *> connectedLinks() const;
     bool isConnected() const;
 
-    // Returns how many links accepted the bytes.
-    int send(const QByteArray &bytes);
-    // Frames the request per link: MBAP where the link parses Modbus TCP, RTU elsewhere.
-    int sendModbus(const ModbusRequest &request);
-    int send(const EncodedCommand &command);
+    // Returns how many links accepted the bytes; `sent` collects the frames they accepted.
+    int send(const QByteArray &bytes, QList<QByteArray> *sent = nullptr);
+    // Frames the request per link: MBAP where the link parses Modbus TCP, ASCII where it parses
+    // Modbus ASCII, RTU elsewhere.
+    int sendModbus(const ModbusRequest &request, QList<QByteArray> *sent = nullptr);
+    int send(const EncodedCommand &command, QList<QByteArray> *sent = nullptr);
 
     void disconnectAll();
+
+    // The encoding of the bytes rawReceived() is carrying right now, and those bytes as text:
+    // raw bytes carry no link, so the encoding of the link they came from rides alongside.
+    QString rawEncoding() const { return m_rawEncoding; }
+    QString decodeRaw(const QByteArray &bytes) const;
 
   signals:
     void messageReceived(const fhmi::Message &message);
@@ -54,6 +60,7 @@ class CommHub : public QObject
     QJsonObject m_projectSerial;
     QString m_parserType = QStringLiteral("line");
     QJsonObject m_parserConfig;
+    QString m_rawEncoding = QStringLiteral("utf-8");
 };
 
 } // namespace fhmi

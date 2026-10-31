@@ -170,9 +170,12 @@ void TcpServerLink::onNewConnection()
 
 void TcpServerLink::dropClient(QTcpSocket *socket)
 {
-    if (!m_clients.remove(socket)) {
+    const auto it = m_clients.constFind(socket);
+    if (it == m_clients.constEnd()) {
         return;
     }
+    dropStream(it.value().get());
+    m_clients.erase(it);
     socket->disconnect(this);
     socket->abort();
     socket->deleteLater();

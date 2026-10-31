@@ -1,22 +1,35 @@
 #include "comm/comm_hub.h"
 #include "comm/link.h"
+#include "comm/tcp_link.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
+#include "designer/property_editor.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
 #include "studio/export_service.h"
 
 #include <FluentQtWidgets/Widgets/Button.h>
+#include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Slider.h>
+#include <FluentQtWidgets/Widgets/SwitchButton.h>
 
 #include <QtCore/QDirIterator>
 #include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
 #include <QtCore/QTemporaryDir>
 #include <QtGui/QImage>
+#include <QtNetwork/QTcpServer>
+#include <QtNetwork/QTcpSocket>
 #include <QtTest/QtTest>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QFormLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QLineEdit>
+#include <QtWidgets/QPlainTextEdit>
+#include <QtWidgets/QProgressBar>
+#include <QtWidgets/QSpinBox>
+#include <QtWidgets/QTextEdit>
 
 using namespace fhmi;
 
@@ -76,6 +89,86 @@ QJsonArray normalized(const QJsonArray &widgets)
         out.append(widget);
     }
     return out;
+}
+
+QJsonObject jsonObject(const char *text) { return QJsonDocument::fromJson(text).object(); }
+
+// The frame format of the parser spec's example A: AA 55 | LEN | CMD | temp (LE) | hum | SUM.
+const char *const kHexConfigA = R"json({"header": "AA55", "footer": "", "lengthOffset": 2, "checksum": "和校验",
+    "fields": [["cmd", 1, 1, "uint8"], ["temp", 2, 2, "int16", "小端(LE)"], ["hum", 4, 1, "uint8"]]})json";
+// Example C: a header, and a silence to end the frame.
+const char *const kHexConfigIdle = R"json({"header": "7E", "footer": "", "idleTimeout": 200,
+    "fields": [["a", 0, 1, "uint8"]]})json";
+const QByteArray kFrameA = QByteArray::fromHex("AA550401F6FF3C35");
+const QByteArray kFrameA2 = QByteArray::fromHex("AA550402100028"
+                                                "3D");
+
+QList<QByteArray> rawOf(const QSignalSpy &spy)
+{
+    QList<QByteArray> out;
+    for (const QList<QVariant> &args : spy) {
+        out.append(args.first().toByteArray());
+    }
+    return out;
+}
+
+qlonglong messageValue(const QSignalSpy &spy, int index, const char *key)
+{
+    return spy.at(index).first().value<Message>().value(QLatin1String(key)).toLongLong();
+}
+
+// The editor next to a form label; the first match anywhere under `root`.
+QWidget *fieldFor(QWidget *root, const QString &label)
+{
+    for (QFormLayout *form : root->findChildren<QFormLayout *>()) {
+        for (int row = 0; row < form->rowCount(); ++row) {
+            QLayoutItem *caption = form->itemAt(row, QFormLayout::LabelRole);
+            auto *text = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+            if (text && text->text() == label) {
+                QLayoutItem *field = form->itemAt(row, QFormLayout::FieldRole);
+                return field ? field->widget() : nullptr;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool labelShown(QWidget *root, const QString &text)
+{
+    for (QLabel *label : root->findChildren<QLabel *>()) {
+        if (label->text() == text && label->isVisible()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QStringList labelTexts(QWidget *root)
+{
+    QStringList texts;
+    for (QLabel *label : root->findChildren<QLabel *>()) {
+        texts.append(label->text());
+    }
+    return texts;
+}
+
+QPushButton *buttonFor(QWidget *root, const QString &text)
+{
+    for (QPushButton *button : root->findChildren<QPushButton *>()) {
+        if (button->text() == text) {
+            return button;
+        }
+    }
+    return nullptr;
+}
+
+QJsonObject modbusCard(int poll, int timeout)
+{
+    return QJsonObject{
+        {"id", "bus"},
+        {"type", "ModbusConfigCard"},
+        {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 380}, {"h", 180}}},
+        {"properties", QJsonObject{{"defaultPoll", poll}, {"timeout", timeout}, {"pollList", "1,3,0,2\n1,1,0,3"}}}};
 }
 
 } // namespace
@@ -172,6 +265,36 @@ class TestRuntime : public QObject
         surface.context()->hub()->removeLink(&link);
     }
 
+    // The receive log shows text the way the link that received it spells it.
+    void receiveLogDecodesWithTheLinksEncoding()
+    {
+        Project project;
+        project.widgets = QJsonArray{QJsonObject{{"id", "log"},
+                                                 {"type", "DataRecvCard"},
+                                                 {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 600}, {"h", 300}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        FakeLink gbkLink;
+        QString error;
+        QVERIFY2(gbkLink.setParser(QStringLiteral("line"), QJsonObject{{"encoding", "gbk"}}, &error), qPrintable(error));
+        FakeLink utf8Link;
+        CommHub *hub = surface.context()->hub();
+        hub->addLink(&gbkLink);
+        hub->addLink(&utf8Link);
+        const QByteArray gbk = QByteArray::fromHex("cec2b6c8") + ":25.3;"; // 温度:25.3;
+        gbkLink.inject(gbk);
+        QCOMPARE(hub->rawEncoding(), QStringLiteral("gbk"));
+        QCOMPARE(hub->decodeRaw(gbk), QStringLiteral("温度:25.3;"));
+        auto *log = surface.findChild<QTextEdit *>();
+        QVERIFY(log);
+        QVERIFY(log->toPlainText().contains(QStringLiteral("温度:25.3;")));
+        utf8Link.inject(QByteArray::fromStdString("湿度=60\n"));
+        QCOMPARE(hub->rawEncoding(), QStringLiteral("utf-8"));
+        QVERIFY(log->toPlainText().contains(QStringLiteral("湿度=60")));
+        hub->removeLink(&gbkLink);
+        hub->removeLink(&utf8Link);
+    }
+
     // A drag sends one command when the mouse lets go, whether it starts on the handle or on the
     // groove; arrow keys send each step; device feedback moving the handle sends nothing.
     void sliderSendsOnRelease()
@@ -225,6 +348,531 @@ class TestRuntime : public QObject
         QCOMPARE(slider->value(), 1500);
         QVERIFY(link.sent.isEmpty());
         surface.context()->hub()->removeLink(&link);
+    }
+
+    // The PLC tutorial example: the Modbus card polls three address blocks one reply at a time,
+    // displays read registers by address, the setpoint goes out as FC16 float32, the switch as FC05.
+    void plcExamplePollsBindsAndWrites()
+    {
+        Project project;
+        QString error;
+        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/10-PLC恒压供水.uidp"), &project, &error),
+                 qPrintable(error));
+        RuntimeSurface surface;
+        surface.build(project);
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
+        surface.context()->hub()->addLink(&link);
+
+        // A PLC with the register map in the PyQt UI Designer repo's examples/tutorials/README.md:
+        // it answers reads, coil 0 (running) on, and echoes writes as Modbus does.
+        const QHash<int, quint16> hr{{100, 0x3ED7}, {101, 0x0A3D}, {102, 0x4212}, {103, 0x0000},
+                                     {104, 452},    {105, 76},     {200, 0x3ECC}, {201, 0xCCCD}};
+        const auto answer = [&hr](const QByteArray &adu) {
+            const int address = quint8(adu.at(8)) << 8 | quint8(adu.at(9));
+            const int count = quint8(adu.at(10)) << 8 | quint8(adu.at(11));
+            QByteArray pdu = adu.mid(7, 5);
+            if (adu.at(7) == 3) {
+                pdu = QByteArray::fromHex("03") + char(2 * count);
+                for (int i = 0; i < count; ++i) {
+                    pdu.append(char(hr.value(address + i) >> 8)).append(char(hr.value(address + i)));
+                }
+            } else if (adu.at(7) == 1) {
+                pdu = QByteArray::fromHex("010101");
+            }
+            QByteArray reply = adu.left(4);
+            reply.append(char(0)).append(char(pdu.size() + 1)).append(adu.at(6));
+            return reply + pdu;
+        };
+        int answered = 0;
+        const auto serve = [&]() {
+            while (answered < link.sent.size()) {
+                link.inject(answer(link.sent.at(answered++))); // a reply lets the card send the next read
+            }
+        };
+        QPushButton *poll = buttonFor(&surface, QStringLiteral("轮询"));
+        QVERIFY(poll);
+        poll->click();
+        QCOMPARE(link.sent.size(), 1); // the first read waits for its reply
+        serve();
+        QList<QByteArray> reads;
+        for (const QByteArray &adu : link.sent) {
+            reads.append(adu.mid(7));
+        }
+        QCOMPARE(reads, (QList<QByteArray>{QByteArray::fromHex("030064 0006"), QByteArray::fromHex("0300c80002"),
+                                           QByteArray::fromHex("0100000004")}));
+        const QStringList texts = labelTexts(&surface);
+        for (const char *text : {"轮询正常 · 3/3", "0.42", "36.5", "0.40"}) {
+            QVERIFY2(texts.contains(QString::fromUtf8(text)), text);
+        }
+        bool level = false; // the ring paints its percentage, so read its value
+        for (QProgressBar *ring : surface.findChildren<QProgressBar *>()) {
+            level = level || ring->value() == 76;
+        }
+        QVERIFY(level);
+
+        QLineEdit *setpoint = nullptr;
+        for (auto *edit : surface.findChildren<QLineEdit *>()) {
+            if (edit->placeholderText().startsWith(QStringLiteral("单位 MPa"))) {
+                setpoint = edit;
+            }
+        }
+        QVERIFY(setpoint);
+        setpoint->setText(QStringLiteral("0.45"));
+        QTest::keyClick(setpoint, Qt::Key_Return);
+        serve();
+        QCOMPARE(link.sent.last().mid(7), QByteArray::fromHex("1000c80002 04 3EE66666")); // 0.45 as float32
+        auto *runSwitch = surface.findChild<FluentQt::SwitchButton *>();
+        QVERIFY(runSwitch);
+        runSwitch->setChecked(true);
+        serve();
+        QCOMPARE(link.sent.last().mid(7), QByteArray::fromHex("050003ff00"));
+        surface.context()->hub()->removeLink(&link);
+    }
+
+    // A Modbus card sends one read at a time. On a Modbus link it waits for the reply or the
+    // timeout and names a missing reply or an exception; on an ASCII link it frames and waits in
+    // ASCII; with no link parsing Modbus no reply can be recognised, so each tick sends the next.
+    void modbusCardPollsOneReadAtATime()
+    {
+        const auto rtu = [](const char *hex) {
+            const QByteArray pdu = QByteArray::fromHex(hex);
+            return pdu + modbusCrc(pdu);
+        };
+        FakeLink link; // before the surface, so the hub never outlives it
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
+        Project project;
+        project.widgets = QJsonArray{modbusCard(60000, 200)};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.context()->hub()->addLink(&link);
+        QPushButton *poll = buttonFor(&surface, QStringLiteral("轮询"));
+        QPushButton *send = buttonFor(&surface, QStringLiteral("发送"));
+        QVERIFY(poll && send);
+        QApplication::processEvents(); // layouts and fonts first, so no timer waits behind them
+        poll->click();
+        QCOMPARE(link.sent, QList<QByteArray>{rtu("010300000002")});
+        QTRY_COMPARE(link.sent.size(), 2); // no reply within 200 ms: the round moves on to the coils
+        QCOMPARE(link.sent.last(), rtu("010100000003"));
+        link.inject(rtu("01010201ff")); // two bytes of coils: an answer to some other read
+        QCOMPARE(link.sent.size(), 2);
+        QVERIFY(labelTexts(&surface).contains(QStringLiteral("轮询中 · 2 条")));
+        link.inject(rtu("018102"));
+        QVERIFY(labelTexts(&surface).contains(QStringLiteral("第 1 条无响应 · 0/2")));
+        poll->click(); // stop
+        send->click(); // the fields' request: FC03 from 0, one register
+        link.inject(rtu("010302002a"));
+        QVERIFY(labelTexts(&surface).contains(QStringLiteral("设备已响应")));
+        send->click();
+        QTRY_VERIFY(labelTexts(&surface).contains(QStringLiteral("无响应（200 ms 超时）")));
+
+        link.sent.clear();
+        QVERIFY(link.setParser(QStringLiteral("modbus_ascii"), {}));
+        poll->click();
+        QCOMPARE(link.sent, QList<QByteArray>{":010300000002FA\r\n"}); // upper-case hex and LRC
+        const QByteArray reply = ":0103040001FFFFF9\r\n";
+        link.inject(reply.left(7));
+        QCOMPARE(link.sent.size(), 1); // half a reply: still waiting
+        link.inject(reply.mid(7));
+        QCOMPARE(link.sent, (QList<QByteArray>{":010300000002FA\r\n", ":010100000003FB\r\n"}));
+        link.inject(modbusAsciiFrame(QByteArray::fromHex("01010105")));
+        QVERIFY(labelTexts(&surface).contains(QStringLiteral("轮询正常 · 2/2")));
+        poll->click();
+
+        FakeLink lines; // parses lines
+        project.widgets = QJsonArray{modbusCard(20, 1000)};
+        RuntimeSurface ticking;
+        ticking.build(project);
+        ticking.context()->hub()->addLink(&lines);
+        QPushButton *tick = buttonFor(&ticking, QStringLiteral("轮询"));
+        QVERIFY(tick);
+        tick->click();
+        QTRY_VERIFY(lines.sent.size() >= 3);
+        QCOMPARE(lines.sent.at(0), lines.sent.at(2));
+        QVERIFY(lines.sent.at(0) != lines.sent.at(1));
+        tick->click(); // 停止
+    }
+
+    // A link reports each whole frame of a hex parser as one raw unit, followed by its
+    // messages, and a frame ended by silence the same way; line and Modbus parsers buffer by
+    // themselves, so their units are the chunks as they came.
+    void linkReportsWholeFrames()
+    {
+        FakeLink link;
+        QString error;
+        QVERIFY2(link.setParser(QStringLiteral("hex"), jsonObject(kHexConfigA), &error), qPrintable(error));
+        QSignalSpy raw(&link, &Link::rawReceived);
+        QSignalSpy messages(&link, &Link::messageReceived);
+        const QByteArray stream = QByteArray::fromHex("1234") + kFrameA + kFrameA2;
+        link.inject(stream.left(5));
+        QVERIFY(raw.isEmpty());
+        link.inject(stream.mid(5));
+        QCOMPARE(rawOf(raw), (QList<QByteArray>{kFrameA, kFrameA2}));
+        QCOMPARE(messages.size(), 2);
+        QCOMPARE(messageValue(messages, 0, "temp"), -10);
+        QCOMPARE(messageValue(messages, 1, "hum"), 40);
+
+        raw.clear();
+        messages.clear();
+        QVERIFY(link.setParser(QStringLiteral("hex"), jsonObject(kHexConfigIdle)));
+        link.inject(QByteArray::fromHex("7E01"));
+        link.inject(QByteArray::fromHex("02"));
+        QVERIFY(raw.isEmpty());
+        QTRY_COMPARE(rawOf(raw), QList<QByteArray>{QByteArray::fromHex("7E0102")});
+        QCOMPARE(messageValue(messages, 0, "a"), 1);
+
+        for (const char *type : {"line", "modbus"}) {
+            raw.clear();
+            QVERIFY(link.setParser(QLatin1String(type), {}));
+            link.inject("a=1\nb=");
+            QCOMPARE(rawOf(raw), QList<QByteArray>{QByteArray("a=1\nb=")});
+        }
+    }
+
+    // Over TCP: a client reports whole frames; a server keeps a parser and an idle timer per
+    // peer, so two devices' bytes never mix.
+    void tcpLinksReportWholeFrames()
+    {
+        QTcpServer device;
+        QVERIFY(device.listen(QHostAddress::LocalHost, 0));
+        TcpClientLink client;
+        QString error;
+        QVERIFY2(client.setParser(QStringLiteral("hex"), jsonObject(kHexConfigA), &error), qPrintable(error));
+        QSignalSpy raw(&client, &Link::rawReceived);
+        QSignalSpy messages(&client, &Link::messageReceived);
+        client.connectTo(QStringLiteral("127.0.0.1"), device.serverPort());
+        QVERIFY(device.waitForNewConnection(5000));
+        QTcpSocket *socket = device.nextPendingConnection();
+        QTRY_VERIFY(client.isConnected());
+        socket->write(QByteArray::fromHex("00") + kFrameA + kFrameA2);
+        QTRY_COMPARE(rawOf(raw), (QList<QByteArray>{kFrameA, kFrameA2}));
+        QCOMPARE(messageValue(messages, 1, "cmd"), 2);
+
+        TcpServerLink server; // parses lines
+        QVERIFY2(server.listen(QStringLiteral("127.0.0.1"), 0, &error), qPrintable(error));
+        const quint16 port = quint16(server.description().section(QLatin1Char(':'), -1).toUInt());
+        QSignalSpy serverRaw(&server, &Link::rawReceived);
+        QSignalSpy serverMessages(&server, &Link::messageReceived);
+        QTcpSocket first;
+        QTcpSocket second;
+        first.connectToHost(QHostAddress::LocalHost, port);
+        second.connectToHost(QHostAddress::LocalHost, port);
+        QTRY_COMPARE(server.clientCount(), 2);
+        first.write("a=1");
+        QTRY_COMPARE(serverRaw.size(), 1); // the server holds the first peer's unfinished record
+        second.write("b=2\n");
+        first.write("0\n");
+        QTRY_COMPARE(serverMessages.size(), 2);
+        const QList<Message> records{serverMessages.at(0).first().value<Message>(),
+                                     serverMessages.at(1).first().value<Message>()};
+        QVERIFY(records.contains(Message{{"a", 10LL}}));
+        QVERIFY(records.contains(Message{{"b", 2LL}}));
+        // Peers that connect after a change of parser frame on silence, each with its own timer.
+        serverRaw.clear();
+        serverMessages.clear();
+        QVERIFY(server.setParser(QStringLiteral("hex"), jsonObject(kHexConfigIdle)));
+        QTcpSocket third;
+        QTcpSocket fourth;
+        third.connectToHost(QHostAddress::LocalHost, port);
+        fourth.connectToHost(QHostAddress::LocalHost, port);
+        QTRY_COMPARE(server.clientCount(), 4);
+        third.write(QByteArray::fromHex("7E03"));
+        fourth.write(QByteArray::fromHex("7E04"));
+        QTRY_COMPARE(serverMessages.size(), 2);
+        QList<QByteArray> units = rawOf(serverRaw);
+        std::sort(units.begin(), units.end());
+        QCOMPARE(units, (QList<QByteArray>{QByteArray::fromHex("7E03"), QByteArray::fromHex("7E04")}));
+        server.close();
+    }
+
+    // A HEX byte binding on a hex link gets whole frames: no header or footer to fill in, and
+    // byteOffset counts from the frame's first byte.
+    void hexBindingReadsWholeFrames()
+    {
+        Project project;
+        project.widgets = QJsonArray{QJsonObject{{"id", "temp"},
+                                                 {"type", "NumericDisplay"},
+                                                 {"geometry", QJsonObject{{"x", 10}, {"y", 10}, {"w", 160}, {"h", 90}}},
+                                                 {"properties", QJsonObject{{"decimals", "0"}}},
+                                                 {"binding", QJsonObject{{"parseMode", "HEX字节提取"},
+                                                                         {"byteOffset", 4},
+                                                                         {"dataType", "int16"},
+                                                                         {"byteOrder", "小端(LE)"}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("hex"), jsonObject(kHexConfigA)));
+        surface.context()->hub()->addLink(&link);
+        for (const char c : QByteArray::fromHex("55") + kFrameA) {
+            link.inject(QByteArray(1, c));
+        }
+        QVERIFY(labelTexts(&surface).contains(QStringLiteral("-10")));
+        surface.context()->hub()->removeLink(&link);
+    }
+
+    // A card with its own mode frames with its own parserConfig; left empty, it takes the
+    // project's when the modes match.
+    void linkCardsUseTheirOwnFrameFormat_data()
+    {
+        QTest::addColumn<QByteArray>("projectParser");
+        QTest::addColumn<QByteArray>("cardConfig");
+        QTest::addColumn<QByteArray>("frame");
+        QTest::addColumn<bool>("withFields");
+        QTest::newRow("own") << QByteArray("line") << QByteArray(kHexConfigA) << kFrameA << true;
+        QTest::newRow("project's") << QByteArray("hex") << QByteArray("{}") << kFrameA << true;
+        QTest::newRow("defaults") << QByteArray("line") << QByteArray("{}") << QByteArray::fromHex("AA550155AA")
+                                  << false;
+    }
+
+    void linkCardsUseTheirOwnFrameFormat()
+    {
+        QFETCH(QByteArray, projectParser);
+        QFETCH(QByteArray, cardConfig);
+        QFETCH(QByteArray, frame);
+        QFETCH(bool, withFields);
+        QTcpServer device;
+        QVERIFY(device.listen(QHostAddress::LocalHost, 0));
+        Project project;
+        project.serial.insert(QStringLiteral("parser"), QString::fromLatin1(projectParser));
+        if (projectParser == "hex") {
+            project.serial.insert(QStringLiteral("parserConfig"), jsonObject(kHexConfigA));
+        }
+        project.widgets =
+            QJsonArray{QJsonObject{{"id", "tcp"},
+                                   {"type", "TcpConfigCard"},
+                                   {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 360}, {"h", 290}}},
+                                   {"properties", QJsonObject{{"defaultHost", "127.0.0.1"},
+                                                              {"defaultPort", device.serverPort()},
+                                                              {"defaultParser", "hex"},
+                                                              {"parserConfig", jsonObject(cardConfig.constData())}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        QSignalSpy raw(surface.context()->hub(), &CommHub::rawReceived);
+        QSignalSpy messages(surface.context()->hub(), &CommHub::messageReceived);
+        QPushButton *connectButton = buttonFor(&surface, QStringLiteral("连接"));
+        QVERIFY(connectButton);
+        connectButton->click();
+        QVERIFY(device.waitForNewConnection(5000));
+        QTcpSocket *socket = device.nextPendingConnection();
+        socket->write(QByteArray::fromHex("00") + frame);
+        QTRY_COMPARE(raw.size(), 1);
+        QCOMPARE(raw.first().first().toByteArray(), frame); // framed as hex, not passed on by chunk
+        if (withFields) {
+            QCOMPARE(messageValue(messages, 0, "temp"), -10);
+        }
+        surface.context()->hub()->disconnectAll();
+    }
+
+    // The project's 默认帧格式 shows the rows of its mode. Line rows, in order: separator,
+    // terminator (picked or typed as escapes, stored as the characters), key-value separator and
+    // encoding; hex rows write lengths, checksums and the field table, whose bad lines are named.
+    void editorEditsTheProjectFrameFormat()
+    {
+        Project project;
+        PropertyEditor editor;
+        editor.setProject(&project);
+        editor.resize(360, 1600);
+        editor.show();
+        QApplication::processEvents();
+        QSignalSpy changed(&editor, &PropertyEditor::projectSettingsChanged);
+        QFormLayout *form = nullptr;
+        for (QFormLayout *candidate : editor.findChildren<QFormLayout *>()) {
+            if (fieldFor(candidate->parentWidget(), QStringLiteral("分隔符"))) {
+                form = candidate;
+            }
+        }
+        QVERIFY(form);
+        QStringList labels;
+        for (int row = 0; row < form->rowCount(); ++row) {
+            QLayoutItem *caption = form->itemAt(row, QFormLayout::LabelRole);
+            auto *text = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+            if (text && text->isVisible()) {
+                labels << text->text();
+            }
+        }
+        QCOMPARE(labels, (QStringList{QStringLiteral("解析模式"), QStringLiteral("分隔符"), QStringLiteral("行结束符"),
+                                      QStringLiteral("键值分隔符"), QStringLiteral("编码")}));
+
+        auto *terminator = qobject_cast<FluentQt::EditableComboBox *>(fieldFor(&editor, QStringLiteral("行结束符")));
+        QVERIFY(terminator);
+        QStringList items;
+        for (int i = 0; i < terminator->count(); ++i) {
+            items << terminator->itemText(i);
+        }
+        QCOMPARE(items, (QStringList{QStringLiteral("\\n"), QStringLiteral("\\r\\n"), QStringLiteral("\\r"),
+                                     QStringLiteral(";")}));
+        QVERIFY(!project.parserConfig().contains("terminator")); // showing a row writes nothing
+        terminator->setCurrentIndex(1);
+        QCOMPARE(project.parserConfig().value("terminator").toString(), QStringLiteral("\r\n"));
+        terminator->setText(QStringLiteral("#\\t\\\\\\x"));
+        QCOMPARE(project.parserConfig().value("terminator").toString(), QStringLiteral("#\t\\\\x"));
+        terminator->setText(QString()); // never stored: the parser would refuse it
+        QCOMPARE(project.parserConfig().value("terminator").toString(), QStringLiteral("#\t\\\\x"));
+        qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("键值分隔符")))->setCurrentText(":");
+        auto *encoding = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("编码")));
+        QCOMPARE(encoding->count(), 3);
+        encoding->setCurrentText(QStringLiteral("gbk"));
+        QCOMPARE(project.parserConfig().value("kvSeparator").toString(), QStringLiteral(":"));
+        QCOMPARE(project.parserConfig().value("encoding").toString(), QStringLiteral("gbk"));
+        QString error;
+        QVERIFY2(createParser(QStringLiteral("line"), project.parserConfig(), &error), qPrintable(error));
+        // Shown again, the terminator is in escapes; a file's "GBK" shows as gbk.
+        Project lineProject;
+        lineProject.serial.insert(QStringLiteral("parserConfig"),
+                                  QJsonObject{{"terminator", "#\t\\\\x"}, {"encoding", "GBK"}});
+        PropertyEditor lineEditor;
+        lineEditor.setProject(&lineProject);
+        QCOMPARE(qobject_cast<QLineEdit *>(fieldFor(&lineEditor, QStringLiteral("行结束符")))->text(),
+                 QStringLiteral("#\\t\\\\\\\\x"));
+        QCOMPARE(qobject_cast<FluentQt::ComboBox *>(fieldFor(&lineEditor, QStringLiteral("编码")))->currentText(),
+                 QStringLiteral("gbk"));
+
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("解析模式")));
+        mode->setCurrentText(QStringLiteral("hex"));
+        QApplication::processEvents();
+        QCOMPARE(project.parserType(), QStringLiteral("hex"));
+        for (const char *row : {"帧头(HEX)", "帧尾(HEX)", "长度字段偏移", "长度字节数", "长度字节序", "长度含义",
+                                "固定帧长", "校验", "校验起点", "校验字节序", "空闲超时(ms)", "字段表"}) {
+            QVERIFY2(labelShown(&editor, QString::fromUtf8(row)), row);
+        }
+        for (const char *row : {"分隔符", "行结束符", "键值分隔符", "编码"}) {
+            QVERIFY2(!labelShown(&editor, QString::fromUtf8(row)), row);
+        }
+        auto *offset = qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("长度字段偏移")));
+        QCOMPARE(offset->minimum(), -1);
+        offset->setValue(2);
+        qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("校验")))->setCurrentText("CRC16-Modbus");
+        qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("长度字节数")))->setCurrentText("2");
+        QCOMPARE(project.parserConfig().value("lengthOffset"), QJsonValue(2));
+        QCOMPARE(project.parserConfig().value("checksum").toString(), QStringLiteral("CRC16-Modbus"));
+        QCOMPARE(project.parserConfig().value("lengthSize"), QJsonValue(2));
+        auto *table = fieldFor(&editor, QStringLiteral("字段表"))->findChild<QPlainTextEdit *>();
+        QVERIFY(table);
+        table->setPlainText(QStringLiteral("# 温度\ntemp，0，2，int16,小端(LE)\n hum, 2, 1, uint8 "));
+        const QJsonArray fields = project.parserConfig().value("fields").toArray();
+        QCOMPARE(fields.size(), 2);
+        QCOMPARE(fields.at(0).toArray(), (QJsonArray{"temp", 0, 2, "int16", "小端(LE)"}));
+        QCOMPARE(fields.at(1).toArray(), (QJsonArray{"hum", 2, 1, "uint8"}));
+        // A line that is not a field is pointed out, and the stored table stays as it was.
+        table->setPlainText(QStringLiteral("temp,0,2,int16\n\nx,0,3,int16"));
+        QVERIFY(labelShown(&editor, QStringLiteral("第 3 行格式错误")));
+        QCOMPARE(project.parserConfig().value("fields").toArray(), fields);
+        table->setPlainText(QStringLiteral("temp,0,2,int16"));
+        QVERIFY(!labelShown(&editor, QStringLiteral("第 3 行格式错误")));
+        QVERIFY(changed.size() >= 8);
+
+        // What the rows wrote survives a save.
+        QTemporaryDir dir;
+        QVERIFY2(project.save(dir.filePath("p.uidp"), &error), qPrintable(error));
+        Project reopened;
+        QVERIFY2(Project::load(dir.filePath("p.uidp"), &reopened, &error), qPrintable(error));
+        QCOMPARE(reopened.parserConfig(), project.parserConfig());
+        PropertyEditor again;
+        again.setProject(&reopened);
+        QCOMPARE(qobject_cast<QSpinBox *>(fieldFor(&again, QStringLiteral("长度字段偏移")))->value(), 2);
+        QCOMPARE(fieldFor(&again, QStringLiteral("字段表"))->findChild<QPlainTextEdit *>()->toPlainText(),
+                 QStringLiteral("temp,0,2,int16"));
+
+        mode->setCurrentText(QStringLiteral("modbus_ascii")); // a mode without frame rows
+        QApplication::processEvents();
+        QCOMPARE(project.parserType(), QStringLiteral("modbus_ascii"));
+        QVERIFY(!labelShown(&editor, QStringLiteral("行结束符")));
+        QVERIFY(!labelShown(&editor, QStringLiteral("帧头(HEX)")));
+    }
+
+    // An item's rows follow its mode. A link card shows its own 帧格式 for the mode it picks,
+    // starting from the project's when the modes match; a Modbus-mode control keeps its Modbus
+    // rows in view with the send toggle off, since it sends either way.
+    void editorShowsAnItemsRowsByItsMode()
+    {
+        DesignScene scene;
+        QString error;
+        QVERIFY2(
+            scene.loadWidgets(
+                QJsonArray{QJsonObject{{"id", "uart"},
+                                       {"type", "SerialConfigCard"},
+                                       {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 360}, {"h", 340}}}},
+                           QJsonObject{{"id", "setpoint"},
+                                       {"type", "LineEdit"},
+                                       {"geometry", QJsonObject{{"x", 0}, {"y", 400}, {"w", 200}, {"h", 33}}},
+                                       {"properties", QJsonObject{{"commandMode", "Modbus"}, {"sendOnEnter", false}}}}},
+                &error),
+            qPrintable(error));
+        Project project;
+        project.serial.insert(QStringLiteral("parser"), QStringLiteral("hex"));
+        project.serial.insert(QStringLiteral("parserConfig"), jsonObject(kHexConfigA));
+        PropertyEditor editor;
+        editor.setProject(&project);
+        editor.setScene(&scene);
+        editor.resize(360, 1800);
+        editor.showItem(scene.findItem(QStringLiteral("uart")));
+        editor.show();
+        QApplication::processEvents();
+        QVERIFY(!labelShown(&editor, QStringLiteral("帧格式")));
+        const auto pick = [&editor](const QString &parser) {
+            auto *combo = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("默认解析模式")));
+            QVERIFY(combo);
+            combo->setCurrentText(parser);
+            QApplication::processEvents(); // the form is rebuilt for the new mode
+            QApplication::processEvents();
+        };
+        pick(QStringLiteral("hex"));
+        QVERIFY(labelShown(&editor, QStringLiteral("帧格式")));
+        QVERIFY(labelShown(&editor, QStringLiteral("固定帧长")));
+        QVERIFY(!labelShown(&editor, QStringLiteral("分隔符")));
+        // The card has no parserConfig yet and parses as the project does: the project's rows.
+        QCOMPARE(qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("长度字段偏移")))->value(), 2);
+        fieldFor(&editor, QStringLiteral("字段表"))
+            ->findChild<QPlainTextEdit *>()
+            ->setPlainText(QStringLiteral("v,0,2,uint16"));
+        CanvasItem *item = scene.findItem(QStringLiteral("uart"));
+        QJsonObject stored = item->propertyValue(QStringLiteral("parserConfig")).toObject();
+        QCOMPARE(stored.value("lengthOffset"), QJsonValue(2));
+        QCOMPARE(stored.value("fields").toArray().at(0).toArray(), (QJsonArray{"v", 0, 2, "uint16"}));
+        QCOMPARE(project.parserConfig(), jsonObject(kHexConfigA)); // the project's is left alone
+        // Saved and opened again, the card shows the same frame format.
+        const QJsonArray saved = scene.widgetsJson();
+        QCOMPARE(saved.at(0).toObject().value("properties").toObject().value("parserConfig").toObject(), stored);
+        DesignScene reopened;
+        QVERIFY2(reopened.loadWidgets(saved, &error), qPrintable(error));
+        PropertyEditor again;
+        again.setScene(&reopened);
+        again.showItem(reopened.findItem(QStringLiteral("uart")));
+        QCOMPARE(fieldFor(&again, QStringLiteral("字段表"))->findChild<QPlainTextEdit *>()->toPlainText(),
+                 QStringLiteral("v,0,2,uint16"));
+
+        pick(QStringLiteral("line"));
+        QVERIFY(labelShown(&editor, QStringLiteral("分隔符")));
+        QVERIFY(!labelShown(&editor, QStringLiteral("固定帧长")));
+        qobject_cast<FluentQt::EditableComboBox *>(fieldFor(&editor, QStringLiteral("行结束符")))
+            ->setCurrentText(QStringLiteral(";"));
+        qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("编码")))
+            ->setCurrentText(QStringLiteral("ascii"));
+        stored = item->propertyValue(QStringLiteral("parserConfig")).toObject();
+        QCOMPARE(stored.value("terminator").toString(), QStringLiteral(";"));
+        QCOMPARE(stored.value("encoding").toString(), QStringLiteral("ascii"));
+        QVERIFY(!project.parserConfig().contains("terminator"));
+        pick(QStringLiteral("modbus_ascii"));
+        QVERIFY(!labelShown(&editor, QStringLiteral("行结束符")));
+        QVERIFY(!labelShown(&editor, QStringLiteral("帧头(HEX)")));
+        pick(QStringLiteral("项目设置"));
+        QVERIFY(!labelShown(&editor, QStringLiteral("帧格式")));
+
+        editor.showItem(scene.findItem(QStringLiteral("setpoint")));
+        QApplication::processEvents();
+        QVERIFY(labelShown(&editor, QStringLiteral("发送模式")));
+        QVERIFY(labelShown(&editor, QStringLiteral("功能码")));
+        FluentQt::ComboBox *commandMode = nullptr;
+        for (auto *combo : editor.findChildren<FluentQt::ComboBox *>()) {
+            if (combo->currentText() == QStringLiteral("Modbus") && combo->findText(QStringLiteral("文本")) >= 0) {
+                commandMode = combo;
+            }
+        }
+        QVERIFY(commandMode);
+        commandMode->setCurrentText(QStringLiteral("文本")); // text mode: the toggle off hides them
+        QApplication::processEvents();
+        QVERIFY(!labelShown(&editor, QStringLiteral("功能码")));
+        QVERIFY(!labelShown(&editor, QStringLiteral("发送模式")));
     }
 
     void exportCarriesProjectAndImages()

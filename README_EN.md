@@ -45,8 +45,9 @@ This is the raw text of [docs/uidp-format.md](docs/uidp-format.md), which an AI 
 
 Both use the same project format, and their widget and protocol rules match:
 
-- **Compatible project format**: it reads and writes `.uidp` (version 1.0) directly, and its widget types, property names, default values and enum options match PyQt UI Designer one to one. All 9 example projects in `examples/` open, preview, and save back unchanged.
-- **Same parsing and binding rules**: the four parsers (line text with key-value / JSON / CSV, HEX frame, Modbus RTU, Modbus TCP), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the three command encodings (text / HEX / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
+- **Compatible project format**: it reads and writes `.uidp` (version 1.0) directly, and its widget types, property names, default values and enum options match PyQt UI Designer one to one. All 10 example projects in `examples/` open, preview, and save back unchanged.
+- **Same parsing and binding rules**: the five parsers (line text with key-value / JSON / CSV; binary HEX frames with header and footer, length field, checksum, fixed length or idle-gap framing; Modbus RTU; Modbus TCP; Modbus ASCII), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the three command encodings (text / HEX / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
+- **Same Modbus features for PLCs**: read requests sent from here are remembered, so the registers in a reply are also named by address (holding register 100 is `hr100`) and a binding can pick a register table and an address; the Modbus card reads several address blocks from its poll table one request at a time, each waiting for its reply or the timeout; FC16 writes int16, 32-bit integers and float32 values by data type.
 
 The differences are in how they are built and how they export apps:
 

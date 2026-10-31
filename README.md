@@ -43,8 +43,9 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 两者使用同一种工程格式，控件和协议规则一致：
 
-- **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的 9 个示例工程都能打开、预览，并按原样保存。
-- **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 帧、Modbus RTU、Modbus TCP 四种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / Modbus 三种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
+- **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的 10 个示例工程都能打开、预览，并按原样保存。
+- **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 二进制帧（帧头帧尾、长度字段、校验、定长、空闲分帧）、Modbus RTU、Modbus TCP、Modbus ASCII 五种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / Modbus 三种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
+- **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定可选寄存器区和地址；Modbus 卡片按轮询表逐条读取多块地址，每条等到响应或超时再发下一条；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 
 不同之处在实现和导出方式：
 

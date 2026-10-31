@@ -43,7 +43,7 @@ void RuntimeContext::setActive(bool active)
     }
 }
 
-bool RuntimeContext::send(const CommandResult &result)
+bool RuntimeContext::send(const CommandResult &result, QList<QByteArray> *sent)
 {
     if (!m_hub->isConnected()) {
         notify(tr("提示"), tr("未连接，命令未发送"), NotifyType::Warning);
@@ -53,7 +53,7 @@ bool RuntimeContext::send(const CommandResult &result)
         notify(tr("提示"), result.error, NotifyType::Error);
         return false;
     }
-    if (m_hub->send(*result.command) == 0) {
+    if (m_hub->send(*result.command, sent) == 0) {
         notify(tr("提示"), tr("没有链路接收该命令"), NotifyType::Warning);
         return false;
     }

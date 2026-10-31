@@ -1,6 +1,7 @@
 #include "comm/mqtt_link.h"
 #include "core/mqtt_codec.h"
 
+#include <QtCore/QJsonDocument>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 #include <QtTest/QtTest>
@@ -249,6 +250,27 @@ class TestMqtt : public QObject
         QCOMPARE(sent.size(), 1);
     }
 
+    // A read published over MQTT is noted like any other send, so its reply is named by address.
+    void modbusReadsPublishedArePairedWithTheirReplies()
+    {
+        FakeBroker broker;
+        MqttLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
+        QSignalSpy messages(&link, &Link::messageReceived);
+        QVERIFY(link.connectTo(settingsFor(broker)));
+        QTRY_VERIFY(link.isConnected());
+        const QByteArray request = buildModbusTcpFrame(1, 3, 100, 0, 2, 0x0101);
+        QVERIFY(link.send(request));
+        QTRY_COMPARE(broker.ofType(Mqtt::Publish).size(), 1);
+        QCOMPARE(Mqtt::decodePublish(broker.ofType(Mqtt::Publish).first())->payload, request);
+        broker.publish(QStringLiteral("device/data"), QByteArray::fromHex("01010000000701030400190001"));
+        QTRY_COMPARE(messages.size(), 1);
+        const Message m = messages.takeFirst().first().value<Message>();
+        QCOMPARE(m.value("start").toLongLong(), 100);
+        QCOMPARE(m.value("hr100").toLongLong(), 25);
+        QCOMPARE(m.value("hr101").toLongLong(), 1);
+    }
+
     void missingPublishTopicIsExplained()
     {
         FakeBroker broker;
@@ -329,6 +351,73 @@ class TestMqtt : public QObject
         broker.publish(QStringLiteral("sensor/a"), QByteArray::fromHex("55AA"));
         QTRY_COMPARE(messages.size(), 1);
         QCOMPARE(messages.first().first().value<Message>().value("v").toLongLong(), 7);
+    }
+
+    // Each message is a burst of its own. A line payload is a whole record that ends at the
+    // configured terminator, its raw bytes as they came; hex frames may span the messages of one
+    // topic, each reported once whole; a parser that frames on silence is flushed after each one.
+    void eachMessageIsFramedByTheLinksParser()
+    {
+        FakeBroker broker;
+        const auto connected = [&broker](const char *type, const char *config) {
+            auto link = std::make_unique<MqttLink>();
+            QString error;
+            if (!link->setParser(QLatin1String(type), QJsonDocument::fromJson(config).object(), &error) ||
+                !link->connectTo(settingsFor(broker))) {
+                qWarning() << error;
+                return std::unique_ptr<MqttLink>();
+            }
+            return link;
+        };
+
+        auto line = connected("line", R"json({"terminator": ";", "kvSeparator": ":"})json");
+        QVERIFY(line);
+        QSignalSpy raw(line.get(), &Link::rawReceived);
+        QSignalSpy messages(line.get(), &Link::messageReceived);
+        QTRY_VERIFY(line->isConnected());
+        broker.publish(QStringLiteral("device/data"), "a:1;b:2");
+        broker.publish(QStringLiteral("device/data"), "c:3;"); // ends in one already: no empty record after it
+        broker.publish(QStringLiteral("device/data"), "x:4\n"); // a newline is no terminator here
+        broker.publish(QStringLiteral("device/data"), "{\"d\": 5}");
+        QTRY_COMPARE(messages.size(), 5);
+        QStringList keys;
+        for (const QList<QVariant> &args : messages) {
+            keys << args.first().value<Message>().keys();
+        }
+        QCOMPARE(keys, (QStringList{"a", "b", "c", "x", "d"}));
+        QCOMPARE(messages.at(3).first().value<Message>().value("x").toLongLong(), 4);
+        QCOMPARE(raw.first().first().toByteArray(), QByteArray("a:1;b:2"));
+        line.reset();
+
+        auto hex = connected("hex", R"json({"header": "AA55", "footer": "", "lengthOffset": 2, "checksum": "和校验",
+            "fields": [["cmd", 1, 1, "uint8"], ["temp", 2, 2, "int16", "小端(LE)"], ["hum", 4, 1, "uint8"]]})json");
+        QVERIFY(hex);
+        QSignalSpy frames(hex.get(), &Link::rawReceived);
+        QSignalSpy values(hex.get(), &Link::messageReceived);
+        QTRY_VERIFY(hex->isConnected());
+        const QByteArray frame = QByteArray::fromHex("AA550401F6FF3C35");
+        broker.publish(QStringLiteral("device/data"), QByteArray::fromHex("1234") + frame.left(3));
+        broker.publish(QStringLiteral("device/data"), frame.mid(3) + frame);
+        QTRY_COMPARE(values.size(), 2);
+        QCOMPARE(frames.size(), 2); // no unit for the first half
+        QCOMPARE(frames.at(0).first().toByteArray(), frame);
+        QCOMPARE(frames.at(1).first().toByteArray(), frame);
+        QCOMPARE(values.first().first().value<Message>().value("temp").toLongLong(), -10);
+        hex.reset();
+
+        auto idle = connected("hex", R"json({"header": "7E", "footer": "", "idleTimeout": 1000,
+            "fields": [["a", 0, 1, "uint8"]]})json");
+        QVERIFY(idle);
+        QSignalSpy bursts(idle.get(), &Link::rawReceived);
+        QTRY_VERIFY(idle->isConnected());
+        QElapsedTimer clock;
+        clock.start();
+        broker.publish(QStringLiteral("device/data"), QByteArray::fromHex("007E0102"));
+        broker.publish(QStringLiteral("sensor/x"), QByteArray::fromHex("7E05"));
+        QTRY_COMPARE(bursts.size(), 2);
+        QVERIFY(clock.elapsed() < 1000); // not waiting for the idle timeout
+        QCOMPARE(bursts.at(0).first().toByteArray(), QByteArray::fromHex("7E0102"));
+        QCOMPARE(bursts.at(1).first().toByteArray(), QByteArray::fromHex("7E05"));
     }
 };
 

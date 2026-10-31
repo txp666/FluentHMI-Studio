@@ -44,6 +44,8 @@ class PropertyEditor : public FluentQt::ScrollArea
 
   private:
     using Commit = std::function<void(const QJsonValue &)>;
+    using ConfigRead = std::function<QJsonObject()>;
+    using ConfigWrite = std::function<void(const QJsonObject &)>;
 
     void rebuild();
     void clearContent();
@@ -54,6 +56,14 @@ class PropertyEditor : public FluentQt::ScrollArea
     void buildProjectForm();
     void buildItemForm();
     void buildBindingForm();
+    // The parserConfig rows, the same for the project's default frame format and a link card's
+    // own; `prefix` keeps the card's row keys apart from its properties'. Every edit hands
+    // `write` the whole config `read` returns, with that one key changed.
+    void addFrameRows(QFormLayout *form, const QString &prefix, const ConfigRead &read, const ConfigWrite &write);
+    void setFrameRowsVisible(const QString &prefix, const QString &mode);
+    // The frame format a link card's rows show: its own, or the project's while its own is
+    // empty and the modes match, as the card frames at run time.
+    QJsonObject cardFrameConfig() const;
 
     // Where a property is stored: chart curve fields and tab page layouts live in
     // per-curve / per-page keys, exactly as PyQt UI Designer stores them.

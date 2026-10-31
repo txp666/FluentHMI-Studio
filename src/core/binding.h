@@ -10,6 +10,14 @@
 
 namespace fhmi {
 
+// Where a Modbus binding reads: 响应内序号 counts registers within one response (reg0, coil0),
+// the tables name them by register address (hr100), which the request for each response gives.
+namespace ModbusArea {
+inline const QString InResponse = QStringLiteral("响应内序号");
+QStringList options();      // InResponse first, then 保持寄存器, 输入寄存器, 线圈, 离散输入
+QString prefix(const QString &area); // "hr", "ir", "co", "di"; empty for InResponse
+} // namespace ModbusArea
+
 namespace ParseMode {
 inline const QString KeyValue = QStringLiteral("键值匹配");
 inline const QString JsonPath = QStringLiteral("JSON路径");
@@ -55,6 +63,7 @@ class BindingEntry
     QString mbDataType = QStringLiteral("uint16");
     QString mbRegOrder = QStringLiteral("大端(AB CD)");
     int mbFcFilter = -1;
+    QString mbArea = ModbusArea::InResponse; // with a table, mbRegIndex is a register address
     QString displayFormat = QStringLiteral("自动");
     QString decimals = QStringLiteral("自动");
     QString ledOnValue = QStringLiteral("1");
