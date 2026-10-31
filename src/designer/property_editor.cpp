@@ -676,6 +676,12 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
         QMetaObject::invokeMethod(this, [this]() { rebuild(); }, Qt::QueuedConnection);
         return;
     }
+    if (m_geometry[3] && m_item->isLinkCard()) { // its rows (displayMode) set how short it may be
+        m_loading = true;
+        m_geometry[3]->setMinimum(int(std::ceil(m_item->minimumHeight())));
+        m_loading = false;
+        refreshGeometry();
+    }
     updateVisibility();
 }
 
@@ -721,7 +727,7 @@ void PropertyEditor::buildItemForm()
     const QString labels[4] = {QStringLiteral("X"), QStringLiteral("Y"), tr("宽度"), tr("高度")};
     for (int i = 0; i < 4; ++i) {
         auto *spin = new FluentQt::SpinBox(m_content);
-        spin->setRange(i == 2 ? meta.minWidth : i == 3 ? meta.minHeight : -9999, 9999);
+        spin->setRange(i == 2 ? meta.minWidth : i == 3 ? int(std::ceil(m_item->minimumHeight())) : -9999, 9999);
         spin->setKeyboardTracking(false);
         m_geometry[i] = spin;
         connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this, i](int value) {

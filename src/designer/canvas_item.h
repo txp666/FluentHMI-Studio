@@ -50,7 +50,13 @@ class CanvasItem : public QGraphicsObject
     void setTabIndex(int index) { m_tabIndex = index; }
 
     QSizeF size() const { return m_size; }
-    // User edits respect the widget's minimum size; loading keeps what the project says.
+    // User edits respect the widget's minimum size (minimumHeight() for the height); loading keeps what
+    // the project says, except that a link card grows to rowsHeight().
+    // The smallest height this item takes: the metadata's, or for a serial, TCP or MQTT card the height
+    // its visible rows need, if that is more.
+    qreal minimumHeight() const;
+    // The height the widget's visible rows need (its minimumSizeHint).
+    qreal rowsHeight() const;
     void setSize(const QSizeF &size, bool enforceMinimum = true);
     QRectF rect() const { return QRectF(QPointF(), m_size); }
     QRectF boundingRect() const override;
@@ -61,6 +67,8 @@ class CanvasItem : public QGraphicsObject
 
     // Containers
     bool isContainer() const { return m_meta->container; }
+    // A serial, TCP or MQTT card, which is never shorter than its rows.
+    bool isLinkCard() const;
     CanvasItem *containerParent() const { return m_containerParent; }
     QList<CanvasItem *> containerChildren() const { return m_children; }
     bool isAncestorOf(const CanvasItem *item) const;
