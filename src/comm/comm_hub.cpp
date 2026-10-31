@@ -37,16 +37,19 @@ void CommHub::addLink(Link *link)
     connect(link, &Link::connectedChanged, this, [this, link](bool connected) {
         if (connected) {
             emit linkConnected(link->description());
-            emit linkUp(link);
         } else {
             emit linkDisconnected(link->description());
         }
         emit connectionStateChanged(isConnected());
+        emit linksChanged();
     });
+    connect(link, &Link::canSendChanged, this, &CommHub::linksChanged);
     connect(link, &QObject::destroyed, this, [this]() {
         m_links.removeAll(QPointer<Link>());
         emit connectionStateChanged(isConnected());
+        emit linksChanged();
     });
+    emit linksChanged();
 }
 
 void CommHub::removeLink(Link *link)
@@ -57,6 +60,7 @@ void CommHub::removeLink(Link *link)
     link->disconnect(this);
     m_links.removeAll(QPointer<Link>(link));
     emit connectionStateChanged(isConnected());
+    emit linksChanged();
 }
 
 QList<Link *> CommHub::connectedLinks() const

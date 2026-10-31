@@ -15,6 +15,7 @@
 namespace fhmi {
 
 class HmiWidget;
+class ModbusPoller;
 
 namespace NotifyType {
 inline const QString Success = QStringLiteral("成功");
@@ -24,7 +25,8 @@ inline const QString Error = QStringLiteral("错误");
 } // namespace NotifyType
 
 // The live side of a running surface: the hub with its links, the bindings from
-// incoming data to widgets, and the path from widgets' commands out to devices.
+// incoming data to widgets, the path from widgets' commands out to devices, and the
+// poller that reads what the Modbus bindings show.
 class RuntimeContext : public QObject
 {
     Q_OBJECT
@@ -33,6 +35,9 @@ class RuntimeContext : public QObject
     explicit RuntimeContext(QObject *parent = nullptr);
 
     CommHub *hub() const { return m_hub; }
+    // Reads the Modbus bindings and curves while the context is active; every running project has one,
+    // with or without a Modbus card.
+    ModbusPoller *modbusPoller() const { return m_poller; }
 
     void registerWidget(const QString &id, HmiWidget *widget);
     void addBinding(BindingEntry binding);
@@ -47,8 +52,8 @@ class RuntimeContext : public QObject
     // A Modbus request queued as `how` says (CommHub::sendModbus), explained the same way when no link takes it.
     bool sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how);
 
-    // What the Modbus card's automatic polling reads: every binding of a register table, visible while
-    // its widget is on screen (not on a tab page in the background), then the curves charts registered.
+    // What the Modbus poller reads: every Modbus binding, visible while its widget is on screen (not on a
+    // tab page in the background), then the curves charts registered.
     QList<ModbusNeed> modbusNeeds() const;
     // A chart's Modbus curves; an empty list removes them.
     void setCurveNeeds(const QObject *chart, const QList<ModbusNeed> &needs);
@@ -68,6 +73,7 @@ class RuntimeContext : public QObject
     void push(const BindingEntry &binding, const QVariant &raw);
 
     CommHub *m_hub = nullptr;
+    ModbusPoller *m_poller = nullptr;
     QHash<QString, QPointer<HmiWidget>> m_widgets;
     std::vector<BindingEntry> m_bindings;
     QList<QPair<const QObject *, QList<ModbusNeed>>> m_curveNeeds; // in the order charts registered

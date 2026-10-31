@@ -165,6 +165,9 @@ void TcpServerLink::onNewConnection()
         });
         emit infoMessage(tr("设备已连入: %1").arg(peer));
         emit clientCountChanged(clientCount());
+        if (clientCount() == 1) {
+            emit canSendChanged();
+        }
     }
 }
 
@@ -180,6 +183,9 @@ void TcpServerLink::dropClient(QTcpSocket *socket)
     socket->abort();
     socket->deleteLater();
     emit clientCountChanged(clientCount());
+    if (clientCount() == 0) {
+        emit canSendChanged();
+    }
 }
 
 } // namespace fhmi

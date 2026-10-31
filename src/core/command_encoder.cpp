@@ -282,42 +282,6 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
     return ModbusRequest{int(slave), 0x10, int(address), int(registers->size()), *registers};
 }
 
-std::optional<QList<ModbusRequest>> modbusPollTable(const QString &text, QString *error)
-{
-    QList<ModbusRequest> requests;
-    int number = 0;
-    for (QString line : QString(text).replace(QLatin1Char(';'), QLatin1Char('\n')).split(QLatin1Char('\n'))) {
-        line = line.trimmed();
-        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
-            continue;
-        }
-        ++number;
-        const QStringList fields = line.replace(QStringLiteral("，"), QStringLiteral(",")).split(QLatin1Char(','));
-        QList<qint64> numbers;
-        for (const QString &field : fields) {
-            if (const auto n = integerText(field)) {
-                numbers.append(*n);
-            }
-        }
-        if (fields.size() != 4 || numbers.size() != 4 || numbers.at(1) < 1 || numbers.at(1) > 4) {
-            if (error) {
-                *error = QStringLiteral("轮询表第 %1 条应为 从站,功能码(1–4),地址,数量").arg(number);
-            }
-            return std::nullopt;
-        }
-        QString why; // the line is well formed; say what is wrong with its values
-        const auto request = modbusRequest(numbers.at(0), numbers.at(1), numbers.at(2), numbers.at(3), &why);
-        if (!request) {
-            if (error) {
-                *error = QStringLiteral("轮询表第 %1 条：%2").arg(number).arg(why);
-            }
-            return std::nullopt;
-        }
-        requests.append(*request);
-    }
-    return requests;
-}
-
 QByteArray rtuFrame(const ModbusRequest &request)
 {
     return buildModbusRtuFrame(request.slave, request.func, request.address, request.value, request.value,

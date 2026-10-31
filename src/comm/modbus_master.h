@@ -23,15 +23,15 @@ class ModbusMaster;
 struct ModbusNeed
 {
     QString widgetId;
-    int slave = 0; // the binding's mbSlaveFilter; <= 0 reads the Modbus card's defaultSlave
+    int slave = 0; // the binding's mbSlaveFilter; <= 0 reads the poller's fallback slave
     QString table; // "hr", "ir", "co" or "di"
     int address = 0;
     int count = 1;       // registers, or bits for coils and discrete inputs
-    int period = 0;      // ms; 0 uses the Modbus card's poll interval
+    int period = 0;      // ms; 0 uses the poller's default period
     bool visible = true; // on screen now; a chart curve always is
 };
 
-// What a Modbus binding of a register table reads; nullopt for 响应内序号 and the other parse modes.
+// What a Modbus binding reads from its register table; nullopt for the other parse modes.
 std::optional<ModbusNeed> modbusNeed(const BindingEntry &binding);
 
 // One read the planner merged needs into.

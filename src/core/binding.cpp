@@ -261,7 +261,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.mbDataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
     entry.mbRegOrder = binding.value(QStringLiteral("mbRegOrder")).toString(QStringLiteral("大端(AB CD)"));
     entry.mbFcFilter = binding.value(QStringLiteral("mbFcFilter")).toInt(-1);
-    entry.mbArea = binding.value(QStringLiteral("mbArea")).toString(ModbusArea::InResponse);
+    entry.mbArea = binding.value(QStringLiteral("mbArea")).toString(ModbusArea::HoldingRegisters);
     entry.mbPeriod = binding.value(QStringLiteral("mbPeriod")).toInt(0);
     entry.displayFormat = props.value(QStringLiteral("displayFormat")).toString(QStringLiteral("自动"));
     entry.decimals = props.value(QStringLiteral("decimals")).toVariant().toString();
@@ -295,8 +295,7 @@ QVariant BindingEntry::extractFromParsed(const Message &data) const
 
 QStringList ModbusArea::options()
 {
-    return {InResponse, QStringLiteral("保持寄存器"), QStringLiteral("输入寄存器"), QStringLiteral("线圈"),
-            QStringLiteral("离散输入")};
+    return {HoldingRegisters, QStringLiteral("输入寄存器"), QStringLiteral("线圈"), QStringLiteral("离散输入")};
 }
 
 QString ModbusArea::prefix(const QString &area)
@@ -317,13 +316,11 @@ QVariant BindingEntry::extractModbus(const Message &data) const
     if (mbFcFilter >= 0 && fc != mbFcFilter) {
         return {};
     }
-    QString table = ModbusArea::prefix(mbArea);
+    const QString table = ModbusArea::prefix(mbArea);
     if (table.isEmpty()) {
-        if (fc == 0x01 || fc == 0x02) {
-            return data.value(QStringLiteral("coil%1").arg(mbRegIndex));
-        }
-        table = QStringLiteral("reg");
-    } else if (table == QLatin1String("co") || table == QLatin1String("di")) {
+        return {};
+    }
+    if (table == QLatin1String("co") || table == QLatin1String("di")) {
         return data.value(table + QString::number(mbRegIndex));
     }
 

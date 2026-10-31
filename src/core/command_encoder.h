@@ -69,9 +69,6 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
 std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 address, const QString &value,
                                            const QString &dataType, const QString &regOrder,
                                            QString *error = nullptr);
-// The reads in a Modbus card's poll table: one per line (or separated by ;) as
-// 从站,功能码,地址,数量 with function codes 1–4; lines starting with # are comments.
-std::optional<QList<ModbusRequest>> modbusPollTable(const QString &text, QString *error = nullptr);
 QByteArray rtuFrame(const ModbusRequest &request);
 QByteArray tcpFrame(const ModbusRequest &request, int transaction);
 // ':', the RTU frame's bytes as uppercase hex with an LRC in place of the CRC, CR LF.

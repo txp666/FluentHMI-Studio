@@ -48,6 +48,8 @@ class Link : public QObject
 
   signals:
     void connectedChanged(bool connected);
+    // canSend() changed while the link stayed connected: a listening server got its first device or lost its last.
+    void canSendChanged();
     void messageReceived(const fhmi::Message &message);
     void rawReceived(const QByteArray &bytes);
     void bytesSent(const QByteArray &bytes);

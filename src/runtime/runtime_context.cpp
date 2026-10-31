@@ -1,11 +1,13 @@
 #include "runtime/runtime_context.h"
 
 #include "runtime/hmi_widget.h"
+#include "runtime/modbus_poller.h"
 
 namespace fhmi {
 
 RuntimeContext::RuntimeContext(QObject *parent) : QObject(parent), m_hub(new CommHub(this))
 {
+    m_poller = new ModbusPoller(this);
     m_steady.start();
     connect(m_hub, &CommHub::messageReceived, this, &RuntimeContext::onMessage);
     connect(m_hub, &CommHub::rawReceived, this, &RuntimeContext::onRaw);
@@ -33,6 +35,7 @@ void RuntimeContext::clear()
     m_widgets.clear();
     m_bindings.clear();
     m_curveNeeds.clear();
+    m_poller->reset();
 }
 
 QList<ModbusNeed> RuntimeContext::modbusNeeds() const
@@ -82,6 +85,7 @@ void RuntimeContext::setActive(bool active)
             binding.resetStream();
         }
     }
+    m_poller->setActive(active);
 }
 
 bool RuntimeContext::send(const CommandResult &result, QList<QByteArray> *sent)

@@ -5,6 +5,7 @@
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
 #include "runtime/hmi_widget.h"
+#include "runtime/modbus_poller.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
 #include "studio/export_service.h"
@@ -46,12 +47,21 @@ class FakeLink : public Link
     using Link::Link;
     QString description() const override { return QStringLiteral("fake"); }
     bool isConnected() const override { return m_connected; }
+    bool canSend() const override { return m_connected && m_sendable; }
     void close() override {}
     void setConnected(bool connected)
     {
         if (connected != m_connected) {
             m_connected = connected;
             emit connectedChanged(connected);
+        }
+    }
+    // Off: connected without a device to send to, as a listening server before one connects.
+    void setSendable(bool sendable)
+    {
+        if (sendable != m_sendable) {
+            m_sendable = sendable;
+            emit canSendChanged();
         }
     }
     void inject(const QByteArray &bytes) { deliver(defaultParser(), bytes); }
@@ -66,6 +76,7 @@ class FakeLink : public Link
 
   private:
     bool m_connected = true;
+    bool m_sendable = true;
 };
 
 // A PLC behind Modbus TCP with the given holding registers: it answers FC 1 and FC 3 reads (coil 0 on)
@@ -101,10 +112,10 @@ QList<QByteArray> pdus(const QList<QByteArray> &adus)
     return out;
 }
 
-// Emits a timer's timeout, as if its interval had passed.
-void tick(QWidget *card)
+// Emits the Modbus poller's timer timeout, as if its interval had passed.
+void tickPoller(RuntimeContext *context)
 {
-    auto *timer = card->findChild<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
+    auto *timer = context->modbusPoller()->findChild<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
     QVERIFY(timer && timer->isActive());
     QMetaObject::invokeMethod(timer, "timeout");
 }
@@ -236,15 +247,6 @@ QPushButton *buttonFor(QWidget *root, const QString &text)
         }
     }
     return nullptr;
-}
-
-QJsonObject modbusCard(int poll, int timeout)
-{
-    return QJsonObject{
-        {"id", "bus"},
-        {"type", "ModbusConfigCard"},
-        {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 380}, {"h", 180}}},
-        {"properties", QJsonObject{{"defaultPoll", poll}, {"timeout", timeout}, {"pollList", "1,3,0,2\n1,1,0,3"}}}};
 }
 
 } // namespace
@@ -426,151 +428,12 @@ class TestRuntime : public QObject
         surface.context()->hub()->removeLink(&link);
     }
 
-    // The PLC tutorial example: the Modbus card polls three address blocks one reply at a time,
-    // displays read registers by address, the setpoint goes out as FC16 float32, the switch as FC05.
-    void plcExamplePollsBindsAndWrites()
-    {
-        Project project;
-        QString error;
-        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/10-PLC恒压供水.uidp"), &project, &error),
-                 qPrintable(error));
-        // Saved before pollMode existed, the card polls its table as in 0.2.0: only after a click on 轮询.
-        for (const QJsonValue &value : std::as_const(project.widgets)) {
-            const QJsonObject widget = value.toObject();
-            if (widget.value("type").toString() == QLatin1String("ModbusConfigCard")) {
-                const QJsonObject props = widget.value("properties").toObject();
-                QCOMPARE(props.value("pollMode").toString(), QStringLiteral("轮询表"));
-                QCOMPARE(props.value("autoStart"), QJsonValue(false));
-            }
-        }
-        RuntimeSurface surface;
-        surface.build(project);
-        FakeLink link;
-        QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
-        link.setConnected(false);
-        surface.context()->hub()->addLink(&link);
-        link.setConnected(true);
-        QVERIFY(link.sent.isEmpty()); // connecting does not start polling
-
-        // A PLC with the register map in the PyQt UI Designer repo's examples/tutorials/README.md:
-        // it answers reads, coil 0 (running) on, and echoes writes as Modbus does.
-        const QHash<int, quint16> hr{{100, 0x3ED7}, {101, 0x0A3D}, {102, 0x4212}, {103, 0x0000},
-                                     {104, 452},    {105, 76},     {200, 0x3ECC}, {201, 0xCCCD}};
-        int answered = 0;
-        const auto serve = [&]() {
-            while (answered < link.sent.size()) {
-                link.inject(plcReply(link.sent.at(answered++), hr)); // a reply lets the card send the next read
-            }
-        };
-        QPushButton *poll = buttonFor(&surface, QStringLiteral("轮询"));
-        QVERIFY(poll);
-        poll->click();
-        QCOMPARE(link.sent.size(), 1); // the first read waits for its reply
-        serve();
-        QList<QByteArray> reads;
-        for (const QByteArray &adu : link.sent) {
-            reads.append(adu.mid(7));
-        }
-        QCOMPARE(reads, (QList<QByteArray>{QByteArray::fromHex("030064 0006"), QByteArray::fromHex("0300c80002"),
-                                           QByteArray::fromHex("0100000004")}));
-        const QStringList texts = labelTexts(&surface);
-        for (const char *text : {"轮询正常 · 3/3", "0.42", "36.5", "0.40"}) {
-            QVERIFY2(texts.contains(QString::fromUtf8(text)), text);
-        }
-        bool level = false; // the ring paints its percentage, so read its value
-        for (QProgressBar *ring : surface.findChildren<QProgressBar *>()) {
-            level = level || ring->value() == 76;
-        }
-        QVERIFY(level);
-
-        QLineEdit *setpoint = nullptr;
-        for (auto *edit : surface.findChildren<QLineEdit *>()) {
-            if (edit->placeholderText().startsWith(QStringLiteral("单位 MPa"))) {
-                setpoint = edit;
-            }
-        }
-        QVERIFY(setpoint);
-        setpoint->setText(QStringLiteral("0.45"));
-        QTest::keyClick(setpoint, Qt::Key_Return);
-        serve();
-        QCOMPARE(link.sent.last().mid(7), QByteArray::fromHex("1000c80002 04 3EE66666")); // 0.45 as float32
-        auto *runSwitch = surface.findChild<FluentQt::SwitchButton *>();
-        QVERIFY(runSwitch);
-        runSwitch->setChecked(true);
-        serve();
-        QCOMPARE(link.sent.last().mid(7), QByteArray::fromHex("050003ff00"));
-        surface.context()->hub()->removeLink(&link);
-    }
-
-    // A Modbus card sends one read at a time. On a Modbus link it waits for the reply or the
-    // timeout and names a missing reply or an exception; on an ASCII link it frames and waits in
-    // ASCII; with no link parsing Modbus no reply can be recognised, so each tick sends the next.
-    void modbusCardPollsOneReadAtATime()
-    {
-        const auto rtu = [](const char *hex) {
-            const QByteArray pdu = QByteArray::fromHex(hex);
-            return pdu + modbusCrc(pdu);
-        };
-        FakeLink link; // before the surface, so the hub never outlives it
-        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
-        Project project;
-        project.widgets = QJsonArray{modbusCard(60000, 200)};
-        RuntimeSurface surface;
-        surface.build(project);
-        surface.context()->hub()->addLink(&link);
-        QPushButton *poll = buttonFor(&surface, QStringLiteral("轮询"));
-        QPushButton *send = buttonFor(&surface, QStringLiteral("发送"));
-        QVERIFY(poll && send);
-        QApplication::processEvents(); // layouts and fonts first, so no timer waits behind them
-        poll->click();
-        QVERIFY(!send->isEnabled()); // a request of its own would take the place of the polled one
-        QCOMPARE(link.sent, QList<QByteArray>{rtu("010300000002")});
-        QTRY_COMPARE(link.sent.size(), 2); // no reply within 200 ms: the round moves on to the coils
-        QCOMPARE(link.sent.last(), rtu("010100000003"));
-        link.inject(rtu("01010201ff")); // two bytes of coils: an answer to some other read
-        QCOMPARE(link.sent.size(), 2);
-        QVERIFY(labelTexts(&surface).contains(QStringLiteral("轮询中 · 2 条")));
-        link.inject(rtu("018102"));
-        QVERIFY(labelTexts(&surface).contains(QStringLiteral("第 1 条无响应 · 0/2")));
-        poll->click(); // stop
-        QVERIFY(send->isEnabled());
-        send->click(); // the fields' request: FC03 from 0, one register
-        link.inject(rtu("010302002a"));
-        QVERIFY(labelTexts(&surface).contains(QStringLiteral("设备已响应")));
-        send->click();
-        QTRY_VERIFY(labelTexts(&surface).contains(QStringLiteral("无响应（200 ms 超时）")));
-
-        link.sent.clear();
-        QVERIFY(link.setParser(QStringLiteral("modbus_ascii"), {}));
-        poll->click();
-        QCOMPARE(link.sent, QList<QByteArray>{":010300000002FA\r\n"}); // upper-case hex and LRC
-        const QByteArray reply = ":0103040001FFFFF9\r\n";
-        link.inject(reply.left(7));
-        QCOMPARE(link.sent.size(), 1); // half a reply: still waiting
-        link.inject(reply.mid(7));
-        QCOMPARE(link.sent, (QList<QByteArray>{":010300000002FA\r\n", ":010100000003FB\r\n"}));
-        link.inject(modbusAsciiFrame(QByteArray::fromHex("01010105")));
-        QVERIFY(labelTexts(&surface).contains(QStringLiteral("轮询正常 · 2/2")));
-        poll->click();
-
-        FakeLink lines; // parses lines
-        project.widgets = QJsonArray{modbusCard(20, 1000)};
-        RuntimeSurface ticking;
-        ticking.build(project);
-        ticking.context()->hub()->addLink(&lines);
-        QPushButton *tick = buttonFor(&ticking, QStringLiteral("轮询"));
-        QVERIFY(tick);
-        tick->click();
-        QTRY_VERIFY(lines.sent.size() >= 3);
-        QCOMPARE(lines.sent.at(0), lines.sent.at(2));
-        QVERIFY(lines.sent.at(0) != lines.sent.at(1));
-        tick->click(); // 停止
-    }
-
-    // 自动: the card plans its reads from the bindings. The PLC example's bindings make three blocks, read in
-    // order as soon as a Modbus link connects; a write goes out between two reads; the status names the
-    // block without a reply or with an exception; the tooltip lists the blocks.
-    void modbusCardPollsTheBindingsAutomatically()
+    // The PLC tutorial: once its Modbus TCP link connects, the poller reads the bindings in three blocks,
+    // one reply at a time, with no click; displays show the registers by address; the setpoint goes out as
+    // FC16 float32 between two reads, the switch as FC05. The card shows the poller's status, its tooltip
+    // the blocks; a block with an exception or without a reply is named. A link that goes down leaves the
+    // poller waiting, and it starts again on connecting.
+    void plcTutorialPollsOnConnecting()
     {
         Project project;
         QString error;
@@ -581,9 +444,7 @@ class TestRuntime : public QObject
             QJsonObject widget = widgets.at(i).toObject();
             if (widget.value("type").toString() == QLatin1String("ModbusConfigCard")) {
                 QJsonObject props = widget.value("properties").toObject();
-                props.insert("pollMode", QStringLiteral("自动"));
-                props.insert("autoStart", true);
-                props.insert("timeout", 50);
+                props.insert("timeout", 50); // a missing reply shows within the test's patience
                 widget.insert("properties", props);
                 widgets[i] = widget;
             }
@@ -600,8 +461,12 @@ class TestRuntime : public QObject
         surface.context()->hub()->addLink(&link);
         QWidget *card = surface.findChild<QWidget *>(QStringLiteral("ModbusConfigCard"));
         QVERIFY(card);
-        QVERIFY(labelShown(card, QStringLiteral("轮询方式：自动")));
+        QVERIFY(labelShown(card, QStringLiteral("等待连接")));
+        QVERIFY(buttonFor(card, QStringLiteral("停止"))); // polling, waiting for a link
+        QVERIFY(link.sent.isEmpty());
 
+        // A PLC with the register map in the PyQt UI Designer repo's examples/tutorials/README.md:
+        // it answers reads, coil 0 (running) on, and echoes writes as Modbus does.
         const QHash<int, quint16> hr{{100, 0x3ED7}, {101, 0x0A3D}, {102, 0x4212}, {103, 0x0000},
                                      {104, 452},    {105, 76},     {200, 0x3ECC}, {201, 0xCCCD}};
         int answered = 0;
@@ -628,12 +493,12 @@ class TestRuntime : public QObject
         const QByteArray live = QByteArray::fromHex("0300640006");
         const QByteArray setting = QByteArray::fromHex("0300c80002");
 
-        link.setConnected(true); // autoStart: no need to click 轮询
+        link.setConnected(true);
         QCOMPARE(pdus(link.sent), QList<QByteArray>{coils});
-        QVERIFY(status(QStringLiteral("自动 · 3 块 · 轮询中")));
+        QVERIFY(status(QStringLiteral("3 块 · 轮询中")));
         serve();
         QCOMPARE(pdus(link.sent), (QList<QByteArray>{coils, live, setting}));
-        QLabel *normal = status(QStringLiteral("自动 · 3 块 · 正常"));
+        QLabel *normal = status(QStringLiteral("3 块 · 正常"));
         QVERIFY(normal);
         QCOMPARE(normal->toolTip(), QStringLiteral("从站 1 · 功能码 1 · 地址 0–3 · 周期 500 ms\n"
                                                    "从站 1 · 功能码 3 · 地址 100–105 · 周期 500 ms\n"
@@ -642,9 +507,14 @@ class TestRuntime : public QObject
         for (const char *text : {"0.42", "36.5", "0.40"}) {
             QVERIFY2(texts.contains(QString::fromUtf8(text)), text);
         }
+        bool level = false; // the ring paints its percentage, so read its value
+        for (QProgressBar *ring : surface.findChildren<QProgressBar *>()) {
+            level = level || ring->value() == 76;
+        }
+        QVERIFY(level);
 
         now = 500;
-        tick(card); // the next round starts with the coils
+        tickPoller(surface.context()); // the next round starts with the coils
         QCOMPARE(link.sent.size(), 4);
         QLineEdit *setpoint = nullptr;
         for (auto *edit : surface.findChildren<QLineEdit *>()) {
@@ -659,33 +529,209 @@ class TestRuntime : public QObject
         serve();
         const QByteArray write = QByteArray::fromHex("1000c80002 04 3EE66666"); // 0.45 as float32
         QCOMPARE(pdus(link.sent).mid(4), (QList<QByteArray>{write, live, setting}));
+        auto *runSwitch = surface.findChild<FluentQt::SwitchButton *>();
+        QVERIFY(runSwitch);
+        runSwitch->setChecked(true);
+        serve();
+        QCOMPARE(pdus(link.sent).last(), QByteArray::fromHex("050003ff00"));
 
         now = 1000;
         exceptionAt = 200;
-        tick(card);
+        tickPoller(surface.context());
         serve();
-        QVERIFY(status(QStringLiteral("自动 · 第 3 块异常 02 非法数据地址")));
+        QVERIFY(status(QStringLiteral("第 3 块异常 02 非法数据地址")));
         exceptionAt = -1;
 
         now = 1500;
         coilsSilent = true;
-        tick(card);
-        QTRY_VERIFY((serve(), status(QStringLiteral("自动 · 第 1 块无响应（从站 1 功能码 1 地址 0）")) != nullptr));
+        tickPoller(surface.context());
+        QTRY_VERIFY((serve(), status(QStringLiteral("第 1 块无响应（从站 1 功能码 1 地址 0）")) != nullptr));
         coilsSilent = false;
 
         link.setConnected(false);
-        QVERIFY(status(QStringLiteral("未连接")));
-        QVERIFY(buttonFor(card, QStringLiteral("轮询"))); // stopped
+        QVERIFY(status(QStringLiteral("等待连接")));
+        QVERIFY(buttonFor(card, QStringLiteral("停止"))); // still polling, not paused
         const qsizetype before = link.sent.size();
-        link.setConnected(true); // and started again on connecting
+        link.setConnected(true); // a fresh plan, read at once
         QCOMPARE(link.sent.size(), before + 1);
         QCOMPARE(pdus(link.sent).last(), coils);
         surface.context()->hub()->removeLink(&link);
     }
 
+    // Without a Modbus card the poller reads all the same, on its defaults (500 ms, 1000 ms, slave 1): the
+    // PLC tutorial without its card reads its three blocks once a listening link gets a device, and shows
+    // nothing. The tutorial with the temperature controller plans its four bindings and its chart's two
+    // curves (holding register 4 as float32, and 1) into one block.
+    void pollerNeedsNoCard()
+    {
+        Project project;
+        QString error;
+        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/10-PLC恒压供水.uidp"), &project, &error),
+                 qPrintable(error));
+        QJsonArray widgets;
+        for (const QJsonValue &widget : std::as_const(project.widgets)) {
+            if (widget.toObject().value("type").toString() != QLatin1String("ModbusConfigCard")) {
+                widgets.append(widget);
+            }
+        }
+        project.widgets = widgets;
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
+        link.setSendable(false); // listening, no device yet
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.show();
+        QVERIFY(!surface.findChild<QWidget *>(QStringLiteral("ModbusConfigCard")));
+        ModbusPoller *poller = surface.context()->modbusPoller();
+        QCOMPARE(poller->settings(), ModbusPoller::Settings{});
+        QCOMPARE(poller->settings().defaultPeriod, 500);
+        QCOMPARE(poller->settings().timeoutMs, 1000);
+        QCOMPARE(poller->settings().fallbackSlave, 1);
+        surface.context()->hub()->addLink(&link);
+        QCOMPARE(poller->status(), QStringLiteral("等待连接"));
+        QVERIFY(link.sent.isEmpty());
+        link.setSendable(true);
+        QCOMPARE(pdus(link.sent), QList<QByteArray>{QByteArray::fromHex("0100000004")});
+        int answered = 0;
+        while (answered < link.sent.size()) {
+            link.inject(plcReply(link.sent.at(answered++), {}));
+        }
+        QCOMPARE(pdus(link.sent), (QList<QByteArray>{QByteArray::fromHex("0100000004"),
+                                                     QByteArray::fromHex("0300640006"),
+                                                     QByteArray::fromHex("0300c80002")}));
+        QCOMPARE(poller->blocks(),
+                 (QList<ModbusBlock>{{1, 1, 0, 4, 500}, {1, 3, 100, 6, 500}, {1, 3, 200, 2, 500}}));
+        QCOMPARE(poller->status(), QStringLiteral("3 块 · 正常"));
+        auto *timer = poller->findChild<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
+        QVERIFY(timer && timer->isActive());
+        QCOMPARE(timer->interval(), 500);
+        surface.context()->hub()->removeLink(&link);
+
+        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/02-温控仪监控.uidp"), &project, &error),
+                 qPrintable(error));
+        FakeLink serial;
+        QVERIFY(serial.setParser(QStringLiteral("modbus"), {}));
+        RuntimeSurface controller;
+        controller.build(project);
+        controller.show();
+        controller.context()->hub()->addLink(&serial);
+        QCOMPARE(controller.context()->modbusPoller()->blocks(), (QList<ModbusBlock>{{1, 3, 0, 6, 200}}));
+        QCOMPARE(serial.sent, QList<QByteArray>{QByteArray::fromHex("010300000006c5c8")});
+        controller.context()->hub()->removeLink(&serial);
+    }
+
+    // The first Modbus card in the document sets the fallback slave, the default period (its 轮询ms field,
+    // from the next keystroke on, 0 for 500 ms) and the timeout; a second card only shows the same status,
+    // so one set of reads goes out. Either card's button pauses and resumes the poller for both: pausing
+    // takes back the read not yet sent, resuming reads afresh.
+    void firstCardSetsUpThePoller()
+    {
+        const auto rtu = [](const char *hex) {
+            const QByteArray pdu = QByteArray::fromHex(hex);
+            return pdu + modbusCrc(pdu);
+        };
+        const auto card = [](const char *id, int y, const QJsonObject &props) {
+            return QJsonObject{{"id", id},
+                               {"type", "ModbusConfigCard"},
+                               {"geometry", QJsonObject{{"x", 200}, {"y", y}, {"w", 380}, {"h", 180}}},
+                               {"properties", props}};
+        };
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
+        Project project;
+        project.widgets = QJsonArray{
+            modbusDisplay("near", 10, 0, 0), modbusDisplay("far", 101, 0, 0),
+            card("first", 0, {{"defaultSlave", 7}, {"defaultPoll", 300}, {"timeout", 50}}),
+            card("second", 200, {{"defaultSlave", 9}, {"defaultPoll", 100}, {"timeout", 2000}})};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.show();
+        qint64 now = 0;
+        surface.context()->setClock([&now]() { return now; });
+        ModbusPoller *poller = surface.context()->modbusPoller();
+        QCOMPARE(poller->settings().fallbackSlave, 7);
+        QCOMPARE(poller->settings().defaultPeriod, 300);
+        QCOMPARE(poller->settings().timeoutMs, 50);
+        const QList<QWidget *> cards = surface.findChildren<QWidget *>(QStringLiteral("ModbusConfigCard"));
+        QCOMPARE(cards.size(), 2);
+        const auto bothShow = [&cards](const QString &text) {
+            return labelShown(cards.at(0), text) && labelShown(cards.at(1), text);
+        };
+        surface.context()->hub()->addLink(&link);
+        QCOMPARE(link.sent, QList<QByteArray>{rtu("0703000a0001")}); // one read, with two cards
+        QCOMPARE(poller->blocks(), (QList<ModbusBlock>{{7, 3, 10, 1, 300}, {7, 3, 101, 1, 300}}));
+        QVERIFY(bothShow(QStringLiteral("2 块 · 轮询中")));
+        QTRY_COMPARE(link.sent.size(), 2); // no reply within the first card's 50 ms
+        QCOMPARE(link.sent.last(), rtu("070300650001"));
+        link.inject(rtu("0703020001"));
+        QVERIFY(bothShow(QStringLiteral("第 1 块无响应（从站 7 功能码 3 地址 10）")));
+
+        // 发送 on the first card queues a write; the next read waits behind it, and pausing takes it back.
+        QLineEdit *fieldsPoll = nullptr;
+        for (auto *edit : cards.at(0)->findChildren<QLineEdit *>()) {
+            if (edit->placeholderText() == QStringLiteral("默认 500")) {
+                fieldsPoll = edit;
+            }
+        }
+        QVERIFY(fieldsPoll);
+        QCOMPARE(fieldsPoll->text(), QStringLiteral("300"));
+        now = 300;
+        tickPoller(surface.context());
+        QCOMPARE(link.sent.last(), rtu("0703000a0001"));
+        QPushButton *send = buttonFor(cards.at(0), QStringLiteral("发送"));
+        QVERIFY(send);
+        send->click(); // the fields' request: FC03 from 0, one register, slave 7
+        link.inject(rtu("0703020001")); // the read: the write goes out, the next read waits behind it
+        QCOMPARE(link.sent.last(), rtu("070300000001"));
+        QPushButton *stop = buttonFor(cards.at(1), QStringLiteral("停止"));
+        QVERIFY(stop);
+        stop->click();
+        QVERIFY(poller->isPaused());
+        QVERIFY(bothShow(QStringLiteral("已暂停")));
+        QVERIFY(buttonFor(cards.at(0), QStringLiteral("轮询")) && buttonFor(cards.at(1), QStringLiteral("轮询")));
+        const qsizetype sent = link.sent.size();
+        link.inject(rtu("0703020002")); // the write's reply; the read behind it was taken back
+        QCOMPARE(link.sent.size(), sent);
+        QVERIFY(labelShown(cards.at(0), QStringLiteral("设备已响应"))); // paused: the result on its status line
+        QVERIFY(labelShown(cards.at(1), QStringLiteral("已暂停")));
+        now = 900;
+        poller->poll(); // nothing while paused, links change or not
+        emit surface.context()->hub()->linksChanged();
+        QCOMPARE(link.sent.size(), sent);
+
+        buttonFor(cards.at(0), QStringLiteral("轮询"))->click();
+        QVERIFY(!poller->isPaused());
+        QVERIFY(buttonFor(cards.at(0), QStringLiteral("停止")) && buttonFor(cards.at(1), QStringLiteral("停止")));
+        QVERIFY(bothShow(QStringLiteral("2 块 · 轮询中")));
+        QCOMPARE(link.sent.size(), sent + 1); // a fresh plan: its first block at once
+        QCOMPARE(link.sent.last(), rtu("0703000a0001"));
+        link.inject(rtu("0703020001"));
+        link.inject(rtu("0703020001"));
+        QVERIFY(bothShow(QStringLiteral("2 块 · 正常")));
+
+        auto *timer = poller->findChild<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
+        QVERIFY(timer && timer->isActive());
+        QCOMPARE(timer->interval(), 300);
+        fieldsPoll->setText(QStringLiteral("0")); // 500 ms from now on
+        QCOMPARE(poller->settings().defaultPeriod, 500);
+        QCOMPARE(timer->interval(), 500);
+        QCOMPARE(poller->blocks(), (QList<ModbusBlock>{{7, 3, 10, 1, 500}, {7, 3, 101, 1, 500}}));
+        QVERIFY(bothShow(QStringLiteral("2 块 · 轮询中")));
+        for (auto *edit : cards.at(1)->findChildren<QLineEdit *>()) {
+            if (edit->placeholderText() == QStringLiteral("默认 500")) {
+                edit->setText(QStringLiteral("50")); // the second card's field changes nothing
+            }
+        }
+        QCOMPARE(poller->settings().defaultPeriod, 500);
+        QCOMPARE(timer->interval(), 500);
+        surface.context()->hub()->removeLink(&link);
+        QVERIFY(bothShow(QStringLiteral("等待连接")));
+    }
+
     // Each block is read at its own period, on a clock the test steps; a block of a tab page in the
-    // background is not read. Without a link that parses Modbus the card waits for one.
-    void modbusCardReadsEachBlockAtItsPeriod()
+    // background is not read, and one that comes into view is read at once. A binding with no period
+    // of its own is read at the default 500 ms.
+    void pollerReadsEachBlockAtItsPeriod()
     {
         Project project;
         project.widgets = QJsonArray{
@@ -694,11 +740,7 @@ class TestRuntime : public QObject
                         {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 400}, {"h", 300}}},
                         {"properties", QJsonObject{{"tabNames", "A\nB\nC"}}},
                         {"children", QJsonArray{modbusDisplay("fast", 0, 100, 0), modbusDisplay("slow", 50, 300, 0),
-                                                modbusDisplay("other", 200, 0, 1)}}},
-            QJsonObject{{"id", "bus"},
-                        {"type", "ModbusConfigCard"},
-                        {"geometry", QJsonObject{{"x", 420}, {"y", 0}, {"w", 380}, {"h", 180}}},
-                        {"properties", QJsonObject{{"pollMode", "自动"}, {"defaultPoll", 1000}}}}};
+                                                modbusDisplay("other", 200, 0, 1)}}}};
         FakeLink link;
         QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
         RuntimeSurface surface;
@@ -706,13 +748,8 @@ class TestRuntime : public QObject
         surface.show();
         qint64 now = 0;
         surface.context()->setClock([&now]() { return now; });
-        QWidget *card = surface.findChild<QWidget *>(QStringLiteral("ModbusConfigCard"));
-        QVERIFY(card);
-        QPushButton *poll = buttonFor(card, QStringLiteral("轮询"));
-        QVERIFY(poll);
-        poll->click();
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 等待连接")));
-        surface.context()->hub()->addLink(&link);
+        ModbusPoller *poller = surface.context()->modbusPoller();
+        QSignalSpy statuses(poller, &ModbusPoller::statusChanged);
 
         QHash<int, int> reads; // by start address
         int answered = 0;
@@ -725,14 +762,18 @@ class TestRuntime : public QObject
         };
         const auto run = [&](qint64 until) {
             for (; now <= until; now += 100) {
-                tick(card);
+                tickPoller(surface.context());
                 serve();
             }
         };
-        tick(card);
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 2 块 · 轮询中")));
+        surface.context()->hub()->addLink(&link);
+        QCOMPARE(statuses.size(), 1);
+        QCOMPARE(statuses.at(0).at(0).toString(), QStringLiteral("2 块 · 轮询中"));
         serve();
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 2 块 · 正常")));
+        QCOMPARE(poller->status(), QStringLiteral("2 块 · 正常"));
+        auto *timer = poller->findChild<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
+        QVERIFY(timer);
+        QCOMPARE(timer->interval(), 100);
         now = 100;
         run(1200);
         QCOMPARE(reads.value(0), 13); // every 100 ms from 0 to 1200
@@ -744,20 +785,23 @@ class TestRuntime : public QObject
         tabs->setCurrentIndex(1);
         reads.clear();
         run(2500);
-        QCOMPARE(reads, (QHash<int, int>{{200, 2}})); // at the card's 1000 ms, and nothing from page A
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 1 块 · 正常")));
+        QCOMPARE(reads, (QHash<int, int>{{200, 3}})); // at 1300, 1800 and 2300, and nothing from page A
+        QCOMPARE(poller->status(), QStringLiteral("1 块 · 正常"));
+        QCOMPARE(poller->toolTip(), QStringLiteral("从站 1 · 功能码 3 · 地址 200–200 · 周期 500 ms"));
         tabs->setCurrentIndex(2);
         const qsizetype sent = link.sent.size();
         run(2800);
         QCOMPARE(link.sent.size(), sent);
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 没有 Modbus 绑定")));
-        poll->click();
+        QCOMPARE(poller->status(), QStringLiteral("没有 Modbus 绑定"));
+        QCOMPARE(poller->toolTip(), QStringLiteral("没有 Modbus 绑定"));
         surface.context()->hub()->removeLink(&link);
+        QCOMPARE(poller->status(), QStringLiteral("等待连接"));
     }
 
-    // While 自动 polls, 发送 stays enabled: the fields' request queues as a write and its result comes as a
-    // notification, the status line keeps the polling status. Without polling the status line shows it.
-    void modbusSendWorksWhileAutoPolling()
+    // 发送 queues the fields' request as a write. While the poller reads, its result comes as a notification
+    // and the status line keeps the poller's status; paused, the status line shows 已发送 and the result.
+    // Without a link to take it, the status line says so.
+    void modbusSendGoesBesideThePolling()
     {
         const auto rtu = [](const char *hex) {
             const QByteArray pdu = QByteArray::fromHex(hex);
@@ -771,42 +815,48 @@ class TestRuntime : public QObject
             QJsonObject{{"id", "bus"},
                         {"type", "ModbusConfigCard"},
                         {"geometry", QJsonObject{{"x", 200}, {"y", 0}, {"w", 380}, {"h", 180}}},
-                        {"properties", QJsonObject{{"pollMode", "自动"}, {"defaultPoll", 60000}, {"timeout", 50}}}}};
+                        {"properties", QJsonObject{{"defaultPoll", 60000}, {"timeout", 50}}}}};
         RuntimeSurface surface;
         surface.build(project);
         surface.show();
-        surface.context()->hub()->addLink(&link);
         QSignalSpy notes(surface.context(), &RuntimeContext::notificationRequested);
+        surface.context()->hub()->addLink(&link);
+        QCOMPARE(link.sent, QList<QByteArray>{rtu("010300640001")});
         QWidget *card = surface.findChild<QWidget *>(QStringLiteral("ModbusConfigCard"));
         QVERIFY(card);
-        QPushButton *poll = buttonFor(card, QStringLiteral("轮询"));
+        QPushButton *stop = buttonFor(card, QStringLiteral("停止"));
         QPushButton *send = buttonFor(card, QStringLiteral("发送"));
-        QVERIFY(poll && send);
-        poll->click();
-        QCOMPARE(link.sent, QList<QByteArray>{rtu("010300640001")});
+        QVERIFY(stop && send);
         QVERIFY(send->isEnabled());
         send->click(); // FC03 from 0, one register: queued behind the read on the line
         QCOMPARE(link.sent.size(), 1);
+        QVERIFY(labelShown(card, QStringLiteral("1 块 · 轮询中")));
         link.inject(rtu("010302002a"));
         QCOMPARE(link.sent.last(), rtu("010300000001"));
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 1 块 · 正常")));
+        QVERIFY(labelShown(card, QStringLiteral("1 块 · 正常")));
         link.inject(rtu("0103020007"));
         QCOMPARE(notes.size(), 1);
         QCOMPARE(notes.at(0), (QList<QVariant>{QStringLiteral("Modbus"), QStringLiteral("设备已响应"),
                                                NotifyType::Info, 2000}));
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 1 块 · 正常")));
+        QVERIFY(labelShown(card, QStringLiteral("1 块 · 正常")));
         send->click();
         QTRY_COMPARE(notes.size(), 2);
         QCOMPARE(notes.at(1), (QList<QVariant>{QStringLiteral("Modbus"), QStringLiteral("无响应（50 ms 超时）"),
                                                NotifyType::Warning, 2000}));
-        QVERIFY(labelShown(card, QStringLiteral("自动 · 1 块 · 正常")));
+        QVERIFY(labelShown(card, QStringLiteral("1 块 · 正常")));
 
-        poll->click(); // stopped: the status line has the result again
+        stop->click(); // paused: the status line has the result
+        QVERIFY(labelShown(card, QStringLiteral("已暂停")));
         send->click();
+        QVERIFY(labelShown(card, QStringLiteral("已发送: 01 03 00 00 00 01 84 0A")));
         link.inject(rtu("0103020007"));
         QVERIFY(labelShown(card, QStringLiteral("设备已响应")));
         QCOMPARE(notes.size(), 2);
+
         surface.context()->hub()->removeLink(&link);
+        send->click();
+        QVERIFY(labelShown(card, QStringLiteral("发送失败，请检查连接")));
+        QCOMPARE(notes.size(), 3); // and the context's 未连接，命令未发送
     }
 
     void linkCardsFitTheirRows_data()
@@ -1272,8 +1322,7 @@ class TestRuntime : public QObject
                                        {"properties", QJsonObject{{"commandMode", "Modbus"}, {"sendOnEnter", false}}}},
                            QJsonObject{{"id", "bus"},
                                        {"type", "ModbusConfigCard"},
-                                       {"geometry", QJsonObject{{"x", 400}, {"y", 0}, {"w", 380}, {"h", 180}}},
-                                       {"properties", QJsonObject{{"pollMode", "自动"}}}},
+                                       {"geometry", QJsonObject{{"x", 400}, {"y", 0}, {"w", 380}, {"h", 180}}}},
                            modbusDisplay("pv", 100, 0, 0)},
                 &error),
             qPrintable(error));
@@ -1353,20 +1402,23 @@ class TestRuntime : public QObject
         QVERIFY(!labelShown(&editor, QStringLiteral("功能码")));
         QVERIFY(!labelShown(&editor, QStringLiteral("发送模式")));
 
-        // A Modbus card shows its poll table only for 轮询表; a Modbus binding has its 采集周期(ms).
+        // A Modbus card has no poll table rows; a Modbus binding names a register table and an address, and
+        // has its 采集周期(ms).
         editor.showItem(scene.findItem(QStringLiteral("bus")));
         QApplication::processEvents();
-        QVERIFY(labelShown(&editor, QStringLiteral("连接后自动轮询")));
-        QVERIFY(!labelShown(&editor, QStringLiteral("轮询表")));
-        auto *pollMode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("轮询方式")));
-        QVERIFY(pollMode);
-        QCOMPARE(pollMode->currentText(), QStringLiteral("自动"));
-        pollMode->setCurrentText(QStringLiteral("轮询表"));
-        QVERIFY(labelShown(&editor, QStringLiteral("轮询表")));
-        QCOMPARE(scene.findItem(QStringLiteral("bus"))->propertyValue(QStringLiteral("pollMode")).toString(),
-                 QStringLiteral("轮询表"));
+        QVERIFY(labelShown(&editor, QStringLiteral("默认轮询(ms)")));
+        for (const char *gone : {"轮询方式", "连接后自动轮询", "轮询表"}) {
+            QVERIFY2(!labelTexts(&editor).contains(QString::fromUtf8(gone)), gone);
+        }
         editor.showItem(scene.findItem(QStringLiteral("pv")));
         QApplication::processEvents();
+        auto *area = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("寄存器区")));
+        QVERIFY(area);
+        QCOMPARE(area->count(), 4);
+        QCOMPARE(area->itemText(0), QStringLiteral("保持寄存器"));
+        QCOMPARE(area->findText(QStringLiteral("响应内序号")), -1);
+        QVERIFY(labelShown(&editor, QStringLiteral("寄存器地址")));
+        QVERIFY(!labelTexts(&editor).contains(QStringLiteral("寄存器索引")));
         QVERIFY(labelShown(&editor, QStringLiteral("采集周期(ms)")));
         auto *period = qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("采集周期(ms)")));
         QVERIFY(period);
