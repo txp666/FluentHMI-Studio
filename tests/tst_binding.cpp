@@ -168,41 +168,100 @@ class TestBinding : public QObject
         QCOMPARE(displayString(scaled->formatValue(scaled->evaluate(qlonglong(267)))), QStringLiteral("26.7"));
     }
 
+    // Results as Python's str() of eval's result shows them; "raw" where eval raises.
     void expressions()
     {
-        QCOMPARE(*Expression::evaluate("value * 0.1", 250), 25.0);
-        QCOMPARE(*Expression::evaluate("(value - 32) / 1.8", 212), 100.0);
-        QCOMPARE(*Expression::evaluate("-2 ** 2 + value % 3", 7), -3.0);
-        QCOMPARE(*Expression::evaluate("1e3 + value", 1), 1001.0);
-        QVERIFY(!Expression::evaluate("__import__('os')", 1));
-        QVERIFY(!Expression::evaluate("value / 0", 1));
-        QVERIFY(!Expression::evaluate("values", 1));
+        const auto eval = [](const char *expression, const QVariant &value) {
+            const QVariant result = Expression::evaluate(QString::fromUtf8(expression), value);
+            return result.isValid() ? displayString(result) : QStringLiteral("raw");
+        };
+        QCOMPARE(eval("value * 0.1", 250), QStringLiteral("25.0"));
+        QCOMPARE(eval("(value - 32) / 1.8", 212), QStringLiteral("100.0"));
+        QCOMPARE(eval("-2 ** 2 + value % 3", 7), QStringLiteral("-3"));
+        QCOMPARE(eval("1e3 + value", 1), QStringLiteral("1001.0"));
+        QCOMPARE(eval("__import__('os')", 1), QStringLiteral("raw"));
+        QCOMPARE(eval("value / 0", 1), QStringLiteral("raw"));
+        QCOMPARE(eval("values", 1), QStringLiteral("raw"));
 
         // Bit tests and comparisons, as the ADC tutorial's lamps use them, with Python's rules.
-        QCOMPARE(*Expression::evaluate("value & 1", 35), 1.0);
-        QCOMPARE(*Expression::evaluate("(value >> 1) & 1", 35), 1.0);
-        QCOMPARE(*Expression::evaluate("(value >> 2) & 1", 35), 0.0);
-        QCOMPARE(*Expression::evaluate("value | 8 ^ 1", 35), 43.0); // ^ binds tighter than |
-        QCOMPARE(*Expression::evaluate("~value", 35), -36.0);
-        QCOMPARE(*Expression::evaluate("1 + 2 << 1", 0), 6.0);      // + binds tighter than <<
-        QCOMPARE(*Expression::evaluate("value & 1 == 1", 35), 1.0); // & binds tighter than ==
-        QCOMPARE(*Expression::evaluate("value * 3.3 / 4095 < 1", 1000), 1.0);
-        QCOMPARE(*Expression::evaluate("value * 3.3 / 4095 < 1", 1987), 0.0);
-        QCOMPARE(*Expression::evaluate("0 < value < 40", 35), 1.0);
-        QCOMPARE(*Expression::evaluate("0 < value < 30", 35), 0.0);
-        QCOMPARE(*Expression::evaluate("value >= 35 and value != 36", 35), 1.0);
-        QCOMPARE(*Expression::evaluate("value and 7", 35), 7.0); // and / or give an operand back
-        QCOMPARE(*Expression::evaluate("0 or value", 35), 35.0);
-        QCOMPARE(*Expression::evaluate("not value", 35), 0.0);
-        QVERIFY(!Expression::evaluate("value / 2 & 1", 35)); // 17.5 is not a whole number
-        QVERIFY(!Expression::evaluate("value << -1", 35));
-        QVERIFY(!Expression::evaluate("value = 1", 35));
-        QVERIFY(!Expression::evaluate("value andx 1", 1));
-        bool boolean = false;
-        QCOMPARE(*Expression::evaluate("value > 1", 35, &boolean), 1.0);
-        QVERIFY(boolean);
-        QCOMPARE(*Expression::evaluate("(value > 1) + 1", 35, &boolean), 2.0);
-        QVERIFY(!boolean);
+        QCOMPARE(eval("value & 1", 35), QStringLiteral("1"));
+        QCOMPARE(eval("(value >> 1) & 1", 35), QStringLiteral("1"));
+        QCOMPARE(eval("(value >> 2) & 1", 35), QStringLiteral("0"));
+        QCOMPARE(eval("value | 8 ^ 1", 35), QStringLiteral("43")); // ^ binds tighter than |
+        QCOMPARE(eval("~value", 35), QStringLiteral("-36"));
+        QCOMPARE(eval("1 + 2 << 1", 0), QStringLiteral("6"));         // + binds tighter than <<
+        QCOMPARE(eval("value & 1 == 1", 35), QStringLiteral("True")); // & binds tighter than ==
+        QCOMPARE(eval("value * 3.3 / 4095 < 1", 1000), QStringLiteral("True"));
+        QCOMPARE(eval("value * 3.3 / 4095 < 1", 1987), QStringLiteral("False"));
+        QCOMPARE(eval("0 < value < 40", 35), QStringLiteral("True"));
+        QCOMPARE(eval("0 < value < 30", 35), QStringLiteral("False"));
+        QCOMPARE(eval("value >= 35 and value != 36", 35), QStringLiteral("True"));
+        QCOMPARE(eval("value and 7", 35), QStringLiteral("7")); // and / or give an operand back
+        QCOMPARE(eval("0 or value", 35), QStringLiteral("35"));
+        QCOMPARE(eval("0.0 or value > 1", 35), QStringLiteral("True"));
+        QCOMPARE(eval("not value", 35), QStringLiteral("False"));
+        QCOMPARE(eval("value / 2 & 1", 35), QStringLiteral("raw")); // 17.5 is a float
+        QCOMPARE(eval("value << -1", 35), QStringLiteral("raw"));
+        QCOMPARE(eval("value = 1", 35), QStringLiteral("raw"));
+        QCOMPARE(eval("value andx 1", 1), QStringLiteral("raw"));
+        QCOMPARE(eval("value > 1", 35), QStringLiteral("True"));
+        QCOMPARE(eval("(value > 1) + 1", 35), QStringLiteral("2"));
+
+        // Each value has Python's kind: int, float or bool, and each operator gives Python's.
+        QCOMPARE(eval("value // 2", 7), QStringLiteral("3"));
+        QCOMPARE(eval("value // 2", 7.0), QStringLiteral("3.0"));
+        QCOMPARE(eval("-value // 2", 7), QStringLiteral("-4")); // rounded down
+        QCOMPARE(eval("value % -3", 7), QStringLiteral("-2"));  // the divisor's sign
+        QCOMPARE(eval("value / 2", 6), QStringLiteral("3.0"));
+        QCOMPARE(eval("value ** 2", 3), QStringLiteral("9"));
+        QCOMPARE(eval("value ** -1", 4), QStringLiteral("0.25"));
+        QCOMPARE(eval("value + 1", 2.0), QStringLiteral("3.0"));
+        QCOMPARE(eval("7.0 // 0.1", 0), QStringLiteral("69.0")); // CPython's float floor division
+        QCOMPARE(eval("7.0 % 0.1", 0), QStringLiteral("0.09999999999999962"));
+        QCOMPARE(eval("value & 0x0F", 35), QStringLiteral("3"));
+        QCOMPARE(eval("value & 0b11", 35), QStringLiteral("3"));
+        QCOMPARE(eval("0o17", 0), QStringLiteral("15"));
+        QCOMPARE(eval("0XfF + 0B1 + 0O1 + 1_000", 0), QStringLiteral("1257"));
+        QCOMPARE(eval("07", 0), QStringLiteral("raw")); // no leading zeros in Python
+        QCOMPARE(eval("0b12", 0), QStringLiteral("raw"));
+        QCOMPARE(eval("value & 1", 3.0), QStringLiteral("raw")); // Python's TypeError
+        QCOMPARE(eval("~value", 4.0), QStringLiteral("raw"));
+        QCOMPARE(eval("-True", 0), QStringLiteral("-1"));
+        QCOMPARE(eval("(value > 1) & (value < 5)", 3), QStringLiteral("True"));
+        QCOMPARE(eval("(value > 1) | 0", 3), QStringLiteral("1"));
+        QCOMPARE(eval("True + value", 1), QStringLiteral("2"));
+        QCOMPARE(eval("value", true), QStringLiteral("True"));
+        QCOMPARE(eval("value * 2", true), QStringLiteral("2"));
+        QCOMPARE(eval("value << 62", 1), QStringLiteral("4611686018427387904"));
+        QCOMPARE(eval("value << 63", 1), QStringLiteral("raw")); // an int beyond 64 bits
+        QCOMPARE(eval("value >> 100", -5), QStringLiteral("-1"));
+        QCOMPARE(eval("9007199254740993 == 9007199254740992.0", 0), QStringLiteral("False")); // exact
+        // An operand `and`, `or` or a comparison chain never reaches is not evaluated.
+        QCOMPARE(eval("value and 1 / 0", 0), QStringLiteral("0"));
+        QCOMPARE(eval("value or 1 / 0", 2), QStringLiteral("2"));
+        QCOMPARE(eval("value > 5 > 1 / 0", 2), QStringLiteral("False"));
+        QCOMPARE(eval("value > 1 > 1 / 0", 2), QStringLiteral("raw"));
+
+        // Through a binding: the raw value's kind is `value`'s, and an error shows the raw value.
+        const auto bound = [](const char *expression, const QVariant &raw) {
+            const auto entry = BindingEntry::fromWidget(
+                widget("Label", {{"key", "k"}, {"expression", QString::fromUtf8(expression)}}));
+            return entry->evaluate(raw);
+        };
+        QCOMPARE(bound("value & 0x0F", qlonglong(35)), QVariant(qlonglong(3)));
+        QCOMPARE(bound("value & 0b11", qlonglong(35)), QVariant(qlonglong(3)));
+        QCOMPARE(bound("0o17", qlonglong(35)), QVariant(qlonglong(15)));
+        QCOMPARE(bound("value & 1", 3.0).typeId(), int(QMetaType::Double));
+        QCOMPARE(bound("value & 1", 3.0), QVariant(3.0));
+        QCOMPARE(bound("~value", 4.0), QVariant(4.0));
+        QCOMPARE(displayString(bound("(value>1) & (value<5)", qlonglong(3))), QStringLiteral("True"));
+        QCOMPARE(bound("True + value", qlonglong(1)), QVariant(qlonglong(2)));
+        QCOMPARE(displayString(bound("value // 2", qlonglong(7))), QStringLiteral("3"));
+        QCOMPARE(displayString(bound("value / 2", qlonglong(7))), QStringLiteral("3.5"));
+        QCOMPARE(displayString(bound("value * 0.1", qlonglong(250))), QStringLiteral("25.0"));
+        QCOMPARE(displayString(bound("value + 1", QStringLiteral("2"))), QStringLiteral("3.0")); // text is a float
+        QCOMPARE(displayString(bound("not value", false)), QStringLiteral("True"));
+
         // A comparison binds True / False as Python shows it; a lamp with onValue "1" still lights.
         auto lamp = BindingEntry::fromWidget(widget("LEDIndicator", {{"key", "k"}, {"expression", "value < 1"}}));
         QCOMPARE(lamp->evaluate(qlonglong(0)), QVariant(true));

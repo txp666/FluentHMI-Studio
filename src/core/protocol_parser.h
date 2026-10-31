@@ -78,7 +78,8 @@ QByteArray lineTerminator(const QJsonObject &config);
 
 // Text records: JSON values, key=value pairs, or bare CSV (named ch0, ch1, ...). A record ends
 // at the terminator; a JSON object or array ends where its brackets close, so pretty-printed
-// JSON and objects sent back to back need no terminator.
+// JSON and objects sent back to back need no terminator. A record that starts with { or [ but
+// holds a byte JSON cannot (outside a string) is dropped up to its terminator.
 class LineParser : public Parser
 {
   public:
@@ -101,7 +102,7 @@ class LineParser : public Parser
     QByteArray m_terminator;
     int m_maxBuffer;
     QByteArray m_buf;
-    bool m_discarding = false; // dropping an overlong record, up to the next terminator
+    bool m_discarding = false; // dropping an overlong or broken record, up to the next terminator
 };
 
 struct HexField
@@ -167,7 +168,6 @@ class HexFrameParser : public Parser
 {
   public:
     explicit HexFrameParser(HexFrameConfig config);
-    HexFrameParser(QByteArray header, QByteArray footer, QList<HexField> fields);
 
     QList<QByteArray> frames(const QByteArray &data) override;
     QList<Message> parse(const QByteArray &frame) override;

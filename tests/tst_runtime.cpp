@@ -451,6 +451,7 @@ class TestRuntime : public QObject
         QVERIFY(poll && send);
         QApplication::processEvents(); // layouts and fonts first, so no timer waits behind them
         poll->click();
+        QVERIFY(!send->isEnabled()); // a request of its own would take the place of the polled one
         QCOMPARE(link.sent, QList<QByteArray>{rtu("010300000002")});
         QTRY_COMPARE(link.sent.size(), 2); // no reply within 200 ms: the round moves on to the coils
         QCOMPARE(link.sent.last(), rtu("010100000003"));
@@ -460,6 +461,7 @@ class TestRuntime : public QObject
         link.inject(rtu("018102"));
         QVERIFY(labelTexts(&surface).contains(QStringLiteral("第 1 条无响应 · 0/2")));
         poll->click(); // stop
+        QVERIFY(send->isEnabled());
         send->click(); // the fields' request: FC03 from 0, one register
         link.inject(rtu("010302002a"));
         QVERIFY(labelTexts(&surface).contains(QStringLiteral("设备已响应")));

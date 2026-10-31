@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <string_view>
 
 namespace fhmi {
 
@@ -262,8 +263,17 @@ bool isAsciiSpace(char c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
 }
 
+// A byte JSON can hold outside a string: brackets, separators, quotes, numbers, the letters of
+// true / false / null and JSON's four whitespace bytes.
+bool isJsonByte(char c)
+{
+    static constexpr std::string_view kBytes = "{}[],:\"0123456789-+.eEtrufalsn \t\n\r";
+    return kBytes.find(c) != std::string_view::npos;
+}
+
 // The length of the JSON object or array `buf` starts with, once its brackets close; 0 while
-// they are open. Brackets inside strings, and escaped quotes, do not count.
+// they are open; -1 at the first byte outside a string that JSON cannot hold, which makes the
+// record no JSON at all. Brackets inside strings, and escaped quotes, do not count.
 qsizetype jsonLength(const QByteArray &buf)
 {
     int depth = 0;
@@ -279,6 +289,8 @@ qsizetype jsonLength(const QByteArray &buf)
             } else if (c == '"') {
                 inString = false;
             }
+        } else if (!isJsonByte(c)) {
+            return -1;
         } else if (c == '"') {
             inString = true;
         } else if (c == '{' || c == '[') {
@@ -405,7 +417,14 @@ QList<Message> LineParser::parse(const QByteArray &data)
         }
         if (m_buf.startsWith('{') || m_buf.startsWith('[')) {
             // A JSON value ends where its brackets close, a terminator after it is optional.
-            if (const qsizetype length = jsonLength(m_buf)) {
+            const qsizetype length = jsonLength(m_buf);
+            if (length < 0) {
+                // A byte no JSON holds: drop the record up to the first terminator from its
+                // start, so one broken line costs that line and not the records after it.
+                m_discarding = true;
+                continue;
+            }
+            if (length > 0) {
                 Message parsed = jsonMessage(decode(m_buf.left(length), m_config.encoding));
                 m_buf.remove(0, length);
                 if (m_buf.startsWith(m_terminator)) {
@@ -631,13 +650,6 @@ quint64 readUnsigned(const char *bytes, int size, bool littleEndian)
 } // namespace
 
 HexFrameParser::HexFrameParser(HexFrameConfig config) : m_config(std::move(config)) {}
-
-HexFrameParser::HexFrameParser(QByteArray header, QByteArray footer, QList<HexField> fields)
-{
-    m_config.header = std::move(header);
-    m_config.footer = std::move(footer);
-    m_config.fields = std::move(fields);
-}
 
 int HexFrameParser::frameLength() const
 {

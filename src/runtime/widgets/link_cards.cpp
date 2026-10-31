@@ -16,7 +16,6 @@
 #include <FluentQtWidgets/Widgets/SpinBox.h>
 
 #include <QtCore/QHash>
-#include <QtCore/QTime>
 #include <QtCore/QTimer>
 #include <QtGui/QIntValidator>
 #include <QtGui/QPainter>
@@ -863,6 +862,7 @@ void ModbusConfigCardWidget::stopPolling()
     m_waiting.reset();
     m_round.clear();
     m_pollButton->setText(tr("轮询"));
+    m_send->setEnabled(true);
 }
 
 void ModbusConfigCardWidget::togglePolling()
@@ -889,6 +889,7 @@ void ModbusConfigCardWidget::togglePolling()
     m_next = 0;
     m_timer->start(interval);
     m_pollButton->setText(tr("停止"));
+    m_send->setEnabled(false); // a request of its own would take the place of the one polling waits for
     if (!m_table.isEmpty()) {
         setStatus(tr("轮询中 · %1 条").arg(m_table.size()));
     }

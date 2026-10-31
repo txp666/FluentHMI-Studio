@@ -32,6 +32,10 @@ jobs:
           modules: "qtserialport"
           cache: true
 
+      # Install Qt has set up Python, whose gbk codec the line parser's GBK table is made from.
+      - name: Check the GBK table
+        run: python tools/gen_gbk_table.py --check
+
       - name: Install Ninja
         if: runner.os != 'Windows'
         uses: seanmiddleditch/gha-setup-ninja@v5
