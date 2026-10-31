@@ -131,37 +131,32 @@ ModbusPoller::ModbusPoller(RuntimeContext *context) : QObject(context), m_contex
 
 ModbusPoller::Settings ModbusPoller::settings() const
 {
-    return m_panels.isEmpty() ? Settings{} : m_panels.first().second;
-}
-
-void ModbusPoller::addPanel(const QObject *panel, const Settings &settings)
-{
-    for (const auto &entry : std::as_const(m_panels)) {
-        if (entry.first == panel) {
-            setSettings(panel, settings);
-            return;
+    for (const LinkCard &entry : m_cards) {
+        if (entry.link && entry.link->isConnected() && entry.link->parsesModbus()) {
+            return entry.settings;
         }
     }
-    const Settings before = this->settings();
-    m_panels.append({panel, settings});
-    settingsChanged(before);
+    return Settings{};
 }
 
-void ModbusPoller::setSettings(const QObject *panel, const Settings &settings)
+void ModbusPoller::setLinkCard(const QObject *card, Link *link, const Settings &settings)
 {
     const Settings before = this->settings();
-    for (auto &entry : m_panels) {
-        if (entry.first == panel) {
-            entry.second = settings;
-        }
+    const auto known =
+        std::find_if(m_cards.begin(), m_cards.end(), [card](const LinkCard &entry) { return entry.card == card; });
+    if (known != m_cards.end()) {
+        known->link = link;
+        known->settings = settings;
+    } else {
+        m_cards.append({card, link, settings});
     }
     settingsChanged(before);
 }
 
-void ModbusPoller::removePanel(const QObject *panel)
+void ModbusPoller::removeLinkCard(const QObject *card)
 {
     const Settings before = settings();
-    m_panels.removeIf([panel](const std::pair<const QObject *, Settings> &entry) { return entry.first == panel; });
+    m_cards.removeIf([card](const LinkCard &entry) { return entry.card == card; });
     settingsChanged(before);
 }
 
@@ -172,39 +167,16 @@ void ModbusPoller::settingsChanged(const Settings &before)
     }
 }
 
-void ModbusPoller::pause()
-{
-    if (m_paused) {
-        return;
-    }
-    m_paused = true;
-    halt();
-    setStatus(tr("已暂停"));
-    emit pausedChanged(true);
-}
-
-void ModbusPoller::resume()
-{
-    if (!m_paused) {
-        return;
-    }
-    m_paused = false;
-    emit pausedChanged(false);
-    if (m_active) {
-        begin();
-    }
-}
-
 void ModbusPoller::setActive(bool active)
 {
     if (active == m_active) {
         return;
     }
     m_active = active;
-    if (!active) {
-        halt();
-    } else if (!m_paused) {
+    if (active) {
         begin();
+    } else {
+        halt();
     }
 }
 
@@ -212,13 +184,10 @@ void ModbusPoller::reset()
 {
     halt();
     m_active = false;
-    m_panels.clear();
+    m_waiting = false;
+    m_cards.clear();
     m_status.clear();
     m_toolTip.clear();
-    if (m_paused) {
-        m_paused = false;
-        emit pausedChanged(false);
-    }
 }
 
 void ModbusPoller::begin()
@@ -257,12 +226,13 @@ QList<Link *> ModbusPoller::modbusLinks() const
 
 void ModbusPoller::poll()
 {
-    if (!m_active || m_paused) {
+    if (!m_active) {
         return;
     }
     m_read.settle(); // a link that went away never answers
     const QList<Link *> links = modbusLinks();
-    if (links.isEmpty()) {
+    m_waiting = links.isEmpty();
+    if (m_waiting) {
         clearPlan(); // a link that comes back starts with a fresh plan
         setStatus(tr("等待连接"));
         return;
@@ -274,7 +244,7 @@ void ModbusPoller::poll()
     }
     for (Link *link : links) {
         if (link->modbusMaster()->busy()) {
-            return; // a read, a write or a card's 发送 is on the line
+            return; // a read or a write is on the line
         }
     }
     const qint64 now = m_context->now();
@@ -363,7 +333,7 @@ void ModbusPoller::updateInterval()
 
 void ModbusPoller::blockDone(int block, int plan, const ModbusResult &result)
 {
-    if (!m_active || m_paused || result.cancelled) {
+    if (!m_active || result.cancelled) {
         return; // a link that went down: a fresh plan follows once one can send again
     }
     if (plan == m_plan && block < int(m_results.size())) {

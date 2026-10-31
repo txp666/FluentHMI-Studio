@@ -851,7 +851,7 @@ void PropertyEditor::buildBindingForm()
     add("mbSlaveFilter", tr("从站过滤"), spin(-1, 247, value("mbSlaveFilter", -1).toInt()));
     auto *period = spin(0, 60000, value("mbPeriod", 0).toInt());
     add("mbPeriod", tr("采集周期(ms)"), period);
-    const QString periodTip = tr("0 = 用默认周期（500 ms，或 Modbus 卡片的轮询 ms）");
+    const QString periodTip = tr("0 = 用默认周期（链路卡片的「默认轮询(ms)」，默认 500）");
     period->setToolTip(periodTip);
     m_rows.value(QStringLiteral("binding.mbPeriod")).first->setToolTip(periodTip);
     add("expression", tr("转换表达式"), line(value("expression", QString()).toString(), tr("如 value * 0.1")));
@@ -922,8 +922,13 @@ void PropertyEditor::updateVisibility()
     }
     const WidgetMeta &meta = m_item->meta();
     if (meta.prop(QStringLiteral("parserConfig"))) {
-        setFrameRowsVisible(QStringLiteral("parserConfig."),
-                            m_item->propertyValue(QStringLiteral("defaultParser")).toString());
+        const QString parser = m_item->propertyValue(QStringLiteral("defaultParser")).toString();
+        setFrameRowsVisible(QStringLiteral("parserConfig."), parser);
+        // A link card's Modbus polling settings, for a Modbus mode of its own. On 项目设置 they stay hidden,
+        // and still apply when the project's mode is a Modbus one.
+        for (const char *field : {"modbusPeriod", "modbusTimeout", "modbusSlave"}) {
+            setRowVisible(QLatin1String(field), isModbusParser(parser));
+        }
     }
     if (meta.prop(QStringLiteral("commandMode"))) {
         const QString mode = m_item->propertyValue(QStringLiteral("commandMode")).toString();

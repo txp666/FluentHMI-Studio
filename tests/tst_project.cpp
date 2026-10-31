@@ -16,7 +16,7 @@ class TestProject : public QObject
   private slots:
     void registryHasEveryDesignerWidget()
     {
-        QCOMPARE(WidgetRegistry::instance().all().size(), 29);
+        QCOMPARE(WidgetRegistry::instance().all().size(), 28); // as PyQt UI Designer, without the Modbus card
         const WidgetMeta *button = WidgetRegistry::instance().find("PushButton");
         QVERIFY(button);
         QCOMPARE(button->defaultProperties().value("text").toString(), QStringLiteral("按钮"));
@@ -128,17 +128,21 @@ class TestProject : public QObject
         QCOMPARE(message, error);
     }
 
-    // There is no poll table any more: pollList, pollMode and autoStart are properties a ModbusConfigCard
-    // does not have, which a file may carry and nothing reads. A Modbus binding or chart curve names a
-    // register table; 响应内序号 is an error. Other parse modes ignore mbArea.
+    // There is no Modbus card any more: a project with one is refused as any unknown type is, with no
+    // upgrade, wherever it sits. A Modbus binding or chart curve names a register table; 响应内序号 is an
+    // error. Other parse modes ignore mbArea.
     void checksModbusKeys_data()
     {
         QTest::addColumn<QByteArray>("json");
         QTest::addColumn<QString>("error");
-        QTest::newRow("poll table keys")
+        QTest::newRow("Modbus card")
             << QByteArray(R"json({"widgets":[{"type":"ModbusConfigCard","id":"bus","properties":{"defaultPoll":500,
-                "pollMode":"轮询表","autoStart":false,"pollList":"1,3,0,2"}}]})json")
-            << QString();
+                "timeout":1000}}]})json")
+            << QStringLiteral("未知控件类型: ModbusConfigCard");
+        QTest::newRow("Modbus card in a group")
+            << QByteArray(R"json({"widgets":[{"type":"GroupBox","id":"box","children":[
+                {"type":"ModbusConfigCard","id":"bus"}]}]})json")
+            << QStringLiteral("未知控件类型: ModbusConfigCard");
         QTest::newRow("in response")
             << QByteArray(R"json({"widgets":[{"type":"NumericDisplay","id":"pv",
                 "binding":{"parseMode":"Modbus","mbArea":"响应内序号","mbRegIndex":0}}]})json")
@@ -170,10 +174,50 @@ class TestProject : public QObject
         if (error.isEmpty()) { // loaded as written
             QCOMPARE(project.widgets, document.value("widgets").toArray());
         }
-        const WidgetMeta *card = WidgetRegistry::instance().find("ModbusConfigCard");
-        QVERIFY(card);
-        for (const char *gone : {"pollList", "pollMode", "autoStart"}) {
-            QVERIFY(!card->prop(QLatin1String(gone)));
+        QVERIFY(!WidgetRegistry::instance().find("ModbusConfigCard"));
+    }
+
+    // Each link card carries the Modbus poller's settings right after its parser mode and before its frame
+    // format, as PyQt UI Designer does: key, label, default and range.
+    void linkCardsCarryPollingSettings_data()
+    {
+        QTest::addColumn<QString>("type");
+        for (const char *type : {"SerialConfigCard", "TcpConfigCard", "MqttConfigCard"}) {
+            QTest::newRow(type) << QString::fromLatin1(type);
+        }
+    }
+
+    void linkCardsCarryPollingSettings()
+    {
+        QFETCH(QString, type);
+        const WidgetMeta *meta = WidgetRegistry::instance().find(type);
+        QVERIFY(meta);
+        QStringList names;
+        for (const PropDef &def : meta->properties) {
+            names.append(def.name);
+        }
+        const qsizetype parser = names.indexOf(QStringLiteral("defaultParser"));
+        QVERIFY(parser >= 0);
+        QCOMPARE(names.mid(parser, 5),
+                 (QStringList{"defaultParser", "modbusPeriod", "modbusTimeout", "modbusSlave", "parserConfig"}));
+        const struct
+        {
+            const char *name;
+            const char *label;
+            int value;
+            double lo;
+            double hi;
+        } expected[] = {{"modbusPeriod", "默认轮询(ms)", 500, 10, 60000},
+                        {"modbusTimeout", "响应超时(ms)", 1000, 10, 60000},
+                        {"modbusSlave", "默认从站", 1, 1, 247}};
+        for (const auto &want : expected) {
+            const PropDef *def = meta->prop(QLatin1String(want.name));
+            QVERIFY(def);
+            QCOMPARE(def->label, QString::fromUtf8(want.label));
+            QVERIFY(def->type == PropType::Int);
+            QCOMPARE(def->defaultValue, QJsonValue(want.value));
+            QCOMPARE(def->minimum.value_or(-1), want.lo);
+            QCOMPARE(def->maximum.value_or(-1), want.hi);
         }
     }
 

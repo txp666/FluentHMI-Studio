@@ -16,7 +16,6 @@
 #include <FluentQtWidgets/Widgets/SpinBox.h>
 
 #include <QtCore/QTimer>
-#include <QtGui/QIntValidator>
 #include <QtGui/QPainter>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
@@ -65,9 +64,11 @@ LinkCardBase::LinkCardBase(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
     auto *header = new QHBoxLayout;
     m_title = new FluentQt::StrongBodyLabel(this);
     m_status = new FluentQt::CaptionLabel(this);
+    // A long status (a link that parses Modbus adds the poller's) takes only the room the title leaves.
+    m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     header->addWidget(m_title);
-    header->addStretch();
-    header->addWidget(m_status);
+    header->addWidget(m_status, 1);
     m_grid = new QGridLayout;
     m_grid->setHorizontalSpacing(10);
     m_grid->setVerticalSpacing(6);
@@ -97,9 +98,33 @@ void LinkCardBase::paintEvent(QPaintEvent *)
     painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
 }
 
+void LinkCardBase::onAttached()
+{
+    live(connect(context()->modbusPoller(), &ModbusPoller::statusChanged, this, [this]() { showStatus(); }));
+    updatePolling();
+}
+
 void LinkCardBase::onDetached()
 {
+    context()->modbusPoller()->removeLinkCard(this);
     setConnectedUi(false, tr("未连接"));
+}
+
+ModbusPoller::Settings LinkCardBase::pollingSettings() const
+{
+    ModbusPoller::Settings settings;
+    settings.defaultPeriod = std::clamp(integer("modbusPeriod"), 10, 60000);
+    settings.timeoutMs = std::clamp(integer("modbusTimeout"), 10, 60000);
+    settings.fallbackSlave = std::clamp(integer("modbusSlave"), 1, 247);
+    return settings;
+}
+
+void LinkCardBase::updatePolling()
+{
+    if (isLive()) {
+        context()->modbusPoller()->setLinkCard(this, currentLink(), pollingSettings());
+        showStatus();
+    }
 }
 
 bool LinkCardBase::configureParser(Link *link)
@@ -128,10 +153,31 @@ bool LinkCardBase::configureParser(Link *link)
 
 void LinkCardBase::setConnectedUi(bool connected, const QString &status)
 {
+    m_connected = connected;
+    m_connection = status;
     m_connect->setText(connected ? tr("断开") : tr("连接"));
-    m_status->setText(status);
+    // The poller's status keeps the colour of a connection: its text says when a block fails.
     m_status->setTextColor(connected ? QColor(0x10, 0x7C, 0x10) : QColor(0x80, 0x80, 0x80),
                            connected ? QColor(0x6C, 0xCB, 0x5F) : QColor(0xA0, 0xA0, 0xA0));
+    showStatus();
+}
+
+void LinkCardBase::showStatus()
+{
+    QString text = m_connection;
+    QString toolTip;
+    // Never live while constructing, so currentLink() is only called on a whole card.
+    if (isLive() && m_connected) {
+        const Link *link = currentLink();
+        const ModbusPoller *poller = context()->modbusPoller();
+        if (link && link->isConnected() && link->parsesModbus() && !poller->status().isEmpty() &&
+            !poller->isWaiting()) {
+            text += QStringLiteral(" · ") + poller->status();
+            toolTip = poller->blocks().isEmpty() ? text : poller->toolTip();
+        }
+    }
+    m_status->setText(text);
+    m_status->setToolTip(toolTip);
 }
 
 void LinkCardBase::addField(const QString &label, QWidget *field)
@@ -239,6 +285,7 @@ void SerialConfigCardWidget::apply()
     selectText(m_stopBits, text("defaultStopbits"));
     selectText(m_flow, text("defaultFlow"));
     selectText(m_parser, text("defaultParser"));
+    updatePolling(); // modbusPeriod and the like apply at once
 
     clearFields();
     for (QWidget *w : {static_cast<QWidget *>(m_dataBits), static_cast<QWidget *>(m_parity),
@@ -294,6 +341,12 @@ void SerialConfigCardWidget::onAttached()
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
         context()->notify(tr("串口错误"), message, NotifyType::Error, 3000);
     }));
+    LinkCardBase::onAttached();
+}
+
+Link *SerialConfigCardWidget::currentLink() const
+{
+    return m_link;
 }
 
 void SerialConfigCardWidget::onDetached()
@@ -360,6 +413,7 @@ void TcpConfigCardWidget::apply()
     m_host->setText(text("defaultHost"));
     m_port->setValue(integer("defaultPort"));
     selectText(m_parser, text("defaultParser"));
+    updatePolling();
     clearFields();
     m_parser->hide();
     m_mode->hide();
@@ -375,6 +429,12 @@ void TcpConfigCardWidget::apply()
 void TcpConfigCardWidget::onAttached()
 {
     live(connect(m_connect, &QPushButton::clicked, this, &TcpConfigCardWidget::toggleConnection));
+    LinkCardBase::onAttached();
+}
+
+Link *TcpConfigCardWidget::currentLink() const
+{
+    return m_link;
 }
 
 void TcpConfigCardWidget::onDetached()
@@ -394,6 +454,7 @@ void TcpConfigCardWidget::dropLink()
     }
     delete m_link;
     m_link = nullptr;
+    updatePolling();
 }
 
 void TcpConfigCardWidget::toggleConnection()
@@ -413,6 +474,7 @@ void TcpConfigCardWidget::toggleConnection()
     }
     m_link = link;
     context()->hub()->addLink(link);
+    updatePolling();
     connect(link, &Link::connectedChanged, this, [this, link](bool connected) {
         setConnectedUi(connected, connected ? link->description() : tr("未连接"));
         if (!connected && m_link == link && qobject_cast<TcpClientLink *>(link)) {
@@ -442,8 +504,8 @@ void TcpConfigCardWidget::toggleConnection()
             m_mode->setEnabled(true);
         }
     } else {
+        setConnectedUi(false, tr("连接中..."));
         m_connect->setText(tr("取消"));
-        m_status->setText(tr("连接中..."));
         static_cast<TcpClientLink *>(link)->connectTo(m_host->text().trimmed(), port);
     }
 }
@@ -509,6 +571,7 @@ void MqttConfigCardWidget::apply()
     selectText(m_qos, text("defaultQos"));
     m_tls->setChecked(flag("defaultTls"));
     selectText(m_parser, text("defaultParser"));
+    updatePolling();
 
     clearFields();
     for (QWidget *w : {static_cast<QWidget *>(m_clientId), m_loginRow, m_qosRow, static_cast<QWidget *>(m_parser)}) {
@@ -539,6 +602,12 @@ void MqttConfigCardWidget::onAttached()
         context()->notify(tr("MQTT"), message, NotifyType::Error, 3000);
         refreshState();
     }));
+    LinkCardBase::onAttached();
+}
+
+Link *MqttConfigCardWidget::currentLink() const
+{
+    return m_link;
 }
 
 void MqttConfigCardWidget::onDetached()
@@ -600,221 +669,6 @@ void MqttConfigCardWidget::refreshState()
     } else {
         setConnectedUi(false, tr("未连接"));
     }
-}
-
-// ---------------------------------------------------------------------------
-// ModbusConfigCard
-// ---------------------------------------------------------------------------
-
-ModbusConfigCardWidget::ModbusConfigCardWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
-{
-    // The layout of PyQt UI Designer's card: plain number fields fit its 380 x 180 default,
-    // where spin boxes would leave no room for the digits.
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(16, 12, 16, 12);
-    layout->setSpacing(8);
-    auto *header = new QHBoxLayout;
-    m_title = new FluentQt::StrongBodyLabel(this);
-    m_status = new FluentQt::CaptionLabel(tr("就绪"), this);
-    m_status->setTextColor(QColor(0x60, 0x60, 0x60), QColor(0xb0, 0xb0, 0xb0));
-    // A long status takes only the room the title leaves; the tooltip has all of it.
-    m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    header->addWidget(m_title);
-    header->addWidget(m_status, 1);
-
-    const auto number = [this](int lo, int hi, const QString &placeholder) {
-        auto *edit = new FluentQt::LineEdit(this);
-        edit->setValidator(new QIntValidator(lo, hi, edit));
-        edit->setPlaceholderText(placeholder);
-        return edit;
-    };
-    const auto label = [this](const QString &text) {
-        auto *caption = new FluentQt::BodyLabel(text, this);
-        caption->setFixedWidth(56);
-        return caption;
-    };
-    m_slave = number(1, 247, QStringLiteral("1"));
-    m_function = comboOf(this, enumOptions(meta, "defaultFunc"));
-    m_address = number(0, 65535, QStringLiteral("0"));
-    m_valueLabel = label(tr("数量"));
-    m_value = new FluentQt::LineEdit(this); // a count, a register value or a typed FC 16 value
-    m_value->setPlaceholderText(QStringLiteral("1"));
-    m_poll = number(0, 60000, tr("默认 500"));
-    m_send = new FluentQt::PrimaryPushButton(this);
-    m_send->setText(tr("发送"));
-    m_pollButton = new FluentQt::PushButton(this);
-    m_pollButton->setText(tr("轮询"));
-
-    auto *grid = new QGridLayout;
-    grid->setHorizontalSpacing(8);
-    grid->setVerticalSpacing(8);
-    grid->addWidget(label(tr("从站")), 0, 0);
-    grid->addWidget(m_slave, 0, 1);
-    grid->addWidget(label(tr("功能码")), 0, 2);
-    grid->addWidget(m_function, 0, 3);
-    grid->addWidget(label(tr("地址")), 1, 0);
-    grid->addWidget(m_address, 1, 1);
-    grid->addWidget(m_valueLabel, 1, 2);
-    grid->addWidget(m_value, 1, 3);
-    grid->addWidget(label(tr("轮询ms")), 2, 0);
-    grid->addWidget(m_poll, 2, 1);
-    auto *buttons = new QHBoxLayout;
-    buttons->addWidget(m_send, 1);
-    buttons->addWidget(m_pollButton, 1);
-    grid->addLayout(buttons, 2, 2, 1, 2);
-    grid->setColumnStretch(1, 1);
-    grid->setColumnStretch(3, 1);
-    layout->addLayout(header);
-    layout->addLayout(grid);
-    layout->addStretch();
-    connect(m_function, &FluentQt::ComboBox::currentIndexChanged, this, &ModbusConfigCardWidget::updateValueLabel);
-}
-
-void ModbusConfigCardWidget::updateValueLabel()
-{
-    const int func = CommandEncoder::functionCode(m_function->currentText());
-    m_valueLabel->setText(func == 0x05 || func == 0x06 || func == 0x10 ? tr("写入值") : tr("数量"));
-}
-
-void ModbusConfigCardWidget::apply()
-{
-    m_title->setText(text("title"));
-    m_slave->setText(QString::number(integer("defaultSlave")));
-    selectText(m_function, text("defaultFunc"));
-    m_address->setText(QString::number(integer("defaultAddr")));
-    m_value->setText(text("defaultValue")); // older projects hold an int; text() reads both
-    m_poll->setText(QString::number(integer("defaultPoll")));
-    updateValueLabel();
-    if (isLive()) {
-        context()->modbusPoller()->setSettings(this, settings());
-    }
-}
-
-ModbusPoller::Settings ModbusConfigCardWidget::settings() const
-{
-    ModbusPoller::Settings settings;
-    settings.fallbackSlave = integer("defaultSlave");
-    const int period = m_poll->text().toInt();
-    settings.defaultPeriod = period > 0 ? period : 500;
-    settings.timeoutMs = std::max(10, integer("timeout"));
-    return settings;
-}
-
-void ModbusConfigCardWidget::onAttached()
-{
-    ModbusPoller *poller = context()->modbusPoller();
-    live(connect(m_send, &QPushButton::clicked, this, &ModbusConfigCardWidget::sendFields));
-    live(connect(m_pollButton, &QPushButton::clicked, this, [this]() {
-        ModbusPoller *poller = context()->modbusPoller();
-        if (poller->isPaused()) {
-            poller->resume();
-        } else {
-            poller->pause();
-        }
-    }));
-    // The 轮询ms field is the default period from the next keystroke on.
-    live(connect(m_poll, &QLineEdit::textChanged, this,
-                 [this]() { context()->modbusPoller()->setSettings(this, settings()); }));
-    live(connect(poller, &ModbusPoller::statusChanged, this,
-                 [this](const QString &status, const QString &toolTip) { setStatus(status, toolTip); }));
-    live(connect(poller, &ModbusPoller::pausedChanged, this, &ModbusConfigCardWidget::showPaused));
-    poller->addPanel(this, settings());
-    showPaused(poller->isPaused());
-    if (!poller->status().isEmpty()) {
-        setStatus(poller->status(), poller->toolTip());
-    }
-}
-
-void ModbusConfigCardWidget::onDetached()
-{
-    context()->modbusPoller()->removePanel(this);
-    m_manual.cancel();
-    setStatus(tr("就绪"));
-    m_pollButton->setText(tr("轮询"));
-}
-
-std::optional<ModbusRequest> ModbusConfigCardWidget::fieldRequest()
-{
-    bool ok[2] = {};
-    const int slave = m_slave->text().toInt(&ok[0]);
-    const int address = m_address->text().toInt(&ok[1]);
-    QString error = tr("从站、地址和数值必须是整数");
-    std::optional<ModbusRequest> request;
-    if (ok[0] && ok[1]) {
-        request = CommandEncoder::modbusRequest(slave, CommandEncoder::functionCode(m_function->currentText()),
-                                                address, m_value->text(), text("mbDataType"), text("mbRegOrder"),
-                                                &error);
-    }
-    if (!request) {
-        context()->notify(QStringLiteral("Modbus"), error, NotifyType::Error);
-        setStatus(tr("参数无效"));
-    }
-    return request;
-}
-
-void ModbusConfigCardWidget::setStatus(const QString &text, const QString &toolTip)
-{
-    m_status->setText(text);
-    m_status->setToolTip(toolTip.isEmpty() ? text : toolTip);
-}
-
-void ModbusConfigCardWidget::showPaused(bool paused)
-{
-    m_pollButton->setText(paused ? tr("轮询") : tr("停止"));
-}
-
-QString ModbusConfigCardWidget::sentStatus() const
-{
-    QString status = tr("已发送: %1").arg(QString::fromLatin1(m_lastSent.value(0).toHex(' ')).toUpper());
-    if (m_lastSent.size() > 1) {
-        status += tr("（%1 条链路）").arg(m_lastSent.size());
-    }
-    return status;
-}
-
-void ModbusConfigCardWidget::sendFields()
-{
-    const auto request = fieldRequest();
-    if (!request) {
-        return;
-    }
-    ModbusSend how;
-    how.timeoutMs = std::max(10, integer("timeout"));
-    how.priority = ModbusMaster::Priority::Write;
-    m_lastSent.clear();
-    const bool queued = m_manual.start(
-        [this, &request](const ModbusSend &queue) { return context()->sendModbus(*request, &m_lastSent, queue); },
-        how, [this](const ModbusResult &result) { manualDone(result); });
-    if (!queued) {
-        setStatus(tr("发送失败，请检查连接"));
-        return;
-    }
-    // "已发送" only means the links took it; the reply, or its absence, follows. While the poller reads,
-    // the status line is its, and the result comes as a notification instead.
-    if (!context()->modbusPoller()->isPolling()) {
-        setStatus(sentStatus());
-    }
-}
-
-void ModbusConfigCardWidget::manualDone(const ModbusResult &result)
-{
-    const QString text = result.ok ? tr("设备已响应") : result.problem;
-    if (isLive() && context()->modbusPoller()->isPolling()) {
-        context()->notify(QStringLiteral("Modbus"), text, result.ok ? NotifyType::Info : NotifyType::Warning, 2000);
-        return;
-    }
-    setStatus(text);
-}
-
-void ModbusConfigCardWidget::paintEvent(QPaintEvent *)
-{
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    const bool dark = isDarkTheme();
-    painter.setPen(dark ? QColor(255, 255, 255, 20) : QColor(0, 0, 0, 18));
-    painter.setBrush(dark ? QColor(255, 255, 255, 13) : QColor(255, 255, 255, 200));
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
 }
 
 } // namespace fhmi
