@@ -116,7 +116,7 @@ To update without the UI (the package is replaced after this process exits):
 FluentHMIStudio --update
 ```
 
-To test the update flow, point `FHMI_UPDATE_URL` at a JSON file on a local server in the same format as GitHub's "latest release" API. While a repository is private, GitHub answers anonymous requests with 404, and the update check reports that no published release was found.
+To test the update flow, point `FHMI_UPDATE_URL` at a JSON file on a local server in the same format as GitHub's "latest release" API.
 
 ## Packaging and releases
 

@@ -114,7 +114,7 @@ Studio 从本仓库的 GitHub Release 获取更新。设置页有"检查更新"�
 FluentHMIStudio --update
 ```
 
-测试更新流程时，可以用 `FHMI_UPDATE_URL` 指向本地服务器上与 GitHub "latest release" 接口格式相同的 JSON。仓库公开之前，GitHub 对匿名请求返回 404，检查更新会提示"没有找到已发布的版本"。
+测试更新流程时，可以用 `FHMI_UPDATE_URL` 指向本地服务器上与 GitHub "latest release" 接口格式相同的 JSON。
 
 ## 打包与发布
 
