@@ -147,7 +147,19 @@ class ModbusConfigCardWidget : public HmiWidget
     void paintEvent(QPaintEvent *event) override;
 
   private:
-    bool sendOnce();
+    // Whether a connected link parses Modbus, so replies to the requests sent can be recognised.
+    // Without one, each poll tick sends the next request without waiting, as the card always did.
+    bool expectsReplies() const;
+    // Sends one request and waits for its reply; false after reporting why it was not sent.
+    bool sendRequest(const ModbusRequest &request);
+    void setStatus(const QString &text);
+    // 已发送 with the first frame's bytes and how many links took one, as PyQt UI Designer shows it.
+    QString sentStatus() const;
+    std::optional<ModbusRequest> fieldRequest();
+    void onMessage(const Message &message);
+    // A reply, or its absence, to the request being waited for: `problem` is empty on success.
+    void replied(const QString &problem);
+    void pollTick();
     void togglePolling();
     void stopPolling();
     void updateValueLabel();
@@ -162,7 +174,15 @@ class ModbusConfigCardWidget : public HmiWidget
     FluentQt::LineEdit *m_poll = nullptr;
     FluentQt::PrimaryPushButton *m_send = nullptr;
     FluentQt::PushButton *m_pollButton = nullptr;
-    QTimer *m_timer = nullptr;
+    QTimer *m_timer = nullptr;      // poll rounds
+    QTimer *m_replyTimer = nullptr; // the reply timeout of the request being waited for
+    QList<ModbusRequest> m_table;   // the reads of each round; empty: the request in the fields
+    QList<ModbusRequest> m_round;   // still to send in this round
+    int m_roundSize = 0;
+    QList<QPair<int, QString>> m_roundProblems; // (1-based entry, problem)
+    std::optional<ModbusRequest> m_waiting;
+    QList<QByteArray> m_lastSent; // the frames of the last request, one per link that took it
+    int m_next = 0; // the request a poll tick sends when nothing waits for replies
 };
 
 } // namespace fhmi

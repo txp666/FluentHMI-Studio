@@ -61,6 +61,8 @@ add_library(fhmi_core STATIC
     src/core/command_encoder.h
     src/core/expression.cpp
     src/core/expression.h
+    src/core/gbk_table.cpp
+    src/core/gbk_table.h
     src/core/hex_utils.cpp
     src/core/hex_utils.h
     src/core/mqtt_codec.cpp
@@ -232,7 +234,8 @@ if(FHMI_BUILD_TESTS)
         add_executable(tst_${test_name} tests/tst_${test_name}.cpp)
         target_link_libraries(tst_${test_name} PRIVATE fhmi_core Qt6::Test)
         target_compile_definitions(tst_${test_name} PRIVATE
-            FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
+            FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
+            FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
         add_test(NAME ${test_name} COMMAND tst_${test_name})
     endforeach()
     add_executable(tst_mqtt tests/tst_mqtt.cpp)

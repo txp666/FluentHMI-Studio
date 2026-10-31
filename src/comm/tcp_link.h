@@ -35,8 +35,8 @@ class TcpClientLink : public Link
     quint16 m_port = 0;
 };
 
-// Listens for devices. Every connected device gets its own parser, so frames from
-// different devices never interleave; commands go to every connected device.
+// Listens for devices. Every connected device gets its own parser and idle timer, so frames
+// from different devices never interleave; commands go to every connected device.
 class TcpServerLink : public Link
 {
     Q_OBJECT

@@ -20,6 +20,7 @@ enum class PropType
     Enum,
     Text,    // multi-line string
     Command, // a command string sent to the device
+    Object,  // a JSON object with a section of its own in the property editor, not one row
 };
 
 struct PropDef
@@ -32,6 +33,7 @@ struct PropDef
     std::optional<double> minimum;
     std::optional<double> maximum;
     bool bindable = false;
+    QString description; // for the widget reference, where a label alone does not explain it
 };
 
 enum class WidgetCategory

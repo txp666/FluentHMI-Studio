@@ -202,6 +202,11 @@ std::optional<bool> bindingLed(const QVariant &value, const QString &onValue, co
 QVariant bindingDecimals(const QVariant &value, const QString &places)
 {
     if (places.isEmpty() || places == QStringLiteral("自动") || value.typeId() == QMetaType::Bool) {
+        if (isReal(value) && std::isfinite(value.toDouble())) {
+            // 15 significant digits: the noise of binary arithmetic (267 * 0.1 = 26.700000000000003)
+            // goes, every digit a double really holds stays.
+            return QString::number(value.toDouble(), 'g', 15).toDouble();
+        }
         return value;
     }
     const auto number = toReal(value);
@@ -256,6 +261,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.mbDataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
     entry.mbRegOrder = binding.value(QStringLiteral("mbRegOrder")).toString(QStringLiteral("大端(AB CD)"));
     entry.mbFcFilter = binding.value(QStringLiteral("mbFcFilter")).toInt(-1);
+    entry.mbArea = binding.value(QStringLiteral("mbArea")).toString(ModbusArea::InResponse);
     entry.displayFormat = props.value(QStringLiteral("displayFormat")).toString(QStringLiteral("自动"));
     entry.decimals = props.value(QStringLiteral("decimals")).toVariant().toString();
     if (entry.decimals.isEmpty()) {
@@ -286,6 +292,21 @@ QVariant BindingEntry::extractFromParsed(const Message &data) const
     return {};
 }
 
+QStringList ModbusArea::options()
+{
+    return {InResponse, QStringLiteral("保持寄存器"), QStringLiteral("输入寄存器"), QStringLiteral("线圈"),
+            QStringLiteral("离散输入")};
+}
+
+QString ModbusArea::prefix(const QString &area)
+{
+    static const QHash<QString, QString> prefixes = {{QStringLiteral("保持寄存器"), QStringLiteral("hr")},
+                                                     {QStringLiteral("输入寄存器"), QStringLiteral("ir")},
+                                                     {QStringLiteral("线圈"), QStringLiteral("co")},
+                                                     {QStringLiteral("离散输入"), QStringLiteral("di")}};
+    return prefixes.value(area);
+}
+
 QVariant BindingEntry::extractModbus(const Message &data) const
 {
     if (mbSlaveFilter >= 0 && data.value(QStringLiteral("slave")).toLongLong() != mbSlaveFilter) {
@@ -295,12 +316,18 @@ QVariant BindingEntry::extractModbus(const Message &data) const
     if (mbFcFilter >= 0 && fc != mbFcFilter) {
         return {};
     }
-    if (fc == 0x01 || fc == 0x02) {
-        return data.value(QStringLiteral("coil%1").arg(mbRegIndex));
+    QString table = ModbusArea::prefix(mbArea);
+    if (table.isEmpty()) {
+        if (fc == 0x01 || fc == 0x02) {
+            return data.value(QStringLiteral("coil%1").arg(mbRegIndex));
+        }
+        table = QStringLiteral("reg");
+    } else if (table == QLatin1String("co") || table == QLatin1String("di")) {
+        return data.value(table + QString::number(mbRegIndex));
     }
 
-    const auto reg = [&data](int index) -> std::optional<quint16> {
-        const QVariant v = data.value(QStringLiteral("reg%1").arg(index));
+    const auto reg = [&data, &table](int index) -> std::optional<quint16> {
+        const QVariant v = data.value(table + QString::number(index));
         if (!v.isValid()) {
             return std::nullopt;
         }
@@ -471,9 +498,13 @@ QVariant BindingEntry::evaluate(const QVariant &raw) const
     if (!number) {
         return raw;
     }
-    const auto result = Expression::evaluate(expression, *number);
+    bool boolean = false;
+    const auto result = Expression::evaluate(expression, *number, &boolean);
     if (!result) {
         return raw;
+    }
+    if (boolean) {
+        return *result != 0.0; // a comparison gives True / False, as in Python
     }
     // Keep integer results integral, as Python does for int * int.
     if (isIntegral(raw) && *result == std::floor(*result) && std::fabs(*result) < 9e15 &&

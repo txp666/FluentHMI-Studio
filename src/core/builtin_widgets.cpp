@@ -2,44 +2,56 @@
 // options match PyQt UI Designer exactly, so .uidp projects open in either program.
 #include "core/widget_meta.h"
 
+#include "core/binding.h"
+#include "core/command_encoder.h"
+
 namespace fhmi {
 
 namespace {
 
 PropDef str(const QString &name, const QString &label, const QString &def, bool bindable = false)
 {
-    PropDef p{name, label, PropType::String, def, {}, std::nullopt, std::nullopt, bindable};
+    PropDef p{name, label, PropType::String, def, {}, std::nullopt, std::nullopt, bindable, {}};
     return p;
 }
 
 PropDef text(const QString &name, const QString &label, const QString &def)
 {
-    return PropDef{name, label, PropType::Text, def, {}, std::nullopt, std::nullopt, false};
+    return PropDef{name, label, PropType::Text, def, {}, std::nullopt, std::nullopt, false, {}};
 }
 
 PropDef command(const QString &name, const QString &label)
 {
-    return PropDef{name, label, PropType::Command, QString(), {}, std::nullopt, std::nullopt, false};
+    return PropDef{name, label, PropType::Command, QString(), {}, std::nullopt, std::nullopt, false, {}};
 }
 
 PropDef integer(const QString &name, const QString &label, int def, double lo, double hi, bool bindable = false)
 {
-    return PropDef{name, label, PropType::Int, def, {}, lo, hi, bindable};
+    return PropDef{name, label, PropType::Int, def, {}, lo, hi, bindable, {}};
 }
 
 PropDef real(const QString &name, const QString &label, double def, double lo, double hi, bool bindable = false)
 {
-    return PropDef{name, label, PropType::Float, def, {}, lo, hi, bindable};
+    return PropDef{name, label, PropType::Float, def, {}, lo, hi, bindable, {}};
 }
 
 PropDef boolean(const QString &name, const QString &label, bool def, bool bindable = false)
 {
-    return PropDef{name, label, PropType::Bool, def, {}, std::nullopt, std::nullopt, bindable};
+    return PropDef{name, label, PropType::Bool, def, {}, std::nullopt, std::nullopt, bindable, {}};
 }
 
 PropDef choice(const QString &name, const QString &label, const QString &def, const QStringList &options)
 {
-    return PropDef{name, label, PropType::Enum, def, options, std::nullopt, std::nullopt, false};
+    return PropDef{name, label, PropType::Enum, def, options, std::nullopt, std::nullopt, false, {}};
+}
+
+// A link card's own frame format: the keys of the project's serial.parserConfig.
+PropDef parserConfig()
+{
+    return PropDef{QStringLiteral("parserConfig"), QStringLiteral("帧格式"), PropType::Object, QJsonObject(), {},
+                   std::nullopt, std::nullopt, false,
+                   QStringLiteral("帧格式设置，键同工程的 serial.parserConfig；默认解析模式不是「项目设置」时生效，"
+                                  "空对象表示沿用工程设置（模式相同时）或默认值")};
 }
 
 const QStringList kCommandModes = {QStringLiteral("文本"), QStringLiteral("HEX"), QStringLiteral("Modbus")};
@@ -52,12 +64,9 @@ const QStringList kNumericTypes = {QStringLiteral("uint8"),  QStringLiteral("int
 const QStringList kByteOrders = {QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")};
 const QStringList kNewlines = {QStringLiteral("无"), QStringLiteral("\\r\\n"), QStringLiteral("\\n"),
                                QStringLiteral("\\r")};
-const QStringList kAllFunctions = {QStringLiteral("01 读线圈"),       QStringLiteral("02 读离散输入"),
-                                   QStringLiteral("03 读保持寄存器"), QStringLiteral("04 读输入寄存器"),
-                                   QStringLiteral("05 写单线圈"),     QStringLiteral("06 写单寄存器")};
-const QStringList kInputFunctions = {QStringLiteral("03 读保持寄存器"), QStringLiteral("04 读输入寄存器"),
-                                     QStringLiteral("05 写单线圈"), QStringLiteral("06 写单寄存器")};
-const QStringList kWriteFunctions = {QStringLiteral("05 写单线圈"), QStringLiteral("06 写单寄存器")};
+const QStringList kAllFunctions = CommandEncoder::functionOptions();
+const QStringList kInputFunctions = CommandEncoder::functionOptions({0x03, 0x04, 0x05, 0x06, 0x10});
+const QStringList kWriteFunctions = CommandEncoder::functionOptions({0x05, 0x06, 0x10});
 const QStringList kNotifyTypes = {QStringLiteral("成功"), QStringLiteral("信息"), QStringLiteral("警告"),
                                   QStringLiteral("错误")};
 const QStringList kDisplayFormats = {QStringLiteral("自动"), QStringLiteral("十进制"),
@@ -65,7 +74,8 @@ const QStringList kDisplayFormats = {QStringLiteral("自动"), QStringLiteral("�
 const QStringList kDecimals = {QStringLiteral("自动"), QStringLiteral("0"), QStringLiteral("1"),
                                QStringLiteral("2"),    QStringLiteral("3"), QStringLiteral("4")};
 const QStringList kLinkParsers = {QStringLiteral("项目设置"), QStringLiteral("line"), QStringLiteral("hex"),
-                                  QStringLiteral("modbus"), QStringLiteral("modbus_tcp")};
+                                  QStringLiteral("modbus"), QStringLiteral("modbus_tcp"),
+                                  QStringLiteral("modbus_ascii")};
 
 // The framing fields every command-sending widget shares, between the mode and Modbus.
 QList<PropDef> hexFraming(const QStringList &dataTypes, const QString &dataTypeDefault, bool newlineFirst)
@@ -118,7 +128,13 @@ QList<WidgetMeta> basicWidgets()
     const PropDef tpl = str(QStringLiteral("commandTemplate"), QStringLiteral("发送模板"), QStringLiteral("{value}"));
     const PropDef slave = integer(QStringLiteral("mbSlave"), QStringLiteral("从站地址"), 1, 1, 247);
     const PropDef address = integer(QStringLiteral("mbAddress"), QStringLiteral("寄存器地址"), 0, 0, 65535);
-    const PropDef mbValue = integer(QStringLiteral("mbValue"), QStringLiteral("值/数量"), 1, 0, 65535);
+    // A count for reads, a whole number to write (negative for int16 / int32) otherwise.
+    const PropDef mbValue = integer(QStringLiteral("mbValue"), QStringLiteral("值/数量"), 1, -2147483648.0, 2147483647.0);
+    // How a written value fills registers: FC 06 takes a 16-bit type, FC 16 any of them.
+    const PropDef dataType = choice(QStringLiteral("mbDataType"), QStringLiteral("数据类型"), QStringLiteral("uint16"),
+                                    CommandEncoder::dataTypes());
+    const PropDef regOrder = choice(QStringLiteral("mbRegOrder"), QStringLiteral("寄存器序"),
+                                    CommandEncoder::registerOrders().first(), CommandEncoder::registerOrders());
 
     QList<PropDef> button{str(QStringLiteral("text"), QStringLiteral("文本"), QStringLiteral("按钮")),
                           boolean(QStringLiteral("enabled"), QStringLiteral("启用"), true),
@@ -129,7 +145,7 @@ QList<WidgetMeta> basicWidgets()
     button += {slave,
                choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("03 读保持寄存器"),
                       kAllFunctions),
-               address, mbValue};
+               address, dataType, regOrder, mbValue};
     button += notification(QStringLiteral("按下通知"), QStringLiteral("按钮已按下"), QStringLiteral("成功"));
 
     QList<PropDef> label{str(QStringLiteral("text"), QStringLiteral("文本"), QStringLiteral("标签"), true),
@@ -153,7 +169,7 @@ QList<WidgetMeta> basicWidgets()
     lineEdit += {slave,
                  choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("06 写单寄存器"),
                         kInputFunctions),
-                 address};
+                 address, dataType, regOrder};
 
     QList<PropDef> combo{text(QStringLiteral("items"), QStringLiteral("选项"), QStringLiteral("选项1\n选项2\n选项3")),
                          integer(QStringLiteral("currentIndex"), QStringLiteral("默认选项"), 0, 0, 99),
@@ -165,7 +181,7 @@ QList<WidgetMeta> basicWidgets()
     combo += {slave,
               choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("06 写单寄存器"),
                      kInputFunctions),
-              address, mbValue};
+              address, dataType, regOrder, mbValue};
 
     QList<PropDef> toggle{str(QStringLiteral("label"), QStringLiteral("标签"), QStringLiteral("开关")),
                           boolean(QStringLiteral("checked"), QStringLiteral("默认开启"), false),
@@ -189,7 +205,7 @@ QList<WidgetMeta> basicWidgets()
         props += {slave,
                   choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("06 写单寄存器"),
                          kWriteFunctions),
-                  address};
+                  address, dataType, regOrder};
         return props;
     };
 
@@ -308,7 +324,9 @@ QList<WidgetMeta> chartWidgets()
                      kByteOrders),
               str(QStringLiteral("curveFrameHeader"), QStringLiteral("帧头(HEX)"), QString()),
               str(QStringLiteral("curveFrameTail"), QStringLiteral("帧尾(HEX)"), QString()),
-              integer(QStringLiteral("curveRegIndex"), QStringLiteral("寄存器索引"), 0, 0, 65535),
+              choice(QStringLiteral("curveMbArea"), QStringLiteral("寄存器区"), ModbusArea::InResponse,
+                     ModbusArea::options()),
+              integer(QStringLiteral("curveRegIndex"), QStringLiteral("寄存器索引/地址"), 0, 0, 65535),
               choice(QStringLiteral("curveMbDataType"), QStringLiteral("数据类型(MB)"), QStringLiteral("uint16"),
                      mbTypes),
               choice(QStringLiteral("curveMbRegOrder"), QStringLiteral("寄存器序(MB)"), QStringLiteral("大端(AB CD)"),
@@ -345,6 +363,7 @@ QList<WidgetMeta> compositeWidgets()
                      {QStringLiteral("完整"), QStringLiteral("简洁"), QStringLiteral("单行")}),
               choice(QStringLiteral("defaultParser"), QStringLiteral("默认解析模式"), QStringLiteral("项目设置"),
                      kLinkParsers),
+              parserConfig(),
               choice(QStringLiteral("defaultBaud"), QStringLiteral("默认波特率"), QStringLiteral("115200"),
                      {QStringLiteral("9600"), QStringLiteral("19200"), QStringLiteral("38400"),
                       QStringLiteral("57600"), QStringLiteral("115200"), QStringLiteral("230400"),
@@ -370,7 +389,8 @@ QList<WidgetMeta> compositeWidgets()
               str(QStringLiteral("defaultHost"), QStringLiteral("默认地址"), QStringLiteral("127.0.0.1")),
               integer(QStringLiteral("defaultPort"), QStringLiteral("默认端口"), 8080, 1, 65535),
               choice(QStringLiteral("defaultParser"), QStringLiteral("默认解析模式"), QStringLiteral("项目设置"),
-                     kLinkParsers)},
+                     kLinkParsers),
+              parserConfig()},
              240, 50),
         meta(QStringLiteral("MqttConfigCard"), QStringLiteral("MQTT 配置卡片"), WidgetCategory::Composite,
              QStringLiteral("cloud"), 380, 430,
@@ -388,7 +408,8 @@ QList<WidgetMeta> compositeWidgets()
                      {QStringLiteral("0"), QStringLiteral("1"), QStringLiteral("2")}),
               boolean(QStringLiteral("defaultTls"), QStringLiteral("默认启用 TLS"), false),
               choice(QStringLiteral("defaultParser"), QStringLiteral("默认解析模式"), QStringLiteral("项目设置"),
-                     kLinkParsers)},
+                     kLinkParsers),
+              parserConfig()},
              260, 50),
         meta(QStringLiteral("ModbusConfigCard"), QStringLiteral("Modbus 配置卡片"), WidgetCategory::Composite,
              QStringLiteral("developer_tools"), 380, 180,
@@ -397,8 +418,14 @@ QList<WidgetMeta> compositeWidgets()
               choice(QStringLiteral("defaultFunc"), QStringLiteral("默认功能码"), QStringLiteral("03 读保持寄存器"),
                      kAllFunctions),
               integer(QStringLiteral("defaultAddr"), QStringLiteral("默认地址"), 0, 0, 65535),
-              integer(QStringLiteral("defaultValue"), QStringLiteral("默认值/数量"), 1, 0, 65535),
-              integer(QStringLiteral("defaultPoll"), QStringLiteral("默认轮询(ms)"), 0, 0, 60000)},
+              str(QStringLiteral("defaultValue"), QStringLiteral("默认值/数量"), QStringLiteral("1")), // or a decimal
+              integer(QStringLiteral("defaultPoll"), QStringLiteral("默认轮询(ms)"), 0, 0, 60000),
+              choice(QStringLiteral("mbDataType"), QStringLiteral("写入数据类型"), QStringLiteral("uint16"),
+                     CommandEncoder::dataTypes()),
+              choice(QStringLiteral("mbRegOrder"), QStringLiteral("写入寄存器序"),
+                     CommandEncoder::registerOrders().first(), CommandEncoder::registerOrders()),
+              integer(QStringLiteral("timeout"), QStringLiteral("响应超时(ms)"), 1000, 10, 60000),
+              text(QStringLiteral("pollList"), QStringLiteral("轮询表"), QString())},
              280, 120),
         meta(QStringLiteral("DataSendCard"), QStringLiteral("数据发送卡片"), WidgetCategory::Composite,
              QStringLiteral("send"), 350, 140,

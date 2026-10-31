@@ -33,7 +33,34 @@ bool isStrictInt(const QJsonValue &value)
     return std::isfinite(d) && d == std::floor(d);
 }
 
-bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, QString *error)
+// A link card's own frame format, checked as the card would build its parser: with its own
+// mode, or the project's when it uses the project settings.
+bool validateCardParser(const QJsonObject &item, const QString &projectParser, QString *error)
+{
+    static const QSet<QString> cards = {QStringLiteral("SerialConfigCard"), QStringLiteral("TcpConfigCard"),
+                                        QStringLiteral("MqttConfigCard")};
+    const QJsonObject props = item.value(QStringLiteral("properties")).toObject();
+    const QJsonValue config = props.value(QStringLiteral("parserConfig"));
+    if (!cards.contains(item.value(QStringLiteral("type")).toString()) || config.isUndefined()) {
+        return true;
+    }
+    const QString id = item.value(QStringLiteral("id")).toString();
+    if (!config.isObject()) {
+        return fail(error, QStringLiteral("卡片 %1 的 parserConfig 必须是对象").arg(id));
+    }
+    QString mode = props.value(QStringLiteral("defaultParser")).toString(QStringLiteral("项目设置"));
+    if (mode == QStringLiteral("项目设置")) {
+        mode = projectParser;
+    }
+    QString parserError;
+    if (!createParser(mode, config.toObject(), &parserError)) {
+        return fail(error, QStringLiteral("卡片 %1: %2").arg(id, parserError));
+    }
+    return true;
+}
+
+bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, const QString &projectParser,
+                     QString *error)
 {
     if (!items.isArray() || depth > 64) {
         return fail(error, QStringLiteral("无效控件树"));
@@ -57,6 +84,9 @@ bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, QSt
         const QJsonValue props = item.value(QStringLiteral("properties"));
         if (!props.isUndefined() && !props.isObject()) {
             return fail(error, QStringLiteral("控件属性必须是对象"));
+        }
+        if (!validateCardParser(item, projectParser, error)) {
+            return false;
         }
         const QJsonValue binding = item.value(QStringLiteral("binding"));
         if (!binding.isUndefined() && !binding.isNull() && !binding.isObject()) {
@@ -84,7 +114,7 @@ bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, QSt
             return fail(error, QStringLiteral("无效选项卡索引"));
         }
         const QJsonValue children = item.value(QStringLiteral("children"));
-        if (!children.isUndefined() && !validateWidgets(children, depth + 1, ids, error)) {
+        if (!children.isUndefined() && !validateWidgets(children, depth + 1, ids, projectParser, error)) {
             return false;
         }
     }
@@ -154,14 +184,14 @@ bool Project::validate(const QJsonObject &data, QString *error)
         return fail(error, QStringLiteral("串口配置必须是对象"));
     }
     const QJsonObject serialObject = serialValue.toObject();
+    const QString parser = serialObject.value(QStringLiteral("parser")).toString(QStringLiteral("line"));
     QString parserError;
-    if (!createParser(serialObject.value(QStringLiteral("parser")).toString(QStringLiteral("line")),
-                      serialObject.value(QStringLiteral("parserConfig")).toObject(), &parserError)) {
+    if (!createParser(parser, serialObject.value(QStringLiteral("parserConfig")).toObject(), &parserError)) {
         return fail(error, parserError);
     }
     QSet<QString> ids;
     const QJsonValue widgetList = data.value(QStringLiteral("widgets"));
-    return widgetList.isUndefined() ? true : validateWidgets(widgetList, 0, ids, error);
+    return widgetList.isUndefined() ? true : validateWidgets(widgetList, 0, ids, parser, error);
 }
 
 bool Project::fromJson(const QJsonObject &data, Project *out, QString *error)

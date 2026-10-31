@@ -94,7 +94,7 @@ class DataRecvCardWidget : public HmiWidget
 
   private:
     void append(const QString &html);
-    QString render(const QByteArray &bytes) const;
+    QString render(const QByteArray &bytes, const QString &encoding) const;
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_counter = nullptr;
