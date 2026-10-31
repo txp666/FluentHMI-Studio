@@ -51,7 +51,7 @@ Both use the same project format, and their widget and protocol rules match:
 
 The differences are in how they are built and how they export apps:
 
-| | FluentHMI Studio 0.2.0 | PyQt UI Designer 0.2.0 |
+| | FluentHMI Studio 0.2.1 | PyQt UI Designer 0.2.1 |
 | --- | --- | --- |
 | Implementation | C++17 / Qt 6, compiled natively | Python / PyQt5 (Qt 5), packaged with Nuitka |
 | Exporting an app | Copies a prebuilt runner and adds the project and images, about 0.3 s, no Python or compiler needed | Generates Python source, then compiles it with Nuitka; the downloaded designer needs Python and build tools installed separately to package |
@@ -129,7 +129,7 @@ On macOS this produces `FluentHMI Studio.app`, with the runner at `Contents/Help
 
 To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`, optionally add `docs/release-notes/vX.Y.Z.md`, then push a `vX.Y.Z` tag. The `Release` workflow builds, tests and packages on Windows and macOS (universal), and only publishes the GitHub Release when everything passes.
 
-## Current status (0.2.0)
+## Current status (0.2.1)
 
 Done: all 28 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT preview, standalone app export, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
