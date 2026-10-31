@@ -121,7 +121,7 @@ bool rebrandInfoPlist(const QString &plistPath, const QString &appName, QString 
     const QByteArray hash = QCryptographicHash::hash(appName.toUtf8(), QCryptographicHash::Sha1).toHex().left(10);
     setKey(QStringLiteral("CFBundleName"), appName);
     setKey(QStringLiteral("CFBundleDisplayName"), appName);
-    setKey(QStringLiteral("CFBundleIdentifier"), QStringLiteral("tech.zhangshu.fluenthmi.app") + QString::fromLatin1(hash));
+    setKey(QStringLiteral("CFBundleIdentifier"), QStringLiteral("io.github.txp666.fluenthmi.app") + QString::fromLatin1(hash));
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return fail(error, QObject::tr("无法写入 Info.plist"));
     }
