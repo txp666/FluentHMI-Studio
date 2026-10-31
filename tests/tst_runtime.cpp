@@ -421,11 +421,23 @@ class TestRuntime : public QObject
         QString error;
         QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/10-PLC恒压供水.uidp"), &project, &error),
                  qPrintable(error));
+        // Saved before pollMode existed, the card polls its table as in 0.2.0: only after a click on 轮询.
+        for (const QJsonValue &value : std::as_const(project.widgets)) {
+            const QJsonObject widget = value.toObject();
+            if (widget.value("type").toString() == QLatin1String("ModbusConfigCard")) {
+                const QJsonObject props = widget.value("properties").toObject();
+                QCOMPARE(props.value("pollMode").toString(), QStringLiteral("轮询表"));
+                QCOMPARE(props.value("autoStart"), QJsonValue(false));
+            }
+        }
         RuntimeSurface surface;
         surface.build(project);
         FakeLink link;
         QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
+        link.setConnected(false);
         surface.context()->hub()->addLink(&link);
+        link.setConnected(true);
+        QVERIFY(link.sent.isEmpty()); // connecting does not start polling
 
         // A PLC with the register map in the PyQt UI Designer repo's examples/tutorials/README.md:
         // it answers reads, coil 0 (running) on, and echoes writes as Modbus does.
@@ -556,8 +568,8 @@ class TestRuntime : public QObject
             QJsonObject widget = widgets.at(i).toObject();
             if (widget.value("type").toString() == QLatin1String("ModbusConfigCard")) {
                 QJsonObject props = widget.value("properties").toObject();
-                QCOMPARE(props.value("pollMode").toString(), QStringLiteral("轮询表")); // saved before pollMode
                 props.insert("pollMode", QStringLiteral("自动"));
+                props.insert("autoStart", true);
                 props.insert("timeout", 50);
                 widget.insert("properties", props);
                 widgets[i] = widget;
@@ -673,7 +685,7 @@ class TestRuntime : public QObject
             QJsonObject{{"id", "bus"},
                         {"type", "ModbusConfigCard"},
                         {"geometry", QJsonObject{{"x", 420}, {"y", 0}, {"w", 380}, {"h", 180}}},
-                        {"properties", QJsonObject{{"defaultPoll", 1000}}}}};
+                        {"properties", QJsonObject{{"pollMode", "自动"}, {"defaultPoll", 1000}}}}};
         FakeLink link;
         QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
         RuntimeSurface surface;
@@ -727,6 +739,60 @@ class TestRuntime : public QObject
         QCOMPARE(link.sent.size(), sent);
         QVERIFY(labelShown(card, QStringLiteral("自动 · 没有 Modbus 绑定")));
         poll->click();
+        surface.context()->hub()->removeLink(&link);
+    }
+
+    // While 自动 polls, 发送 stays enabled: the fields' request queues as a write and its result comes as a
+    // notification, the status line keeps the polling status. Without polling the status line shows it.
+    void modbusSendWorksWhileAutoPolling()
+    {
+        const auto rtu = [](const char *hex) {
+            const QByteArray pdu = QByteArray::fromHex(hex);
+            return pdu + modbusCrc(pdu);
+        };
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
+        Project project;
+        project.widgets = QJsonArray{
+            modbusDisplay("pv", 100, 0, 0),
+            QJsonObject{{"id", "bus"},
+                        {"type", "ModbusConfigCard"},
+                        {"geometry", QJsonObject{{"x", 200}, {"y", 0}, {"w", 380}, {"h", 180}}},
+                        {"properties", QJsonObject{{"pollMode", "自动"}, {"defaultPoll", 60000}, {"timeout", 50}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.show();
+        surface.context()->hub()->addLink(&link);
+        QSignalSpy notes(surface.context(), &RuntimeContext::notificationRequested);
+        QWidget *card = surface.findChild<QWidget *>(QStringLiteral("ModbusConfigCard"));
+        QVERIFY(card);
+        QPushButton *poll = buttonFor(card, QStringLiteral("轮询"));
+        QPushButton *send = buttonFor(card, QStringLiteral("发送"));
+        QVERIFY(poll && send);
+        poll->click();
+        QCOMPARE(link.sent, QList<QByteArray>{rtu("010300640001")});
+        QVERIFY(send->isEnabled());
+        send->click(); // FC03 from 0, one register: queued behind the read on the line
+        QCOMPARE(link.sent.size(), 1);
+        link.inject(rtu("010302002a"));
+        QCOMPARE(link.sent.last(), rtu("010300000001"));
+        QVERIFY(labelShown(card, QStringLiteral("自动 · 1 块 · 正常")));
+        link.inject(rtu("0103020007"));
+        QCOMPARE(notes.size(), 1);
+        QCOMPARE(notes.at(0), (QList<QVariant>{QStringLiteral("Modbus"), QStringLiteral("设备已响应"),
+                                               NotifyType::Info, 2000}));
+        QVERIFY(labelShown(card, QStringLiteral("自动 · 1 块 · 正常")));
+        send->click();
+        QTRY_COMPARE(notes.size(), 2);
+        QCOMPARE(notes.at(1), (QList<QVariant>{QStringLiteral("Modbus"), QStringLiteral("无响应（50 ms 超时）"),
+                                               NotifyType::Warning, 2000}));
+        QVERIFY(labelShown(card, QStringLiteral("自动 · 1 块 · 正常")));
+
+        poll->click(); // stopped: the status line has the result again
+        send->click();
+        link.inject(rtu("0103020007"));
+        QVERIFY(labelShown(card, QStringLiteral("设备已响应")));
+        QCOMPARE(notes.size(), 2);
         surface.context()->hub()->removeLink(&link);
     }
 
@@ -1035,7 +1101,8 @@ class TestRuntime : public QObject
                                        {"properties", QJsonObject{{"commandMode", "Modbus"}, {"sendOnEnter", false}}}},
                            QJsonObject{{"id", "bus"},
                                        {"type", "ModbusConfigCard"},
-                                       {"geometry", QJsonObject{{"x", 400}, {"y", 0}, {"w", 380}, {"h", 180}}}},
+                                       {"geometry", QJsonObject{{"x", 400}, {"y", 0}, {"w", 380}, {"h", 180}}},
+                                       {"properties", QJsonObject{{"pollMode", "自动"}}}},
                            modbusDisplay("pv", 100, 0, 0)},
                 &error),
             qPrintable(error));
