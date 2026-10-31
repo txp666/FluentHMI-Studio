@@ -2,7 +2,7 @@
   <img src="resources/logo.png" width="110" alt="FluentHMI Studio">
   <h1 align="center">FluentHMI Studio</h1>
   <p align="center">A C++ visual HMI designer for hardware engineers · built on <a href="https://github.com/txp666/FluentQtWidgets">FluentQtWidgets</a></p>
-  <p align="center">English · <a href="README.md">简体中文</a></p>
+  <p align="center">English · <a href="README.md">简体中文</a> · <a href="https://modusignal.cn/fluenthmi-studio/">Website</a> · <a href="https://modusignal.cn/pyqt-ui-designer/guide/">User guide</a></p>
 </p>
 
 FluentHMI Studio is a C++/Qt 6 rewrite of [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer): drag widgets onto a canvas, set their properties, bind them to serial, TCP or MQTT data, then export the design as a standalone app, with **no compiler needed**. Compared with the Python version, the download is smaller, it starts about twice as fast, exports take under a second, and it can update itself from inside the app (see [Compared with the Python version](#compared-with-the-python-version)).
