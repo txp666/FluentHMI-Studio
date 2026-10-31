@@ -90,7 +90,8 @@ QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject prope
                                       const QString &changed = QString());
 
 // Properties a project saved before they existed, filled in as that project meant them: a ModbusConfigCard
-// with a pollList but no pollMode polls its table (轮询表). Project::fromJson() applies it on load.
+// without pollMode polls as 0.2.0 did (pollMode 轮询表, autoStart false). Project::fromJson() applies it on
+// load; cards made in the designer get the defaults (自动, autoStart true) instead.
 QJsonObject upgradedProperties(const QString &typeName, QJsonObject properties);
 
 // Registered in builtin_widgets.cpp.

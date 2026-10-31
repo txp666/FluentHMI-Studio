@@ -871,20 +871,27 @@ void ModbusConfigCardWidget::sendFields()
     if (!request) {
         return;
     }
-    // "已发送" only means the links took it; the reply, or its absence, follows.
+    // "已发送" only means the links took it; the reply, or its absence, follows. While automatic polling
+    // has the status line, the result comes as a notification instead.
     if (!queue(*request, ModbusMaster::Priority::Write, m_manual, [this](const ModbusResult &r) { manualDone(r); },
-               true)) {
+               !m_autoPolling)) {
         stopPolling();
-        setStatus(tr("发送失败"));
+        setStatus(tr("发送失败，请检查连接"));
     }
 }
 
 void ModbusConfigCardWidget::manualDone(const ModbusResult &result)
 {
-    if (m_timer->isActive()) {
-        return; // polling has the status line now
+    const QString text = result.ok ? tr("设备已响应") : result.problem;
+    if (m_autoPolling) {
+        // Automatic polling has the status line; the request of the fields reports beside it.
+        context()->notify(QStringLiteral("Modbus"), text, result.ok ? NotifyType::Info : NotifyType::Warning, 2000);
+        return;
     }
-    setStatus(result.ok ? tr("设备已响应") : result.problem);
+    if (m_timer->isActive()) {
+        return; // the poll table has the status line now
+    }
+    setStatus(text);
 }
 
 // ----- polling -----
@@ -918,7 +925,7 @@ void ModbusConfigCardWidget::startPolling(bool automatic)
         m_timer->setTimerType(Qt::PreciseTimer); // a block's period is kept to the tick
         m_timer->start(defaultPeriod());
         m_pollButton->setText(tr("停止"));
-        m_send->setEnabled(false);
+        m_send->setEnabled(true); // its request queues as a write between two reads
         schedule();
         return;
     }
@@ -995,7 +1002,7 @@ void ModbusConfigCardWidget::tableTick()
         }
         if (request && !queue(*request, ModbusMaster::Priority::Read, m_read, {}, true)) {
             stopPolling(); // a failed write stops polling
-            setStatus(tr("发送失败"));
+            setStatus(tr("发送失败，请检查连接"));
         }
         return;
     }
@@ -1020,7 +1027,7 @@ void ModbusConfigCardWidget::sendNextInRound()
     if (!queue(request, ModbusMaster::Priority::Read, m_read,
                [this, item](const ModbusResult &result) { tableDone(item, result); }, false)) {
         stopPolling();
-        setStatus(tr("发送失败"));
+        setStatus(tr("发送失败，请检查连接"));
     }
 }
 
@@ -1094,7 +1101,7 @@ void ModbusConfigCardWidget::schedule()
     if (!queue(*request, ModbusMaster::Priority::Read, m_read,
                [this, next, plan](const ModbusResult &result) { blockDone(next, plan, result); }, false, true)) {
         stopPolling();
-        setStatus(tr("发送失败"));
+        setStatus(tr("发送失败，请检查连接"));
     }
 }
 

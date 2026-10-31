@@ -132,8 +132,9 @@ class TestProject : public QObject
         QCOMPARE(message, error);
     }
 
-    // A Modbus card saved before pollMode existed keeps polling its table; one without a table, and every
-    // card that names its mode, load as they are. mbPeriod is a whole number of ms from 0 to 60000.
+    // A Modbus card saved before pollMode existed polls as in 0.2.0: its poll table (or the request in its
+    // fields), and only after a click on 轮询, with or without a table. A card that names its mode loads as it
+    // is. mbPeriod is a whole number of ms from 0 to 60000.
     void modbusCardsKeepTheirPollMode()
     {
         const QByteArray json = R"json({"widgets":[
@@ -141,8 +142,7 @@ class TestProject : public QObject
             {"type":"GroupBox","id":"box","children":[
                 {"type":"ModbusConfigCard","id":"nested","properties":{"pollList":"1,1,0,4"}}]},
             {"type":"ModbusConfigCard","id":"plain","properties":{"title":"Modbus"}},
-            {"type":"ModbusConfigCard","id":"chosen","properties":{"pollMode":"自动","autoStart":false,
-                "pollList":"1,3,0,2"}},
+            {"type":"ModbusConfigCard","id":"chosen","properties":{"pollMode":"自动","pollList":"1,3,0,2"}},
             {"type":"NumericDisplay","id":"pv",
                 "binding":{"parseMode":"Modbus","mbArea":"保持寄存器","mbPeriod":250}}]})json";
         Project project;
@@ -152,12 +152,14 @@ class TestProject : public QObject
         const auto props = [&project](int index) {
             return project.widgets.at(index).toObject().value("properties").toObject();
         };
-        QCOMPARE(props(0).value("pollMode").toString(), QStringLiteral("轮询表"));
-        QCOMPARE(project.widgets.at(1).toObject().value("children").toArray().at(0).toObject().value("properties")
-                     .toObject().value("pollMode").toString(),
-                 QStringLiteral("轮询表"));
-        QVERIFY(!props(2).contains("pollMode")); // the default, 自动
+        const QJsonObject nested =
+            project.widgets.at(1).toObject().value("children").toArray().at(0).toObject().value("properties").toObject();
+        for (const QJsonObject &legacy : {props(0), nested, props(2)}) {
+            QCOMPARE(legacy.value("pollMode").toString(), QStringLiteral("轮询表"));
+            QCOMPARE(legacy.value("autoStart"), QJsonValue(false));
+        }
         QCOMPARE(props(3).value("pollMode").toString(), QStringLiteral("自动"));
+        QVERIFY(!props(3).contains("autoStart")); // the default, true
         QVERIFY(Project::validate(project.toJson(), &error));
     }
 
