@@ -1423,6 +1423,7 @@ class TestRuntime : public QObject
         auto *period = qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("采集周期(ms)")));
         QVERIFY(period);
         QCOMPARE(period->maximum(), 60000);
+        QCOMPARE(period->toolTip(), QStringLiteral("0 = 用默认周期（500 ms，或 Modbus 卡片的轮询 ms）"));
         period->setValue(250);
         QCOMPARE(scene.findItem(QStringLiteral("pv"))->binding().value("mbPeriod").toInt(), 250);
     }

@@ -851,7 +851,7 @@ void PropertyEditor::buildBindingForm()
     add("mbSlaveFilter", tr("从站过滤"), spin(-1, 247, value("mbSlaveFilter", -1).toInt()));
     auto *period = spin(0, 60000, value("mbPeriod", 0).toInt());
     add("mbPeriod", tr("采集周期(ms)"), period);
-    const QString periodTip = tr("0 = 用 Modbus 卡片的轮询 ms");
+    const QString periodTip = tr("0 = 用默认周期（500 ms，或 Modbus 卡片的轮询 ms）");
     period->setToolTip(periodTip);
     m_rows.value(QStringLiteral("binding.mbPeriod")).first->setToolTip(periodTip);
     add("expression", tr("转换表达式"), line(value("expression", QString()).toString(), tr("如 value * 0.1")));
