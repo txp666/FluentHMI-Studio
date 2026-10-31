@@ -326,7 +326,7 @@ QList<WidgetMeta> chartWidgets()
               str(QStringLiteral("curveFrameTail"), QStringLiteral("帧尾(HEX)"), QString()),
               choice(QStringLiteral("curveMbArea"), QStringLiteral("寄存器区"), ModbusArea::HoldingRegisters,
                      ModbusArea::options()),
-              integer(QStringLiteral("curveRegIndex"), QStringLiteral("寄存器索引/地址"), 0, 0, 65535),
+              integer(QStringLiteral("curveRegIndex"), QStringLiteral("寄存器地址"), 0, 0, 65535),
               choice(QStringLiteral("curveMbDataType"), QStringLiteral("数据类型(MB)"), QStringLiteral("uint16"),
                      mbTypes),
               choice(QStringLiteral("curveMbRegOrder"), QStringLiteral("寄存器序(MB)"), QStringLiteral("大端(AB CD)"),

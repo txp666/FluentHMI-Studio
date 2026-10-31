@@ -260,7 +260,7 @@
 - `curveFrameHeader`（帧头(HEX)，文本）默认 `""`
 - `curveFrameTail`（帧尾(HEX)，文本）默认 `""`
 - `curveMbArea`（寄存器区，选项）默认 `"保持寄存器"`，可选 `"保持寄存器"` `"输入寄存器"` `"线圈"` `"离散输入"`
-- `curveRegIndex`（寄存器索引/地址，整数）默认 `0`，范围 0–65535
+- `curveRegIndex`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `curveMbDataType`（数据类型(MB)，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `curveMbRegOrder`（寄存器序(MB)，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
 - `curveMbFcFilter`（功能码过滤，整数）默认 `-1`，范围 -1–255
