@@ -357,7 +357,7 @@ QList<WidgetMeta> compositeWidgets()
 {
     return {
         meta(QStringLiteral("SerialConfigCard"), QStringLiteral("串口配置卡片"), WidgetCategory::Composite,
-             QStringLiteral("connect"), 360, 340,
+             QStringLiteral("connect"), 360, 320,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("串口配置")),
               choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
                      {QStringLiteral("完整"), QStringLiteral("简洁"), QStringLiteral("单行")}),
@@ -380,7 +380,7 @@ QList<WidgetMeta> compositeWidgets()
                       QStringLiteral("DTR/DSR")})},
              200, 50),
         meta(QStringLiteral("TcpConfigCard"), QStringLiteral("TCP 配置卡片"), WidgetCategory::Composite,
-             QStringLiteral("globe"), 360, 290,
+             QStringLiteral("globe"), 360, 250,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("TCP 配置")),
               choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
                      {QStringLiteral("完整"), QStringLiteral("简洁")}),
@@ -393,7 +393,7 @@ QList<WidgetMeta> compositeWidgets()
               parserConfig()},
              240, 50),
         meta(QStringLiteral("MqttConfigCard"), QStringLiteral("MQTT 配置卡片"), WidgetCategory::Composite,
-             QStringLiteral("cloud"), 380, 430,
+             QStringLiteral("cloud"), 380, 390,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("MQTT 配置")),
               choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
                      {QStringLiteral("完整"), QStringLiteral("简洁")}),

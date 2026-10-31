@@ -25,6 +25,8 @@
 #include <QtTest/QtTest>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QGridLayout>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPlainTextEdit>
@@ -105,6 +107,17 @@ void tick(QWidget *card)
     auto *timer = card->findChild<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
     QVERIFY(timer && timer->isActive());
     QMetaObject::invokeMethod(timer, "timeout");
+}
+
+// The grid of a link card's field rows.
+QGridLayout *fieldGrid(QWidget *card)
+{
+    for (int i = 0; i < card->layout()->count(); ++i) {
+        if (auto *grid = qobject_cast<QGridLayout *>(card->layout()->itemAt(i)->layout())) {
+            return grid;
+        }
+    }
+    return nullptr;
 }
 
 QJsonObject modbusDisplay(const char *id, int address, int period, int tab)
@@ -794,6 +807,164 @@ class TestRuntime : public QObject
         QVERIFY(labelShown(card, QStringLiteral("设备已响应")));
         QCOMPARE(notes.size(), 2);
         surface.context()->hub()->removeLink(&link);
+    }
+
+    void linkCardsFitTheirRows_data()
+    {
+        QTest::addColumn<QString>("type");
+        QTest::addColumn<QString>("mode");
+        for (const char *mode : {"完整", "简洁", "单行"}) {
+            QTest::addRow("serial %s", mode) << QStringLiteral("SerialConfigCard") << QString::fromUtf8(mode);
+        }
+        for (const char *type : {"TcpConfigCard", "MqttConfigCard"}) {
+            for (const char *mode : {"完整", "简洁"}) {
+                QTest::addRow("%s %s", type, mode) << QString::fromLatin1(type) << QString::fromUtf8(mode);
+            }
+        }
+    }
+
+    // A link card has one button, text only and of fixed width, at the right end of its last visible row
+    // (or of the single-row strip). The card is never shorter than its rows: their height fits the default
+    // size, and asked for 60 px the card takes that height and its rows still do not overlap.
+    void linkCardsFitTheirRows()
+    {
+        QFETCH(QString, type);
+        QFETCH(QString, mode);
+        std::unique_ptr<HmiWidget> card(createHmiWidget(type, QJsonObject{{"displayMode", mode}}));
+        QVERIFY(card);
+        card->show();
+        const int minimum = card->minimumSizeHint().height();
+        qInfo().noquote() << type << mode << "minimumSizeHint" << card->minimumSizeHint().width() << "x" << minimum;
+        QVERIFY2(minimum <= card->meta().defaultHeight, qPrintable(QString::number(minimum)));
+        if (mode == QStringLiteral("单行")) {
+            QVERIFY2(minimum <= 48, qPrintable(QString::number(minimum))); // the strips of the examples: 48 and 50 px
+        }
+        QCOMPARE(card->minimumHeight(), minimum);
+
+        QList<QPushButton *> buttons;
+        for (QPushButton *button : card->findChildren<QPushButton *>()) {
+            if (button->text() == QStringLiteral("连接")) {
+                buttons.append(button);
+            }
+        }
+        QCOMPARE(buttons.size(), 1);
+        QPushButton *button = buttons.first();
+        QVERIFY(button->icon().isNull());
+        QCOMPARE(button->minimumWidth(), button->maximumWidth());
+        QGridLayout *grid = fieldGrid(card.get());
+        QVERIFY(grid);
+        QLayout *owner = nullptr;
+        int ownerRow = -1;
+        int lastRow = -1;
+        for (int i = 0; i < grid->count(); ++i) {
+            int row = 0, column = 0, rows = 0, columns = 0;
+            grid->getItemPosition(i, &row, &column, &rows, &columns);
+            lastRow = std::max(lastRow, row);
+            QLayoutItem *item = grid->itemAt(i);
+            if (item->widget() == button) {
+                owner = grid;
+                ownerRow = row;
+            } else if (item->layout() && item->layout()->indexOf(button) >= 0) {
+                owner = item->layout();
+                ownerRow = row;
+            }
+        }
+        QVERIFY(owner);
+        QCOMPARE(ownerRow, lastRow);
+        if (mode == QStringLiteral("单行")) {
+            QCOMPARE(owner, grid);
+        } else {
+            auto *row = qobject_cast<QHBoxLayout *>(owner); // the last field, stretching, then the button
+            QVERIFY(row);
+            QCOMPARE(row->count(), 2);
+            QCOMPARE(row->indexOf(button), 1);
+            QCOMPARE(row->stretch(0), 1);
+            QCOMPARE(row->stretch(1), 0);
+        }
+
+        card->resize(card->meta().defaultWidth, 60);
+        QCOMPARE(card->height(), std::max(60, minimum));
+        card->layout()->activate();
+        QMap<int, QRect> rows;
+        for (int i = 0; i < grid->count(); ++i) {
+            int row = 0, column = 0, rowSpan = 0, columnSpan = 0;
+            grid->getItemPosition(i, &row, &column, &rowSpan, &columnSpan);
+            rows[row] |= grid->itemAt(i)->geometry();
+        }
+        QLayoutItem *header = card->layout()->itemAt(0);
+        QRect previous = header->isEmpty() ? QRect() : header->geometry();
+        for (const QRect &rect : std::as_const(rows)) {
+            QVERIFY2(!previous.isValid() || rect.top() > previous.bottom(),
+                     qPrintable(QStringLiteral("a row at y %1 overlaps the one ending at %2")
+                                    .arg(rect.top())
+                                    .arg(previous.bottom())));
+            previous = rect;
+        }
+        QVERIFY(previous.bottom() < card->height());
+    }
+
+    // The designer keeps a link card at least as tall as its rows: a smaller height takes the minimum,
+    // fewer rows (简洁) lower the minimum and keep the height, more rows raise it, and a card saved shorter
+    // grows on opening. The single-row serial strip of the examples keeps its 50 px.
+    void designerKeepsLinkCardsTallEnough()
+    {
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets(
+                     QJsonArray{QJsonObject{{"id", "tcp"},
+                                            {"type", "TcpConfigCard"},
+                                            {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 360}, {"h", 250}}}},
+                                QJsonObject{{"id", "old"},
+                                            {"type", "TcpConfigCard"},
+                                            {"geometry", QJsonObject{{"x", 0}, {"y", 300}, {"w", 360}, {"h", 120}}}}},
+                     &error),
+                 qPrintable(error));
+        CanvasItem *tcp = scene.findItem(QStringLiteral("tcp"));
+        QVERIFY(tcp);
+        const qreal full = tcp->minimumHeight();
+        QVERIFY(full > 100 && full <= 250);
+        QCOMPARE(scene.findItem(QStringLiteral("old"))->size().height(), full);
+        QCOMPARE(scene.widgetsJson().at(1).toObject().value("geometry").toObject().value("h").toDouble(), full);
+
+        PropertyEditor editor;
+        editor.setScene(&scene);
+        editor.resize(360, 1400);
+        editor.showItem(tcp);
+        editor.show();
+        QApplication::processEvents();
+        auto *height = qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("高度")));
+        QVERIFY(height);
+        QCOMPARE(height->minimum(), int(std::ceil(full)));
+        height->setValue(100);
+        QCOMPARE(tcp->size().height(), full);
+        tcp->setSize(QSizeF(360, 100)); // as the resize handles do
+        QCOMPARE(tcp->size().height(), full);
+
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("显示模式")));
+        QVERIFY(mode);
+        mode->setCurrentText(QStringLiteral("简洁"));
+        const qreal brief = tcp->minimumHeight();
+        QVERIFY(brief < full);
+        QCOMPARE(tcp->size().height(), full);
+        QCOMPARE(height->minimum(), int(std::ceil(brief)));
+        tcp->setSize(QSizeF(360, brief));
+        mode->setCurrentText(QStringLiteral("完整"));
+        QCOMPARE(tcp->size().height(), full);
+        QCOMPARE(height->value(), int(std::ceil(full)));
+
+        Project project;
+        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/04-环境监测站.uidp"), &project, &error),
+                 qPrintable(error));
+        DesignScene example;
+        QVERIFY2(example.loadWidgets(project.widgets, &error), qPrintable(error));
+        bool found = false;
+        for (CanvasItem *item : example.topLevelItems()) {
+            if (item->typeName() == QLatin1String("SerialConfigCard")) {
+                QCOMPARE(item->size().height(), 50.0);
+                found = true;
+            }
+        }
+        QVERIFY(found);
     }
 
     // A link reports each whole frame of a hex parser as one raw unit, followed by its

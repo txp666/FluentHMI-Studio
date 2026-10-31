@@ -96,8 +96,10 @@ CanvasItem *CanvasItem::fromJson(const QJsonObject &data, const QString &assetBa
     item->m_tabIndex = data.value(QStringLiteral("tabIndex")).toInt(0);
     const QJsonObject geo = data.value(QStringLiteral("geometry")).toObject();
     item->setPos(geo.value(QStringLiteral("x")).toDouble(0), geo.value(QStringLiteral("y")).toDouble(0));
+    const qreal height = geo.value(QStringLiteral("h")).toDouble(item->m_meta->defaultHeight);
+    // A link card saved shorter than its rows would show them on top of each other: it grows.
     item->setSize(QSizeF(geo.value(QStringLiteral("w")).toDouble(item->m_meta->defaultWidth),
-                         geo.value(QStringLiteral("h")).toDouble(item->m_meta->defaultHeight)),
+                         item->isLinkCard() ? std::max(height, item->rowsHeight()) : height),
                   false);
     for (const QJsonValue &value : data.value(QStringLiteral("children")).toArray()) {
         const QJsonObject childData = value.toObject();
@@ -168,13 +170,33 @@ void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
     if (isContainer()) {
         relayoutChildren();
     }
+    if (isLinkCard() && m_size.height() < minimumHeight()) {
+        setSize(QSizeF(m_size.width(), minimumHeight())); // more rows (displayMode) need more height
+    }
     update();
+}
+
+bool CanvasItem::isLinkCard() const
+{
+    return typeName() == QLatin1String("SerialConfigCard") || typeName() == QLatin1String("TcpConfigCard") ||
+           typeName() == QLatin1String("MqttConfigCard");
+}
+
+qreal CanvasItem::rowsHeight() const
+{
+    return m_widget->minimumSizeHint().height();
+}
+
+qreal CanvasItem::minimumHeight() const
+{
+    const qreal height = m_meta->minHeight;
+    return isLinkCard() ? std::max(height, rowsHeight()) : height;
 }
 
 void CanvasItem::setSize(const QSizeF &size, bool enforceMinimum)
 {
     const QSizeF bounded = enforceMinimum ? QSizeF(std::max<qreal>(size.width(), m_meta->minWidth),
-                                                   std::max<qreal>(size.height(), m_meta->minHeight))
+                                                   std::max<qreal>(size.height(), minimumHeight()))
                                           : QSizeF(std::max<qreal>(size.width(), 1), std::max<qreal>(size.height(), 1));
     if (bounded == m_size) {
         return;
@@ -314,7 +336,7 @@ void CanvasItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
     QPointF p = m_pressPos;
     QSizeF s = m_pressSize;
     const qreal minW = m_meta->minWidth;
-    const qreal minH = m_meta->minHeight;
+    const qreal minH = minimumHeight();
     if (m_resizeHandle & Right) {
         s.setWidth(std::max(minW, snap(m_pressPos.x() + m_pressSize.width() + delta.x()) - m_pressPos.x()));
     }

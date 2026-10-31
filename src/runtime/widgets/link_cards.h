@@ -31,8 +31,8 @@ class TcpClientLink;
 class TcpServerLink;
 
 // Common frame of the cards that own a link: title, a status line, the parser choice
-// and a connect button. While attached, the card owns its link and registers it with
-// the hub; the link closes when the card detaches.
+// and one button that reads 连接, 断开 or 取消. While attached, the card owns its link and
+// registers it with the hub; the link closes when the card detaches.
 class LinkCardBase : public HmiWidget
 {
   public:
@@ -48,16 +48,25 @@ class LinkCardBase : public HmiWidget
     void addField(const QString &label, QWidget *field);
     // Empties the field grid; the fields themselves stay owned by the card.
     void clearFields();
-    // The connect button sits under the fields, or at the end of a single-row grid.
-    void placeConnectButton(bool inGrid, int column = 0);
+    // Puts the button at the right end of the last field row, its field still stretching, then
+    // keeps the card from getting shorter than its rows.
+    void finishFields();
+    // The button at `column` of a single-row strip, then the same minimum height.
+    void finishStrip(int column);
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_status = nullptr;
     FluentQt::ComboBox *m_parser = nullptr;
     FluentQt::PrimaryPushButton *m_connect = nullptr;
     QGridLayout *m_grid = nullptr;
-    QHBoxLayout *m_buttonRow = nullptr;
     QList<QWidget *> m_fieldLabels;
+
+  private:
+    // The card never gets shorter than its visible rows need, so they never overlap.
+    void updateMinimumHeight();
+
+    QWidget *m_lastField = nullptr;
+    int m_lastRow = -1;
 };
 
 class SerialConfigCardWidget : public LinkCardBase

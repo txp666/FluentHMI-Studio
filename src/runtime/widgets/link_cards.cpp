@@ -75,14 +75,16 @@ LinkCardBase::LinkCardBase(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
     m_grid->setColumnStretch(1, 1);
     m_parser = comboOf(this, enumOptions(meta, "defaultParser"));
     m_connect = new FluentQt::PrimaryPushButton(this);
-    m_connect->setText(tr("连接"));
-    m_buttonRow = new QHBoxLayout;
-    m_buttonRow->addStretch();
-    m_buttonRow->addWidget(m_connect);
+    // Text only, as wide as the widest of its texts, so the row does not move when it changes.
+    int width = 0;
+    for (const QString &text : {tr("连接"), tr("断开"), tr("取消")}) {
+        m_connect->setText(text);
+        width = std::max(width, m_connect->sizeHint().width());
+    }
+    m_connect->setFixedWidth(width);
     layout->addLayout(header);
     layout->addLayout(m_grid);
     layout->addStretch();
-    layout->addLayout(m_buttonRow);
     setConnectedUi(false, tr("未连接"));
 }
 
@@ -142,30 +144,61 @@ void LinkCardBase::addField(const QString &label, QWidget *field)
     caption->show();
     field->show();
     m_fieldLabels.append(caption);
+    m_lastField = field;
+    m_lastRow = row;
 }
 
 void LinkCardBase::clearFields()
 {
-    while (QLayoutItem *item = m_grid->takeAt(0)) {
+    const auto release = [this](QLayoutItem *item) {
         if (QWidget *widget = item->widget(); widget && widget != m_connect) {
             widget->hide();
+        }
+    };
+    while (QLayoutItem *item = m_grid->takeAt(0)) {
+        if (QLayout *row = item->layout()) { // the last row: its field and the button
+            while (QLayoutItem *inner = row->takeAt(0)) {
+                release(inner);
+                delete inner;
+            }
+        } else {
+            release(item);
         }
         delete item;
     }
     qDeleteAll(m_fieldLabels);
     m_fieldLabels.clear();
+    m_lastField = nullptr;
+    m_lastRow = -1;
 }
 
-void LinkCardBase::placeConnectButton(bool inGrid, int column)
+void LinkCardBase::finishFields()
 {
-    m_grid->removeWidget(m_connect);
-    m_buttonRow->removeWidget(m_connect);
-    if (inGrid) {
-        m_grid->addWidget(m_connect, 0, column);
-    } else {
-        m_buttonRow->addWidget(m_connect);
+    if (m_lastField) {
+        m_grid->removeWidget(m_lastField);
+        auto *row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(m_grid->horizontalSpacing());
+        row->addWidget(m_lastField, 1);
+        row->addWidget(m_connect);
+        m_grid->addLayout(row, m_lastRow, 1);
     }
     m_connect->show();
+    updateMinimumHeight();
+}
+
+void LinkCardBase::finishStrip(int column)
+{
+    m_grid->addWidget(m_connect, 0, column);
+    m_connect->show();
+    updateMinimumHeight();
+}
+
+void LinkCardBase::updateMinimumHeight()
+{
+    layout()->invalidate();
+    layout()->activate(); // measures every row afresh
+    setMinimumHeight(minimumSizeHint().height());
 }
 
 // ---------------------------------------------------------------------------
@@ -226,11 +259,10 @@ void SerialConfigCardWidget::apply()
         m_grid->addWidget(m_baud, 0, 1);
         m_portRow->show();
         m_baud->show();
-        placeConnectButton(true, 2);
+        finishStrip(2);
         return;
     }
     layout->setContentsMargins(14, 10, 14, 12);
-    placeConnectButton(false);
     addField(tr("串口"), m_portRow);
     addField(tr("波特率"), m_baud);
     if (mode != QStringLiteral("简洁")) {
@@ -240,6 +272,7 @@ void SerialConfigCardWidget::apply()
         addField(tr("流控制"), m_flow);
         addField(tr("解析模式"), m_parser);
     }
+    finishFields();
 }
 
 void SerialConfigCardWidget::refreshPorts()
@@ -337,6 +370,7 @@ void TcpConfigCardWidget::apply()
     if (text("displayMode") != QStringLiteral("简洁")) {
         addField(tr("解析模式"), m_parser);
     }
+    finishFields();
 }
 
 void TcpConfigCardWidget::onAttached()
@@ -493,6 +527,7 @@ void MqttConfigCardWidget::apply()
         addField(QStringLiteral("QoS"), m_qosRow);
         addField(tr("解析模式"), m_parser);
     }
+    finishFields();
 }
 
 void MqttConfigCardWidget::onAttached()

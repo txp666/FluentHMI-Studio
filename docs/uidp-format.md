@@ -119,7 +119,7 @@ FluentHMIStudio --export <输出目录> motor.uidp
 | `TcpConfigCard` TCP | `defaultMode`（`"客户端"` / `"服务端"`）、`defaultHost`、`defaultPort` |
 | `MqttConfigCard` MQTT | `defaultHost`、`defaultPort`、`defaultSubscribe`（可用 `+` `#` 通配）、`defaultPublish`、`defaultUsername`、`defaultPassword`、`defaultQos`（`"0"` `"1"` `"2"`） |
 
-- `displayMode` 是 `"完整"`（默认）时，卡片不要比默认尺寸矮：串口 360×340、TCP 360×290、MQTT 380×430。矮了字段会挤在一起，地方不够就设成 `"简洁"`。控件参考里的「最小」尺寸是简洁模式下的下限。
+- `displayMode` 是 `"完整"`（默认）时，卡片不要比默认尺寸矮：串口 360×320、TCP 360×250、MQTT 380×390。写得比字段需要的高度矮时，卡片按字段需要的高度显示（Studio 打开时也会把它抬高），地方不够就设成 `"简洁"`。控件参考里的「最小」尺寸是串口单行模式用的下限。
 - 每张卡片都有 `defaultParser`：`"项目设置"`（默认，用工程的 `serial.parser`）、`"line"`、`"hex"`、`"modbus"`、`"modbus_tcp"`、`"modbus_ascii"`。不同设备帧格式不同时，在卡片上分别设置。
 - 卡片的 `parserConfig` 是这张卡片自己的帧格式（对象，键和 `serial.parserConfig` 一样），`defaultParser` 不是 `"项目设置"` 时生效；不写或写 `{}` 时，卡片的解析模式和工程相同就沿用工程的 `parserConfig`，不同就用默认值。
 - MQTT 每条消息算一帧，按这条链路的解析模式解析；用 `line` 解析时消息末尾不需要行结束符。消息只有一个数值时（比如主题 `sensor/temp` 收到 `25.3`），还可以直接用主题名 `sensor/temp` 当键绑定。
@@ -225,4 +225,4 @@ FluentHMIStudio --export <输出目录> motor.uidp
 - 布局容器：`HBoxLayout` 水平布局（300×80）、`VBoxLayout` 垂直布局（200×200）、`FlexLayout` 弹性布局（400×200）、`GroupBox` 分组框（280×180）、`TabWidget` 选项卡（350×250）、`Separator` 分割线（200×2）、`CardContainer` 卡片容器（300×200）
 - 显示控件：`LEDIndicator` LED指示灯（140×30）、`NumericDisplay` 数值显示（160×90）、`ProgressBar` 进度条（250×20）、`ImageDisplay` 图片显示（200×150）
 - 图表控件：`RealtimeChart` 实时曲线（400×280）、`GaugeMeter` 仪表盘（180×180）、`DataTable` 数据表格（350×250）
-- 复合卡片：`SerialConfigCard` 串口配置卡片（360×340）、`TcpConfigCard` TCP 配置卡片（360×290）、`MqttConfigCard` MQTT 配置卡片（380×430）、`ModbusConfigCard` Modbus 配置卡片（380×180）、`DataSendCard` 数据发送卡片（350×140）、`DataRecvCard` 数据接收卡片（350×250）、`LogBox` 日志显示框（400×200）、`ProgressRingDisplay` 进度环（120×130）
+- 复合卡片：`SerialConfigCard` 串口配置卡片（360×320）、`TcpConfigCard` TCP 配置卡片（360×250）、`MqttConfigCard` MQTT 配置卡片（380×390）、`ModbusConfigCard` Modbus 配置卡片（380×180）、`DataSendCard` 数据发送卡片（350×140）、`DataRecvCard` 数据接收卡片（350×250）、`LogBox` 日志显示框（400×200）、`ProgressRingDisplay` 进度环（120×130）
