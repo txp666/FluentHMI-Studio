@@ -69,6 +69,11 @@ LinkCardBase::LinkCardBase(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
     m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     header->addWidget(m_title);
     header->addWidget(m_status, 1);
+    // A single-row strip has no header: this one sits at its right end, after the button, and says the same.
+    // Left-aligned, so a status too long for the strip loses the end of the poller's part, never the start.
+    m_stripStatus = new FluentQt::CaptionLabel(this);
+    m_stripStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_stripStatus->hide();
     m_grid = new QGridLayout;
     m_grid->setHorizontalSpacing(10);
     m_grid->setVerticalSpacing(6);
@@ -157,8 +162,10 @@ void LinkCardBase::setConnectedUi(bool connected, const QString &status)
     m_connection = status;
     m_connect->setText(connected ? tr("断开") : tr("连接"));
     // The poller's status keeps the colour of a connection: its text says when a block fails.
-    m_status->setTextColor(connected ? QColor(0x10, 0x7C, 0x10) : QColor(0x80, 0x80, 0x80),
-                           connected ? QColor(0x6C, 0xCB, 0x5F) : QColor(0xA0, 0xA0, 0xA0));
+    for (FluentQt::CaptionLabel *label : {m_status, m_stripStatus}) {
+        label->setTextColor(connected ? QColor(0x10, 0x7C, 0x10) : QColor(0x80, 0x80, 0x80),
+                            connected ? QColor(0x6C, 0xCB, 0x5F) : QColor(0xA0, 0xA0, 0xA0));
+    }
     showStatus();
 }
 
@@ -166,18 +173,25 @@ void LinkCardBase::showStatus()
 {
     QString text = m_connection;
     QString toolTip;
-    // Never live while constructing, so currentLink() is only called on a whole card.
+    bool polling = false;
+    // Never live while constructing, so currentLink() is only called on a whole card. A link that cannot
+    // send (a listening server without a device) is not polled, so it shows none of the poller's status.
     if (isLive() && m_connected) {
         const Link *link = currentLink();
         const ModbusPoller *poller = context()->modbusPoller();
-        if (link && link->isConnected() && link->parsesModbus() && !poller->status().isEmpty() &&
+        if (link && link->isConnected() && link->parsesModbus() && link->canSend() && !poller->status().isEmpty() &&
             !poller->isWaiting()) {
             text += QStringLiteral(" · ") + poller->status();
             toolTip = poller->blocks().isEmpty() ? text : poller->toolTip();
+            polling = true;
         }
     }
-    m_status->setText(text);
-    m_status->setToolTip(toolTip);
+    for (FluentQt::CaptionLabel *label : {m_status, m_stripStatus}) {
+        label->setText(text);
+        label->setToolTip(toolTip);
+    }
+    // In the strip the poller's part may shrink away, the connection never; otherwise as wide as its text.
+    m_stripStatus->setMinimumWidth(polling ? m_stripStatus->fontMetrics().horizontalAdvance(m_connection) : 0);
 }
 
 void LinkCardBase::addField(const QString &label, QWidget *field)
@@ -303,8 +317,10 @@ void SerialConfigCardWidget::apply()
         layout->setContentsMargins(8, 4, 8, 4);
         m_grid->addWidget(m_portRow, 0, 0);
         m_grid->addWidget(m_baud, 0, 1);
+        m_grid->addWidget(m_stripStatus, 0, 3);
         m_portRow->show();
         m_baud->show();
+        m_stripStatus->show();
         finishStrip(2);
         return;
     }

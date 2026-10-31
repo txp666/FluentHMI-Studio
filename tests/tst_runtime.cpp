@@ -19,6 +19,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QScopeGuard>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QTimer>
 #include <QtGui/QImage>
@@ -38,6 +39,12 @@
 #include <QtWidgets/QTextEdit>
 
 #include <tuple>
+
+#ifdef Q_OS_UNIX
+#include <fcntl.h>
+#include <stdlib.h>
+#include <unistd.h>
+#endif
 
 using namespace fhmi;
 
@@ -764,9 +771,10 @@ class TestRuntime : public QObject
         click(2, "断开");
     }
 
-    // A listening card that parses Modbus shows no 等待连接 while it has no device: only its own state. Once
-    // one connects, the poller's status follows the device count; without Modbus bindings that is
-    // 没有 Modbus 绑定, which is the tooltip too, there being no blocks.
+    // A listening card that parses Modbus cannot send while it has no device, so it is not polled and shows
+    // only its own state: no 等待连接, and nothing of the poller's while another Modbus link keeps the poller
+    // going. Once a device connects, the poller's status follows the device count (without Modbus bindings
+    // 没有 Modbus 绑定, which is the tooltip too, there being no blocks); when it leaves, it goes again.
     void listeningLinkCardShowsThePolling()
     {
         quint16 port = 0;
@@ -784,13 +792,21 @@ class TestRuntime : public QObject
         RuntimeSurface surface;
         surface.build(project);
         surface.show();
+        ModbusPoller *poller = surface.context()->modbusPoller();
         QWidget *card = surface.findChild<QWidget *>(QStringLiteral("TcpConfigCard"));
         QVERIFY(card);
         buttonFor(card, QStringLiteral("连接"))->click();
         const QString listening = QStringLiteral("TCP 服务端 :%1").arg(port);
         QVERIFY2(labelShown(card, listening), qPrintable(labelTexts(card).join(QLatin1Char('|'))));
         QCOMPARE(labelWith(card, listening)->toolTip(), QString());
-        QVERIFY(surface.context()->modbusPoller()->isWaiting());
+        QVERIFY(poller->isWaiting());
+
+        FakeLink other; // another Modbus link: the poller is no longer waiting
+        QVERIFY(other.setParser(QStringLiteral("modbus_tcp"), {}));
+        surface.context()->hub()->addLink(&other);
+        QCOMPARE(poller->status(), QStringLiteral("没有 Modbus 绑定"));
+        QVERIFY(labelShown(card, listening)); // no device: still nothing of the poller's
+        QCOMPARE(labelWith(card, listening)->toolTip(), QString());
 
         QTcpSocket device;
         device.connectToHost(QHostAddress::LocalHost, port);
@@ -798,10 +814,104 @@ class TestRuntime : public QObject
         QTRY_VERIFY(labelShown(card, polling));
         QCOMPARE(labelWith(card, polling)->toolTip(), polling);
         device.disconnectFromHost();
-        QTRY_VERIFY(labelShown(card, listening + QStringLiteral(" · 0 台设备")));
+        const QString left = listening + QStringLiteral(" · 0 台设备");
+        QTRY_VERIFY(labelShown(card, left));
+        QCOMPARE(labelWith(card, left)->toolTip(), QString());
+        QCOMPARE(poller->status(), QStringLiteral("没有 Modbus 绑定")); // the other link keeps it going
+        surface.context()->hub()->removeLink(&other);
         buttonFor(card, QStringLiteral("断开"))->click();
         QVERIFY(labelShown(card, QStringLiteral("未连接")));
     }
+
+#ifdef Q_OS_UNIX
+    // A serial card in 单行 mode shows its status at the right end of the strip, after the button: the same
+    // text and tooltip as the status line it has in the other modes, the poller's status included. The
+    // port is a pseudo-terminal, read and answered as an RTU device.
+    void serialStripShowsThePolling()
+    {
+        const int master = posix_openpt(O_RDWR | O_NOCTTY);
+        QVERIFY(master >= 0);
+        const auto closeMaster = qScopeGuard([master]() { ::close(master); });
+        QVERIFY(grantpt(master) == 0 && unlockpt(master) == 0);
+        const QString pty = QString::fromLocal8Bit(ptsname(master));
+        fcntl(master, F_SETFL, fcntl(master, F_GETFL) | O_NONBLOCK);
+        QByteArray received;
+        const auto readRequests = [master, &received]() {
+            char buffer[256];
+            for (qint64 n; (n = ::read(master, buffer, sizeof buffer)) > 0;) {
+                received.append(buffer, n);
+            }
+            return received.size();
+        };
+
+        Project project;
+        project.widgets = QJsonArray{
+            modbusDisplay("pv", 100, 0, 0),
+            QJsonObject{{"id", "uart"},
+                        {"type", "SerialConfigCard"},
+                        {"geometry", QJsonObject{{"x", 0}, {"y", 300}, {"w", 860}, {"h", 50}}},
+                        {"properties", QJsonObject{{"displayMode", "单行"}, {"defaultParser", "modbus"}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.resize(900, 400);
+        surface.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&surface));
+        qint64 now = 0;
+        surface.context()->setClock([&now]() { return now; });
+        QSignalSpy notes(surface.context(), &RuntimeContext::notificationRequested);
+        QWidget *card = surface.findChild<QWidget *>(QStringLiteral("SerialConfigCard"));
+        QVERIFY(card);
+        QLabel *strip = labelWith(card, QStringLiteral("未连接"));
+        QVERIFY(strip); // the header's own status line is hidden in a strip
+        QPushButton *button = buttonFor(card, QStringLiteral("连接"));
+        QVERIFY(button);
+        QVERIFY2(strip->geometry().left() > button->geometry().right(),
+                 qPrintable(QStringLiteral("status at %1, button ending at %2")
+                                .arg(strip->geometry().left())
+                                .arg(button->geometry().right())));
+        QLabel *header = nullptr;
+        for (QLabel *label : card->findChildren<QLabel *>()) {
+            if (label != strip && label->text() == strip->text()) {
+                header = label;
+            }
+        }
+        QVERIFY(header && !header->isVisible());
+
+        FluentQt::ComboBox *port = nullptr;
+        for (auto *combo : card->findChildren<FluentQt::ComboBox *>()) {
+            if (combo->placeholderText() == QStringLiteral("选择串口")) {
+                port = combo;
+            }
+        }
+        QVERIFY(port);
+        port->addItem(pty);
+        port->setCurrentText(pty);
+        button->click();
+        if (!notes.isEmpty()) {
+            QSKIP(qPrintable(QStringLiteral("this system does not open a pseudo-terminal as a serial port: %1")
+                                 .arg(notes.first().at(1).toString())));
+        }
+        const QString connection = pty + QStringLiteral(" @ 115200");
+        const QString blockTip = QStringLiteral("从站 1 · 功能码 3 · 地址 100–100 · 周期 500 ms");
+        QCOMPARE(strip->text(), connection + QStringLiteral(" · 1 块 · 轮询中"));
+        QCOMPARE(strip->toolTip(), blockTip);
+        QCOMPARE(header->text(), strip->text());
+        QCOMPARE(header->toolTip(), strip->toolTip());
+        QTRY_COMPARE(readRequests(), 8);
+        const QByteArray request = QByteArray::fromHex("010300640001");
+        QCOMPARE(received, request + modbusCrc(request));
+        const QByteArray reply = QByteArray::fromHex("010302002a");
+        const QByteArray frame = reply + modbusCrc(reply);
+        QCOMPARE(::write(master, frame.constData(), size_t(frame.size())), qint64(frame.size()));
+        QTRY_COMPARE(strip->text(), connection + QStringLiteral(" · 1 块 · 正常"));
+        QCOMPARE(header->text(), strip->text());
+        QVERIFY(labelTexts(&surface).contains(QStringLiteral("42")));
+
+        buttonFor(card, QStringLiteral("断开"))->click();
+        QCOMPARE(strip->text(), QStringLiteral("未连接"));
+        QCOMPARE(strip->toolTip(), QString());
+    }
+#endif
 
     // Each block is read at its own period, on a clock the test steps; a block of a tab page in the
     // background is not read, and one that comes into view is read at once. A binding with no period

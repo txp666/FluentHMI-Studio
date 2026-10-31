@@ -29,8 +29,8 @@ class TcpServerLink;
 // registers it with the hub; the link closes when the card detaches.
 //
 // The card also hands the project's Modbus poller its modbusPeriod, modbusTimeout and modbusSlave
-// (ModbusPoller::setLinkCard()). While its link is connected and parses Modbus, the status line reads
-// <connection> · <poller status>, with the poller's blocks as its tooltip.
+// (ModbusPoller::setLinkCard()). While its link is connected, parses Modbus and can send, the status line
+// reads <connection> · <poller status>, with the poller's blocks as its tooltip.
 class LinkCardBase : public HmiWidget
 {
   public:
@@ -61,6 +61,7 @@ class LinkCardBase : public HmiWidget
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_status = nullptr;
+    FluentQt::CaptionLabel *m_stripStatus = nullptr; // the same status in a single-row strip (serial 单行)
     FluentQt::ComboBox *m_parser = nullptr;
     FluentQt::PrimaryPushButton *m_connect = nullptr;
     QGridLayout *m_grid = nullptr;
