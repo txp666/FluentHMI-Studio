@@ -149,9 +149,10 @@ class TestModbus : public QObject
         QVERIFY(!need({{"parseMode", "键值匹配"}, {"key", "t"}}));
     }
 
-    // The two Modbus tutorials have no Modbus card: their bindings and chart curves plan, on the poller's
-    // defaults (slave 1, 500 ms), to the blocks they describe. 02 reads holding registers 0–3 for its displays
-    // and 4–5 (float32) and 1 for its curves: one block. 10 reads the coils, the live values and the settings.
+    // The two Modbus tutorials set no polling settings on their link cards: their bindings and chart curves
+    // plan, on the poller's defaults (slave 1, 500 ms), to the blocks they describe. 02 reads holding
+    // registers 0–3 for its displays and 4–5 (float32) and 1 for its curves: one block. 10 reads the coils,
+    // the live values and the settings.
     void tutorialsPlanTheirBlocks_data()
     {
         QTest::addColumn<QString>("file");
@@ -170,7 +171,6 @@ class TestModbus : public QObject
         QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/") + file, &project, &error),
                  qPrintable(error));
         QList<ModbusNeed> needs;
-        bool card = false;
         const auto add = [&needs](const QJsonObject &widget) {
             if (const auto binding = BindingEntry::fromWidget(widget)) {
                 if (auto need = modbusNeed(*binding)) {
@@ -180,7 +180,6 @@ class TestModbus : public QObject
         };
         visitWidgets(project.widgets, [&](const QJsonObject &widget) {
             const QString type = widget.value("type").toString();
-            card = card || type == QLatin1String("ModbusConfigCard");
             add(widget);
             if (type == QLatin1String("RealtimeChart")) { // its curves, keyed as the chart reads them
                 const QJsonObject props = widget.value("properties").toObject();
@@ -199,10 +198,9 @@ class TestModbus : public QObject
             }
             return true;
         });
-        QVERIFY(!card);
         for (ModbusNeed &need : needs) {
             if (need.slave <= 0) {
-                need.slave = 1; // the poller's fallback slave without a card
+                need.slave = 1; // the poller's fallback slave: a link card's default modbusSlave
             }
         }
         QCOMPARE(planBlocks(needs, 500), blocks);

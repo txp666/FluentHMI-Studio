@@ -11,7 +11,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <utility>
 
 class QTimer;
 
@@ -61,11 +60,11 @@ class ModbusExchange
 // modbusNeeds(), the widgets on screen and every curve) and plans them into blocks (planBlocks()). Each
 // block has a time it is due; whenever the masters of those links are free, the block due first goes out
 // to all of them as a read, and the next one right after its reply. A new plan starts a new round: blocks
-// it keeps keep their times, new ones are read at once. It starts as soon as the runtime is active and a
-// link that parses Modbus can send, and keeps going until pause().
+// it keeps keep their times, new ones are read at once. It reads while the runtime is active and a link
+// that parses Modbus can send.
 //
-// The project's first Modbus card (ModbusConfigCardWidget) sets its settings and shows its status; any
-// card pauses and resumes it. Without a card it runs on the defaults and shows nothing.
+// Its settings are those of the link cards (LinkCardBase): the first card in the document whose link is
+// connected and parses Modbus, else the defaults. Those cards show its status beside their own.
 class ModbusPoller : public QObject
 {
     Q_OBJECT
@@ -87,30 +86,26 @@ class ModbusPoller : public QObject
 
     explicit ModbusPoller(RuntimeContext *context);
 
-    // The Modbus cards that show this poller, in the order they attached: the order of the document. The
-    // first one's settings apply, at once; the others only show the status. Without a panel the defaults do.
-    void addPanel(const QObject *panel, const Settings &settings);
-    void setSettings(const QObject *panel, const Settings &settings);
-    void removePanel(const QObject *panel);
+    // The link cards of the project, in the order they attached: the order of the document. Each names the
+    // link it owns now (none for a TCP card while it is not connected) and its modbusPeriod, modbusTimeout
+    // and modbusSlave. The first card whose link is connected and parses Modbus sets the settings, at once;
+    // without one the defaults do.
+    void setLinkCard(const QObject *card, Link *link, const Settings &settings);
+    void removeLinkCard(const QObject *card);
     Settings settings() const;
 
-    // Stops reading: the reads still waiting in a queue never go out. resume() starts afresh.
-    void pause();
-    void resume();
-    bool isPaused() const { return m_paused; }
-    // Reading blocks right now: active, not paused, with a plan.
-    bool isPolling() const { return m_active && !m_paused && !m_blocks.isEmpty(); }
-
-    // 等待连接, 没有 Modbus 绑定, N 块 · 轮询中, N 块 · 正常, 第 k 块无响应（从站 S 功能码 F 地址 A）,
-    // 第 k 块异常 02 非法数据地址 or 已暂停; empty before the runtime is active.
+    // 等待连接, 没有 Modbus 绑定, N 块 · 轮询中, N 块 · 正常, 第 k 块无响应（从站 S 功能码 F 地址 A）or
+    // 第 k 块异常 02 非法数据地址; empty before the runtime is active.
     QString status() const { return m_status; }
+    // No link that parses Modbus can send: the status is 等待连接, which the link cards do not show.
+    bool isWaiting() const { return m_waiting; }
     // One line per block: 从站 S · 功能码 F · 地址 A–B · 周期 P ms; the status without blocks.
     QString toolTip() const { return m_toolTip; }
     QList<ModbusBlock> blocks() const { return m_blocks; }
 
-    // RuntimeContext::setActive(): an active poller reads unless paused.
+    // RuntimeContext::setActive(): an active poller reads.
     void setActive(bool active);
-    // RuntimeContext::clear(): a new project starts unpaused, on the defaults, without panels.
+    // RuntimeContext::clear(): a new project starts on the defaults, without link cards.
     void reset();
 
     // What each timer tick and each change of the links does: plan again, then send the block due first
@@ -119,7 +114,6 @@ class ModbusPoller : public QObject
 
   signals:
     void statusChanged(const QString &status, const QString &toolTip);
-    void pausedChanged(bool paused);
 
   private:
     void settingsChanged(const Settings &before);
@@ -134,11 +128,18 @@ class ModbusPoller : public QObject
     void roundDone();
     void setStatus(const QString &text);
 
+    struct LinkCard
+    {
+        const QObject *card = nullptr;
+        QPointer<Link> link;
+        Settings settings;
+    };
+
     RuntimeContext *m_context;
     QTimer *m_timer;
-    QList<std::pair<const QObject *, Settings>> m_panels;
+    QList<LinkCard> m_cards;
     bool m_active = false;
-    bool m_paused = false;
+    bool m_waiting = false;
     QString m_status;
     QString m_toolTip;
 

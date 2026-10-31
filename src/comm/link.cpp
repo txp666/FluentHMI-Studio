@@ -55,8 +55,7 @@ QString Link::textEncoding() const
 
 bool Link::parsesModbus() const
 {
-    return m_parserType == QLatin1String("modbus") || m_parserType == QLatin1String("modbus_tcp") ||
-           m_parserType == QLatin1String("modbus_ascii");
+    return isModbusParser(m_parserType);
 }
 
 std::unique_ptr<Parser> Link::createStreamParser() const

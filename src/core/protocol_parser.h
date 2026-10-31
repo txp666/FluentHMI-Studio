@@ -302,5 +302,7 @@ QByteArray buildModbusAsciiFrame(int slave, int func, int address, int value = 0
 // invalid configuration.
 std::unique_ptr<Parser> createParser(const QString &type, const QJsonObject &config, QString *error = nullptr,
                                      std::shared_ptr<ModbusRequests> requests = nullptr);
+// Whether a parser type reads Modbus replies: modbus, modbus_tcp or modbus_ascii.
+bool isModbusParser(const QString &type);
 
 } // namespace fhmi

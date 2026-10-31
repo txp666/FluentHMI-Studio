@@ -6,13 +6,11 @@
 class QGridLayout;
 
 namespace FluentQt {
-class BodyLabel;
 class CaptionLabel;
 class CheckBox;
 class ComboBox;
 class LineEdit;
 class PrimaryPushButton;
-class PushButton;
 class SpinBox;
 class StrongBodyLabel;
 class ToolButton;
@@ -29,6 +27,10 @@ class TcpServerLink;
 // Common frame of the cards that own a link: title, a status line, the parser choice
 // and one button that reads 连接, 断开 or 取消. While attached, the card owns its link and
 // registers it with the hub; the link closes when the card detaches.
+//
+// The card also hands the project's Modbus poller its modbusPeriod, modbusTimeout and modbusSlave
+// (ModbusPoller::setLinkCard()). While its link is connected and parses Modbus, the status line reads
+// <connection> · <poller status>, with the poller's blocks as its tooltip.
 class LinkCardBase : public HmiWidget
 {
   public:
@@ -36,11 +38,18 @@ class LinkCardBase : public HmiWidget
 
   protected:
     void paintEvent(QPaintEvent *event) override;
+    // Subclasses call these last in theirs, once their link exists.
+    void onAttached() override;
     void onDetached() override;
 
+    // The link the card owns now; a TCP card has none while it is not connected.
+    virtual Link *currentLink() const = 0;
     // The parser a connecting link uses: the card's own choice, or the project's.
     bool configureParser(Link *link);
+    // The button and the status line: `status` describes the connection.
     void setConnectedUi(bool connected, const QString &status);
+    // Tells the poller the card's link and settings again: after apply() and whenever the link changes.
+    void updatePolling();
     void addField(const QString &label, QWidget *field);
     // Empties the field grid; the fields themselves stay owned by the card.
     void clearFields();
@@ -60,9 +69,14 @@ class LinkCardBase : public HmiWidget
   private:
     // The card never gets shorter than its visible rows need, so they never overlap.
     void updateMinimumHeight();
+    ModbusPoller::Settings pollingSettings() const;
+    // The connection text, followed by the poller's status while the link is connected and parses Modbus.
+    void showStatus();
 
     QWidget *m_lastField = nullptr;
     int m_lastRow = -1;
+    bool m_connected = false;
+    QString m_connection; // what the status line says about the connection
 };
 
 class SerialConfigCardWidget : public LinkCardBase
@@ -75,6 +89,7 @@ class SerialConfigCardWidget : public LinkCardBase
     void apply() override;
     void onAttached() override;
     void onDetached() override;
+    Link *currentLink() const override;
 
   private:
     void refreshPorts();
@@ -101,6 +116,7 @@ class TcpConfigCardWidget : public LinkCardBase
     void apply() override;
     void onAttached() override;
     void onDetached() override;
+    Link *currentLink() const override;
 
   private:
     void toggleConnection();
@@ -122,6 +138,7 @@ class MqttConfigCardWidget : public LinkCardBase
     void apply() override;
     void onAttached() override;
     void onDetached() override;
+    Link *currentLink() const override;
 
   private:
     void toggleConnection();
@@ -141,47 +158,6 @@ class MqttConfigCardWidget : public LinkCardBase
     QWidget *m_loginRow = nullptr;
     QWidget *m_qosRow = nullptr;
     MqttLink *m_link = nullptr;
-};
-
-// A panel of the project's Modbus poller (ModbusPoller): its status line and tooltip show the poller's
-// status, and its 停止 / 轮询 button pauses and resumes the poller for every card. The project's first card
-// sets the poller's fallback slave (defaultSlave), default period (the 轮询ms field, 0 for 500 ms) and
-// timeout. 发送 sends the request in the fields through each link's Modbus master as a write, ahead of
-// the reads waiting there.
-class ModbusConfigCardWidget : public HmiWidget
-{
-  public:
-    ModbusConfigCardWidget(const WidgetMeta &meta, QWidget *parent);
-
-  protected:
-    void apply() override;
-    void onAttached() override;
-    void onDetached() override;
-    void paintEvent(QPaintEvent *event) override;
-
-  private:
-    ModbusPoller::Settings settings() const;
-    void setStatus(const QString &text, const QString &toolTip = QString());
-    // 已发送 with the first frame's bytes and how many links took one, as PyQt UI Designer shows it.
-    QString sentStatus() const;
-    std::optional<ModbusRequest> fieldRequest();
-    void sendFields();
-    void manualDone(const ModbusResult &result);
-    void showPaused(bool paused);
-    void updateValueLabel();
-
-    FluentQt::StrongBodyLabel *m_title = nullptr;
-    FluentQt::CaptionLabel *m_status = nullptr;
-    FluentQt::LineEdit *m_slave = nullptr;
-    FluentQt::ComboBox *m_function = nullptr;
-    FluentQt::LineEdit *m_address = nullptr;
-    FluentQt::BodyLabel *m_valueLabel = nullptr;
-    FluentQt::LineEdit *m_value = nullptr;
-    FluentQt::LineEdit *m_poll = nullptr;
-    FluentQt::PrimaryPushButton *m_send = nullptr;
-    FluentQt::PushButton *m_pollButton = nullptr;
-    QList<QByteArray> m_lastSent; // the frames of the last request, one per link that took it
-    ModbusExchange m_manual;      // the 发送 request on its way
 };
 
 } // namespace fhmi

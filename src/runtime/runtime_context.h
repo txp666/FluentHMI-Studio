@@ -35,8 +35,8 @@ class RuntimeContext : public QObject
     explicit RuntimeContext(QObject *parent = nullptr);
 
     CommHub *hub() const { return m_hub; }
-    // Reads the Modbus bindings and curves while the context is active; every running project has one,
-    // with or without a Modbus card.
+    // Reads the Modbus bindings and curves while the context is active; every running project has one, set
+    // up by its link cards.
     ModbusPoller *modbusPoller() const { return m_poller; }
 
     void registerWidget(const QString &id, HmiWidget *widget);

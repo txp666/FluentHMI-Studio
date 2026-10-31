@@ -1417,4 +1417,10 @@ std::unique_ptr<Parser> createParser(const QString &type, const QJsonObject &con
     return nullptr;
 }
 
+bool isModbusParser(const QString &type)
+{
+    return type == QLatin1String("modbus") || type == QLatin1String("modbus_tcp") ||
+           type == QLatin1String("modbus_ascii");
+}
+
 } // namespace fhmi
