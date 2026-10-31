@@ -129,14 +129,4 @@ QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject props
     return props;
 }
 
-QJsonObject upgradedProperties(const QString &typeName, QJsonObject props)
-{
-    if (typeName == QLatin1String("ModbusConfigCard") && !props.contains(QStringLiteral("pollMode"))) {
-        // As in 0.2.0: the poll table (or the request in the fields), only after a click on 轮询.
-        props.insert(QStringLiteral("pollMode"), QStringLiteral("轮询表"));
-        props.insert(QStringLiteral("autoStart"), false);
-    }
-    return props;
-}
-
 } // namespace fhmi

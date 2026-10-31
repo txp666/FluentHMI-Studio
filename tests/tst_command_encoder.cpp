@@ -52,23 +52,6 @@ class TestCommandEncoder : public QObject
                  QByteArray("0110006400020441c8000061b6"));
     }
 
-    void pollTableListsReadsAndNamesTheBadEntry()
-    {
-        QString error;
-        const auto table = CommandEncoder::modbusPollTable(QStringLiteral("1,3,100,10\n# 线圈\n1，1，0，3; 2,4,0,1"), &error);
-        QVERIFY2(table, qPrintable(error));
-        QCOMPARE(table->size(), 3);
-        QCOMPARE(table->at(1).func, 1);
-        QCOMPARE(table->at(1).value, 3);
-        QCOMPARE(table->at(2).slave, 2);
-        QVERIFY(!CommandEncoder::modbusPollTable(QStringLiteral("1,3,0,1\n1,6,0,1"), &error));
-        QCOMPARE(error, QStringLiteral("轮询表第 2 条应为 从站,功能码(1–4),地址,数量"));
-        QVERIFY(!CommandEncoder::modbusPollTable(QStringLiteral("1,3,0"), &error));
-        QVERIFY(!CommandEncoder::modbusPollTable(QStringLiteral("1,3,0,126"), &error)); // well formed: say why
-        QCOMPARE(error, QStringLiteral("轮询表第 1 条：Modbus 值或读取数量超出功能码允许范围"));
-        QVERIFY(CommandEncoder::modbusPollTable(QString())->isEmpty());
-    }
-
     void textUsesTemplateAndNewline()
     {
         const QJsonObject props{{"commandTemplate", "SET {value}"}, {"commandNewline", "\\n"}};

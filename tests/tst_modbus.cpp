@@ -1,6 +1,7 @@
 #include "comm/comm_hub.h"
 #include "comm/link.h"
 #include "comm/modbus_master.h"
+#include "core/project.h"
 
 #include <QtCore/QFile>
 #include <QtCore/QJsonArray>
@@ -9,6 +10,22 @@
 #include <QtTest/QtTest>
 
 using namespace fhmi;
+
+Q_DECLARE_METATYPE(fhmi::ModbusBlock)
+
+namespace QTest {
+template <> char *toString(const fhmi::ModbusBlock &block)
+{
+    return qstrdup(QStringLiteral("[%1,%2,%3,%4,%5]")
+                       .arg(block.slave)
+                       .arg(block.fc)
+                       .arg(block.start)
+                       .arg(block.count)
+                       .arg(block.period)
+                       .toUtf8()
+                       .constData());
+}
+} // namespace QTest
 
 namespace {
 
@@ -99,7 +116,8 @@ class TestModbus : public QObject
         }
     }
 
-    // A binding of a register table needs its address and the registers its type takes; 响应内序号 needs nothing.
+    // A Modbus binding needs the address in its register table (holding registers when it names none) and the
+    // registers its type takes; an area that is no table, or another parse mode, needs nothing.
     void bindingsNeedTheirRegisters()
     {
         const auto need = [](const QJsonObject &binding) {
@@ -122,9 +140,58 @@ class TestModbus : public QObject
         const auto coil = need({{"parseMode", "Modbus"}, {"mbArea", "线圈"}, {"mbDataType", "uint32"}});
         QVERIFY(coil);
         QCOMPARE(coil->count, 1);
-        QCOMPARE(coil->slave, -1); // the card's defaultSlave
-        QVERIFY(!need({{"parseMode", "Modbus"}, {"mbRegIndex", 2}}));
+        QCOMPARE(coil->slave, -1); // the poller's fallback slave
+        const auto holding = need({{"parseMode", "Modbus"}, {"mbRegIndex", 2}});
+        QVERIFY(holding);
+        QCOMPARE(holding->table, QStringLiteral("hr"));
+        QCOMPARE(holding->address, 2);
+        QVERIFY(!need({{"parseMode", "Modbus"}, {"mbArea", "响应内序号"}, {"mbRegIndex", 2}}));
         QVERIFY(!need({{"parseMode", "键值匹配"}, {"key", "t"}}));
+    }
+
+    // The bindings of the two Modbus tutorials, with the slave and period of their Modbus card, plan to
+    // the blocks the tutorials describe: 02 one block of holding registers 0–3 every 200 ms, 10 the coils,
+    // the live values and the settings every 500 ms.
+    void tutorialBindingsPlanTheirBlocks_data()
+    {
+        QTest::addColumn<QString>("file");
+        QTest::addColumn<QList<ModbusBlock>>("blocks");
+        QTest::newRow("02") << QStringLiteral("02-温控仪监控.uidp") << QList<ModbusBlock>{{1, 3, 0, 4, 200}};
+        QTest::newRow("10") << QStringLiteral("10-PLC恒压供水.uidp")
+                            << QList<ModbusBlock>{{1, 1, 0, 4, 500}, {1, 3, 100, 6, 500}, {1, 3, 200, 2, 500}};
+    }
+
+    void tutorialBindingsPlanTheirBlocks()
+    {
+        QFETCH(QString, file);
+        QFETCH(QList<ModbusBlock>, blocks);
+        Project project;
+        QString error;
+        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/") + file, &project, &error),
+                 qPrintable(error));
+        QList<ModbusNeed> needs;
+        int slave = 0;
+        int period = 0;
+        visitWidgets(project.widgets, [&](const QJsonObject &widget) {
+            const QJsonObject props = widget.value("properties").toObject();
+            if (widget.value("type").toString() == QLatin1String("ModbusConfigCard") && slave == 0) {
+                slave = props.value("defaultSlave").toInt(1);
+                period = props.value("defaultPoll").toInt(0);
+            }
+            if (const auto binding = BindingEntry::fromWidget(widget)) {
+                if (auto need = modbusNeed(*binding)) {
+                    needs.append(*need);
+                }
+            }
+            return true;
+        });
+        QCOMPARE(slave, 1);
+        for (ModbusNeed &need : needs) {
+            if (need.slave <= 0) {
+                need.slave = slave;
+            }
+        }
+        QCOMPARE(planBlocks(needs, period > 0 ? period : 500), blocks);
     }
 
     // One request on the line at a time: reads wait at the back, writes go ahead of every queued read

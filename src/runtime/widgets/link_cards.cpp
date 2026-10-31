@@ -15,7 +15,6 @@
 #include <FluentQtWidgets/Widgets/Selection.h>
 #include <FluentQtWidgets/Widgets/SpinBox.h>
 
-#include <QtCore/QHash>
 #include <QtCore/QTimer>
 #include <QtGui/QIntValidator>
 #include <QtGui/QPainter>
@@ -607,51 +606,22 @@ void MqttConfigCardWidget::refreshState()
 // ModbusConfigCard
 // ---------------------------------------------------------------------------
 
-namespace {
-
-const QString kTableMode = QStringLiteral("轮询表");
-
-// A block counts as due this much early, so a tick that arrives a moment before a block's time does
-// not leave it waiting a whole further tick.
-constexpr qint64 kDueSlackMs = 10;
-
-// Why a poll-table read failed, as its round reports it: 无响应, 异常 02 非法数据地址, 发送失败.
-QString roundProblem(const ModbusResult &result)
-{
-    if (result.ok) {
-        return {};
-    }
-    if (result.timedOut) {
-        return QStringLiteral("无响应");
-    }
-    const QString exception = modbusException(result.message);
-    return exception.isEmpty() ? result.problem : exception;
-}
-
-} // namespace
-
 ModbusConfigCardWidget::ModbusConfigCardWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {
     // The layout of PyQt UI Designer's card: plain number fields fit its 380 x 180 default,
     // where spin boxes would leave no room for the digits.
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(16, 10, 16, 10);
-    layout->setSpacing(6);
-    auto *header = new QGridLayout;
-    header->setHorizontalSpacing(8);
-    header->setVerticalSpacing(0);
+    layout->setContentsMargins(16, 12, 16, 12);
+    layout->setSpacing(8);
+    auto *header = new QHBoxLayout;
     m_title = new FluentQt::StrongBodyLabel(this);
-    m_modeHint = new FluentQt::CaptionLabel(this); // 轮询方式：自动, in small type under the title
-    m_modeHint->setTextColor(QColor(0x80, 0x80, 0x80), QColor(0xa0, 0xa0, 0xa0));
     m_status = new FluentQt::CaptionLabel(tr("就绪"), this);
     m_status->setTextColor(QColor(0x60, 0x60, 0x60), QColor(0xb0, 0xb0, 0xb0));
     // A long status takes only the room the title leaves; the tooltip has all of it.
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    header->addWidget(m_title, 0, 0);
-    header->addWidget(m_status, 0, 1);
-    header->addWidget(m_modeHint, 1, 0, 1, 2);
-    header->setColumnStretch(1, 1);
+    header->addWidget(m_title);
+    header->addWidget(m_status, 1);
 
     const auto number = [this](int lo, int hi, const QString &placeholder) {
         auto *edit = new FluentQt::LineEdit(this);
@@ -670,7 +640,7 @@ ModbusConfigCardWidget::ModbusConfigCardWidget(const WidgetMeta &meta, QWidget *
     m_valueLabel = label(tr("数量"));
     m_value = new FluentQt::LineEdit(this); // a count, a register value or a typed FC 16 value
     m_value->setPlaceholderText(QStringLiteral("1"));
-    m_poll = number(0, 60000, tr("0=不轮询"));
+    m_poll = number(0, 60000, tr("默认 500"));
     m_send = new FluentQt::PrimaryPushButton(this);
     m_send->setText(tr("发送"));
     m_pollButton = new FluentQt::PushButton(this);
@@ -698,7 +668,6 @@ ModbusConfigCardWidget::ModbusConfigCardWidget(const WidgetMeta &meta, QWidget *
     layout->addLayout(header);
     layout->addLayout(grid);
     layout->addStretch();
-    m_timer = new QTimer(this);
     connect(m_function, &FluentQt::ComboBox::currentIndexChanged, this, &ModbusConfigCardWidget::updateValueLabel);
 }
 
@@ -711,46 +680,58 @@ void ModbusConfigCardWidget::updateValueLabel()
 void ModbusConfigCardWidget::apply()
 {
     m_title->setText(text("title"));
-    m_modeHint->setText(autoMode() ? tr("轮询方式：自动") : tr("轮询方式：轮询表"));
     m_slave->setText(QString::number(integer("defaultSlave")));
     selectText(m_function, text("defaultFunc"));
     m_address->setText(QString::number(integer("defaultAddr")));
     m_value->setText(text("defaultValue")); // older projects hold an int; text() reads both
     m_poll->setText(QString::number(integer("defaultPoll")));
     updateValueLabel();
+    if (isLive()) {
+        context()->modbusPoller()->setSettings(this, settings());
+    }
 }
 
-bool ModbusConfigCardWidget::autoMode() const
+ModbusPoller::Settings ModbusConfigCardWidget::settings() const
 {
-    return text("pollMode") != kTableMode;
+    ModbusPoller::Settings settings;
+    settings.fallbackSlave = integer("defaultSlave");
+    const int period = m_poll->text().toInt();
+    settings.defaultPeriod = period > 0 ? period : 500;
+    settings.timeoutMs = std::max(10, integer("timeout"));
+    return settings;
 }
 
 void ModbusConfigCardWidget::onAttached()
 {
-    CommHub *hub = context()->hub();
+    ModbusPoller *poller = context()->modbusPoller();
     live(connect(m_send, &QPushButton::clicked, this, &ModbusConfigCardWidget::sendFields));
-    live(connect(m_pollButton, &QPushButton::clicked, this, &ModbusConfigCardWidget::togglePolling));
-    live(connect(m_timer, &QTimer::timeout, this, &ModbusConfigCardWidget::pollTick));
-    live(connect(hub, &CommHub::linkConnected, this,
-                 [this](const QString &link) { setStatus(tr("已连接: %1").arg(link)); }));
-    live(connect(hub, &CommHub::linkUp, this, &ModbusConfigCardWidget::maybeAutoStart));
-    live(connect(hub, &CommHub::connectionStateChanged, this, [this](bool any) {
-        if (!any) {
-            stopPolling();
-            setStatus(tr("未连接"));
+    live(connect(m_pollButton, &QPushButton::clicked, this, [this]() {
+        ModbusPoller *poller = context()->modbusPoller();
+        if (poller->isPaused()) {
+            poller->resume();
+        } else {
+            poller->pause();
         }
     }));
-    // A link that is up before the surface starts counts as just connected.
-    for (Link *link : hub->connectedLinks()) {
-        maybeAutoStart(link);
+    // The 轮询ms field is the default period from the next keystroke on.
+    live(connect(m_poll, &QLineEdit::textChanged, this,
+                 [this]() { context()->modbusPoller()->setSettings(this, settings()); }));
+    live(connect(poller, &ModbusPoller::statusChanged, this,
+                 [this](const QString &status, const QString &toolTip) { setStatus(status, toolTip); }));
+    live(connect(poller, &ModbusPoller::pausedChanged, this, &ModbusConfigCardWidget::showPaused));
+    poller->addPanel(this, settings());
+    showPaused(poller->isPaused());
+    if (!poller->status().isEmpty()) {
+        setStatus(poller->status(), poller->toolTip());
     }
 }
 
 void ModbusConfigCardWidget::onDetached()
 {
-    stopPolling();
-    m_manual.reset();
+    context()->modbusPoller()->removePanel(this);
+    m_manual.cancel();
     setStatus(tr("就绪"));
+    m_pollButton->setText(tr("轮询"));
 }
 
 std::optional<ModbusRequest> ModbusConfigCardWidget::fieldRequest()
@@ -768,21 +749,19 @@ std::optional<ModbusRequest> ModbusConfigCardWidget::fieldRequest()
     if (!request) {
         context()->notify(QStringLiteral("Modbus"), error, NotifyType::Error);
         setStatus(tr("参数无效"));
-        stopPolling();
     }
     return request;
 }
 
-int ModbusConfigCardWidget::defaultPeriod() const
-{
-    const int ms = m_poll->text().toInt();
-    return ms > 0 ? ms : 500;
-}
-
-void ModbusConfigCardWidget::setStatus(const QString &text)
+void ModbusConfigCardWidget::setStatus(const QString &text, const QString &toolTip)
 {
     m_status->setText(text);
-    m_status->setToolTip(text);
+    m_status->setToolTip(toolTip.isEmpty() ? text : toolTip);
+}
+
+void ModbusConfigCardWidget::showPaused(bool paused)
+{
+    m_pollButton->setText(paused ? tr("轮询") : tr("停止"));
 }
 
 QString ModbusConfigCardWidget::sentStatus() const
@@ -794,450 +773,38 @@ QString ModbusConfigCardWidget::sentStatus() const
     return status;
 }
 
-bool ModbusConfigCardWidget::expectsReplies() const
-{
-    for (Link *link : context()->hub()->connectedLinks()) {
-        if (link->parsesModbus()) {
-            return true;
-        }
-    }
-    return false;
-}
-
-QList<Link *> ModbusConfigCardWidget::modbusLinks() const
-{
-    QList<Link *> links;
-    for (Link *link : context()->hub()->connectedLinks()) {
-        if (link->parsesModbus() && link->canSend()) {
-            links.append(link);
-        }
-    }
-    return links;
-}
-
-// ----- requests and their replies -----
-
-bool ModbusConfigCardWidget::queue(const ModbusRequest &request, ModbusMaster::Priority priority,
-                                   std::optional<Pending> &pending, std::function<void(const ModbusResult &)> complete,
-                                   bool announce, bool modbusLinksOnly)
-{
-    const int token = ++m_token;
-    pending = Pending{token, std::move(complete), {}, {}, false, std::nullopt};
-    QList<QPointer<ModbusMaster>> masters;
-    ModbusSend how;
-    how.timeoutMs = std::max(10, integer("timeout"));
-    how.priority = priority;
-    how.owner = &pending;
-    how.modbusLinksOnly = modbusLinksOnly;
-    how.queuedOn = &masters;
-    std::optional<Pending> *slot = &pending;
-    how.done = [self = QPointer<ModbusConfigCardWidget>(this), slot, token](const ModbusResult &result) {
-        if (self) {
-            self->report(*slot, token, result);
-        }
-    };
-    m_lastSent.clear();
-    if (!context()->sendModbus(request, &m_lastSent, how)) {
-        pending.reset();
-        return false;
-    }
-    if (announce) {
-        setStatus(sentStatus());
-    }
-    if (!pending || pending->token != token) {
-        return true;
-    }
-    if (masters.isEmpty()) {
-        pending.reset(); // only links that do not parse Modbus took it: no reply to wait for
-        return true;
-    }
-    for (const QPointer<ModbusMaster> &master : std::as_const(masters)) {
-        if (!pending->reported.contains(master.data())) {
-            pending->waiting.append(master);
-        }
-    }
-    pending->armed = true;
-    finishIfSettled(pending);
-    return true;
-}
-
-void ModbusConfigCardWidget::report(std::optional<Pending> &pending, int token, const ModbusResult &result)
-{
-    if (!pending || pending->token != token) {
-        return; // stopped, or a request since took its place
-    }
-    if (!pending->result || (result.ok && !pending->result->ok)) {
-        pending->result = result;
-    }
-    if (!pending->armed) {
-        pending->reported.append(result.master.data());
-        return;
-    }
-    pending->waiting.removeAll(result.master);
-    finishIfSettled(pending);
-}
-
-void ModbusConfigCardWidget::finishIfSettled(std::optional<Pending> &pending)
-{
-    if (!pending || !pending->armed) {
-        return;
-    }
-    pending->waiting.removeIf([](const QPointer<ModbusMaster> &master) { return master.isNull(); });
-    if (!pending->waiting.isEmpty()) {
-        return;
-    }
-    Pending done = std::move(*pending);
-    pending.reset();
-    ModbusResult result;
-    if (done.result) {
-        result = *done.result;
-    } else { // every link it went to is gone
-        result.timedOut = true;
-        result.cancelled = true;
-    }
-    if (done.complete) {
-        done.complete(result);
-    }
-}
-
 void ModbusConfigCardWidget::sendFields()
 {
     const auto request = fieldRequest();
     if (!request) {
         return;
     }
-    // "已发送" only means the links took it; the reply, or its absence, follows. While automatic polling
-    // has the status line, the result comes as a notification instead.
-    if (!queue(*request, ModbusMaster::Priority::Write, m_manual, [this](const ModbusResult &r) { manualDone(r); },
-               !m_autoPolling)) {
-        stopPolling();
+    ModbusSend how;
+    how.timeoutMs = std::max(10, integer("timeout"));
+    how.priority = ModbusMaster::Priority::Write;
+    m_lastSent.clear();
+    const bool queued = m_manual.start(
+        [this, &request](const ModbusSend &queue) { return context()->sendModbus(*request, &m_lastSent, queue); },
+        how, [this](const ModbusResult &result) { manualDone(result); });
+    if (!queued) {
         setStatus(tr("发送失败，请检查连接"));
+        return;
+    }
+    // "已发送" only means the links took it; the reply, or its absence, follows. While the poller reads,
+    // the status line is its, and the result comes as a notification instead.
+    if (!context()->modbusPoller()->isPolling()) {
+        setStatus(sentStatus());
     }
 }
 
 void ModbusConfigCardWidget::manualDone(const ModbusResult &result)
 {
     const QString text = result.ok ? tr("设备已响应") : result.problem;
-    if (m_autoPolling) {
-        // Automatic polling has the status line; the request of the fields reports beside it.
+    if (isLive() && context()->modbusPoller()->isPolling()) {
         context()->notify(QStringLiteral("Modbus"), text, result.ok ? NotifyType::Info : NotifyType::Warning, 2000);
         return;
     }
-    if (m_timer->isActive()) {
-        return; // the poll table has the status line now
-    }
     setStatus(text);
-}
-
-// ----- polling -----
-
-void ModbusConfigCardWidget::togglePolling()
-{
-    if (m_timer->isActive()) {
-        stopPolling();
-    } else {
-        startPolling(false);
-    }
-}
-
-void ModbusConfigCardWidget::maybeAutoStart(Link *link)
-{
-    if (!flag("autoStart") || m_timer->isActive() || !link || !link->parsesModbus() || !link->canSend()) {
-        return;
-    }
-    startPolling(true);
-}
-
-void ModbusConfigCardWidget::startPolling(bool automatic)
-{
-    if (autoMode()) {
-        m_autoPolling = true;
-        m_read.reset();
-        m_blocks.clear();
-        m_due.clear();
-        m_blockResults.clear();
-        ++m_plan;
-        m_timer->setTimerType(Qt::PreciseTimer); // a block's period is kept to the tick
-        m_timer->start(defaultPeriod());
-        m_pollButton->setText(tr("停止"));
-        m_send->setEnabled(true); // its request queues as a write between two reads
-        schedule();
-        return;
-    }
-    const int interval = m_poll->text().toInt();
-    if (interval <= 0) {
-        if (!automatic) {
-            context()->notify(QStringLiteral("Modbus"), tr("请先设置轮询间隔"), NotifyType::Warning);
-        }
-        return;
-    }
-    QString error;
-    const auto table = CommandEncoder::modbusPollTable(text("pollList"), &error);
-    if (!table) {
-        context()->notify(QStringLiteral("Modbus"), error, NotifyType::Error);
-        setStatus(error);
-        return;
-    }
-    m_autoPolling = false;
-    m_table = *table;
-    m_read.reset();
-    m_round.clear();
-    m_next = 0;
-    m_timer->setTimerType(Qt::CoarseTimer);
-    m_timer->start(interval);
-    m_pollButton->setText(tr("停止"));
-    m_send->setEnabled(false); // a request of its own would take the place of the one polling waits for
-    if (!m_table.isEmpty()) {
-        setStatus(tr("轮询中 · %1 条").arg(m_table.size()));
-    }
-    pollTick(); // the first round goes out right away
-}
-
-void ModbusConfigCardWidget::stopPolling()
-{
-    m_timer->stop();
-    if (m_read) { // its reads still waiting in a queue never go out
-        for (const QPointer<ModbusMaster> &master : std::as_const(m_read->waiting)) {
-            if (master) {
-                master->cancelQueued(&m_read);
-            }
-        }
-    }
-    m_read.reset();
-    m_round.clear();
-    m_autoPolling = false;
-    m_pollButton->setText(tr("轮询"));
-    m_send->setEnabled(true);
-}
-
-void ModbusConfigCardWidget::pollTick()
-{
-    if (m_autoPolling) {
-        schedule();
-    } else {
-        tableTick();
-    }
-}
-
-// ----- 轮询表 -----
-
-void ModbusConfigCardWidget::tableTick()
-{
-    finishIfSettled(m_read);
-    if (m_read) {
-        return; // the last request is still waiting for its reply
-    }
-    if (!expectsReplies()) { // nothing to wait for: one request per tick, in turn
-        std::optional<ModbusRequest> request;
-        if (m_table.isEmpty()) {
-            request = fieldRequest();
-        } else {
-            m_next %= int(m_table.size());
-            request = m_table.at(m_next++);
-        }
-        if (request && !queue(*request, ModbusMaster::Priority::Read, m_read, {}, true)) {
-            stopPolling(); // a failed write stops polling
-            setStatus(tr("发送失败，请检查连接"));
-        }
-        return;
-    }
-    if (m_table.isEmpty()) {
-        const auto request = fieldRequest();
-        if (!request) {
-            return;
-        }
-        m_round = {*request};
-    } else {
-        m_round = m_table;
-    }
-    m_roundSize = int(m_round.size());
-    m_roundProblems.clear();
-    sendNextInRound();
-}
-
-void ModbusConfigCardWidget::sendNextInRound()
-{
-    const int item = m_roundSize - int(m_round.size()) + 1;
-    const ModbusRequest request = m_round.takeFirst();
-    if (!queue(request, ModbusMaster::Priority::Read, m_read,
-               [this, item](const ModbusResult &result) { tableDone(item, result); }, false)) {
-        stopPolling();
-        setStatus(tr("发送失败，请检查连接"));
-    }
-}
-
-void ModbusConfigCardWidget::tableDone(int item, const ModbusResult &result)
-{
-    if (!m_timer->isActive() || m_autoPolling || result.cancelled) {
-        return; // a link that went down: the next tick starts a new round
-    }
-    if (const QString problem = roundProblem(result); !problem.isEmpty()) {
-        m_roundProblems.append({item, problem});
-    }
-    if (!m_round.isEmpty()) {
-        sendNextInRound();
-        return;
-    }
-    const int good = m_roundSize - int(m_roundProblems.size());
-    if (m_roundProblems.isEmpty()) {
-        setStatus(tr("轮询正常 · %1/%2").arg(good).arg(m_roundSize));
-    } else {
-        const auto &[number, first] = m_roundProblems.first();
-        const QString where = m_roundSize > 1 ? tr("第 %1 条").arg(number) : QString();
-        setStatus(QStringLiteral("%1%2 · %3/%4").arg(where, first).arg(good).arg(m_roundSize));
-    }
-}
-
-// ----- 自动 -----
-
-void ModbusConfigCardWidget::schedule()
-{
-    if (!m_autoPolling || !isLive()) {
-        return;
-    }
-    finishIfSettled(m_read);
-    const QList<Link *> links = modbusLinks();
-    if (links.isEmpty()) {
-        if (!m_blocks.isEmpty()) { // a link that comes back starts with a fresh plan
-            m_blocks.clear();
-            m_due.clear();
-            m_blockResults.clear();
-            ++m_plan;
-        }
-        setAutoStatus(tr("自动 · 等待连接"));
-        return;
-    }
-    replan();
-    if (m_blocks.isEmpty() || m_read) {
-        return;
-    }
-    for (Link *link : links) {
-        if (link->modbusMaster()->busy()) {
-            return;
-        }
-    }
-    const qint64 now = context()->now();
-    int next = -1;
-    for (int i = 0; i < int(m_blocks.size()); ++i) {
-        if (m_due.at(i) <= now + kDueSlackMs && (next < 0 || m_due.at(i) < m_due.at(next))) {
-            next = i;
-        }
-    }
-    if (next < 0) {
-        return;
-    }
-    const ModbusBlock block = m_blocks.at(next);
-    m_due[next] = now + block.period;
-    const auto request = CommandEncoder::modbusRequest(block.slave, block.fc, block.start, block.count);
-    if (!request) {
-        return; // not reached: the planner keeps blocks within what a request can read
-    }
-    const int plan = m_plan;
-    if (!queue(*request, ModbusMaster::Priority::Read, m_read,
-               [this, next, plan](const ModbusResult &result) { blockDone(next, plan, result); }, false, true)) {
-        stopPolling();
-        setStatus(tr("发送失败，请检查连接"));
-    }
-}
-
-void ModbusConfigCardWidget::replan()
-{
-    QList<ModbusNeed> active;
-    const int fallbackSlave = integer("defaultSlave");
-    for (ModbusNeed need : context()->modbusNeeds()) {
-        if (!need.visible) {
-            continue; // on a tab page in the background, or hidden
-        }
-        if (need.slave <= 0) {
-            need.slave = fallbackSlave;
-        }
-        if (need.slave > 247) {
-            continue; // no request can address it
-        }
-        need.period = std::max(0, need.period);
-        active.append(need);
-    }
-    const QList<ModbusBlock> blocks = planBlocks(active, defaultPeriod());
-    if (blocks == m_blocks) {
-        if (blocks.isEmpty()) {
-            setAutoStatus(tr("自动 · 没有 Modbus 绑定"));
-        }
-        return;
-    }
-    // A new plan starts a new round. A block that stays keeps its time; a new one is read right away.
-    QList<qint64> due(blocks.size(), 0);
-    for (int i = 0; i < int(blocks.size()); ++i) {
-        const qsizetype old = m_blocks.indexOf(blocks.at(i));
-        if (old >= 0) {
-            due[i] = m_due.at(old);
-        }
-    }
-    m_blocks = blocks;
-    m_due = due;
-    m_blockResults = QList<std::optional<ModbusResult>>(blocks.size());
-    ++m_plan;
-    int interval = defaultPeriod();
-    for (const ModbusBlock &block : blocks) {
-        interval = std::min(interval, block.period);
-    }
-    interval = std::max(1, interval);
-    if (m_timer->interval() != interval) {
-        m_timer->setInterval(interval);
-    }
-    setAutoStatus(blocks.isEmpty() ? tr("自动 · 没有 Modbus 绑定") : tr("自动 · %1 块 · 轮询中").arg(blocks.size()));
-}
-
-void ModbusConfigCardWidget::blockDone(int block, int plan, const ModbusResult &result)
-{
-    if (!m_autoPolling || result.cancelled) {
-        return;
-    }
-    if (plan == m_plan && block < int(m_blockResults.size())) {
-        m_blockResults[block] = result;
-        if (std::all_of(m_blockResults.cbegin(), m_blockResults.cend(),
-                        [](const std::optional<ModbusResult> &r) { return r.has_value(); })) {
-            roundDone();
-        }
-    }
-    schedule(); // the next due block goes out right away
-}
-
-void ModbusConfigCardWidget::roundDone()
-{
-    const int count = int(m_blocks.size());
-    QString status = tr("自动 · %1 块 · 正常").arg(count);
-    for (int k = 0; k < count; ++k) {
-        const ModbusResult &result = *m_blockResults.at(k);
-        if (result.ok) {
-            continue;
-        }
-        const ModbusBlock &block = m_blocks.at(k);
-        const QString exception = modbusException(result.message);
-        status = exception.isEmpty() ? tr("自动 · 第 %1 块无响应（从站 %2 功能码 %3 地址 %4）")
-                                           .arg(k + 1)
-                                           .arg(block.slave)
-                                           .arg(block.fc)
-                                           .arg(block.start)
-                                     : tr("自动 · 第 %1 块%2").arg(k + 1).arg(exception);
-        break;
-    }
-    m_blockResults = QList<std::optional<ModbusResult>>(count);
-    setAutoStatus(status);
-}
-
-void ModbusConfigCardWidget::setAutoStatus(const QString &text)
-{
-    m_status->setText(text);
-    QStringList lines;
-    for (const ModbusBlock &block : std::as_const(m_blocks)) {
-        lines << tr("从站 %1 · 功能码 %2 · 地址 %3–%4 · 周期 %5 ms")
-                     .arg(block.slave)
-                     .arg(block.fc)
-                     .arg(block.start)
-                     .arg(block.start + block.count - 1)
-                     .arg(block.period);
-    }
-    m_status->setToolTip(lines.isEmpty() ? text : lines.join(QLatin1Char('\n')));
 }
 
 void ModbusConfigCardWidget::paintEvent(QPaintEvent *)

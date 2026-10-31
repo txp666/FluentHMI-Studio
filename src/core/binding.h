@@ -10,12 +10,12 @@
 
 namespace fhmi {
 
-// Where a Modbus binding reads: 响应内序号 counts registers within one response (reg0, coil0),
-// the tables name them by register address (hr100), which the request for each response gives.
+// The register table a Modbus binding reads, by register address: a reply names its registers that way
+// (hr100) once the request it answers is known.
 namespace ModbusArea {
-inline const QString InResponse = QStringLiteral("响应内序号");
-QStringList options();      // InResponse first, then 保持寄存器, 输入寄存器, 线圈, 离散输入
-QString prefix(const QString &area); // "hr", "ir", "co", "di"; empty for InResponse
+inline const QString HoldingRegisters = QStringLiteral("保持寄存器");
+QStringList options();               // 保持寄存器 (the default), 输入寄存器, 线圈, 离散输入
+QString prefix(const QString &area); // "hr", "ir", "co", "di"; empty for anything else
 } // namespace ModbusArea
 
 namespace ParseMode {
@@ -63,8 +63,8 @@ class BindingEntry
     QString mbDataType = QStringLiteral("uint16");
     QString mbRegOrder = QStringLiteral("大端(AB CD)");
     int mbFcFilter = -1;
-    QString mbArea = ModbusArea::InResponse; // with a table, mbRegIndex is a register address
-    int mbPeriod = 0; // how often the Modbus card's automatic polling reads it, in ms; 0: the card's poll ms
+    QString mbArea = ModbusArea::HoldingRegisters; // mbRegIndex is a register address in this table
+    int mbPeriod = 0; // how often automatic polling reads it, in ms; 0: the default period
     QString displayFormat = QStringLiteral("自动");
     QString decimals = QStringLiteral("自动");
     QString ledOnValue = QStringLiteral("1");

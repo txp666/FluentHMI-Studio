@@ -151,7 +151,7 @@ std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromPropertie
             {QStringLiteral("mbRegOrder"), field("mbRegOrder", QStringLiteral("大端(AB CD)"))},
             {QStringLiteral("mbFcFilter"), field("mbFcFilter", -1)},
             {QStringLiteral("mbSlaveFilter"), field("mbSlaveFilter", -1)},
-            {QStringLiteral("mbArea"), field("mbArea", ModbusArea::InResponse)},
+            {QStringLiteral("mbArea"), field("mbArea", ModbusArea::HoldingRegisters)},
         };
         const QString name = field("name", QStringLiteral("曲线%1").arg(i + 1)).toString();
         auto entry = BindingEntry::fromWidget(
@@ -179,7 +179,7 @@ void RealtimeChartWidget::apply()
 
 void RealtimeChartWidget::onAttached()
 {
-    // Modbus curves are read by the Modbus card's automatic polling, at the card's poll interval.
+    // Modbus curves are read by automatic polling (ModbusPoller), at its default period.
     QList<ModbusNeed> needs;
     for (const Curve &curve : m_curves) {
         if (const auto need = modbusNeed(curve.binding)) {

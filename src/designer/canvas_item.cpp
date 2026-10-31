@@ -52,7 +52,7 @@ CanvasItem::CanvasItem(const QString &typeName, const QJsonObject &properties, c
                         : id;
     // Only what the project stores; readers fall back to the metadata defaults, so a
     // loaded project saves back without growing every default property.
-    m_properties = normalizedRangeProperties(typeName, upgradedProperties(typeName, properties));
+    m_properties = normalizedRangeProperties(typeName, properties);
     m_size = QSizeF(m_meta->defaultWidth, m_meta->defaultHeight);
 
     setFlags(ItemIsMovable | ItemIsSelectable | ItemSendsGeometryChanges);

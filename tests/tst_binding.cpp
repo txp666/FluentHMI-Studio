@@ -19,7 +19,8 @@ class TestBinding : public QObject
     Q_OBJECT
 
   private slots:
-    // A register table reads by address; 响应内序号 keeps counting within the response.
+    // A binding reads its register table by address, holding registers when it names none. The keys that
+    // count within a response (reg0, coil0) name nothing a binding reads, and 响应内序号 is no table.
     void modbusAreasReadByRegisterAddress()
     {
         const Message registers{{"slave", 1LL}, {"fc", 3LL}, {"reg0", 0x41CALL}, {"reg1", 0x6666LL},
@@ -44,7 +45,9 @@ class TestBinding : public QObject
             }
             return out;
         };
-        QCOMPARE(read(with({{"mbRegIndex", 1}})), (QVariantList{0x6666LL}));
+        QVERIFY(read(with({{"mbRegIndex", 1}})).isEmpty());
+        QCOMPARE(read(with({{"mbRegIndex", 101}})), (QVariantList{0x6666LL}));
+        QVERIFY(read(with({{"mbArea", "响应内序号"}, {"mbRegIndex", 1}})).isEmpty());
         QCOMPARE(read(with({{"mbArea", "保持寄存器"}, {"mbRegIndex", 100}, {"mbDataType", "float32"}})).value(0).toFloat(),
                  25.3f);
         QCOMPARE(read(with({{"mbArea", "保持寄存器"}, {"mbRegIndex", 101}})), (QVariantList{0x6666LL}));
@@ -89,18 +92,18 @@ class TestBinding : public QObject
         auto e = BindingEntry::fromWidget(widget(
             "NumericDisplay", {{"parseMode", "Modbus"}, {"mbRegIndex", 0}, {"mbDataType", "float32"}}));
         // 0x41200000 = 10.0, big-endian word order
-        Message msg{{"slave", 1}, {"fc", 3}, {"reg0", 0x4120}, {"reg1", 0x0000}};
+        Message msg{{"slave", 1}, {"fc", 3}, {"hr0", 0x4120}, {"hr1", 0x0000}};
         QCOMPARE(e->extractFromParsed(msg).toDouble(), 10.0);
 
         e->mbRegOrder = QStringLiteral("小端(CD AB)");
-        Message swapped{{"slave", 1}, {"fc", 3}, {"reg0", 0x0000}, {"reg1", 0x4120}};
+        Message swapped{{"slave", 1}, {"fc", 3}, {"hr0", 0x0000}, {"hr1", 0x4120}};
         QCOMPARE(e->extractFromParsed(swapped).toDouble(), 10.0);
 
         e->mbDataType = QStringLiteral("int16");
-        QCOMPARE(e->extractFromParsed(Message{{"fc", 3}, {"reg0", 0xFFFF}}).toLongLong(), -1);
+        QCOMPARE(e->extractFromParsed(Message{{"fc", 3}, {"hr0", 0xFFFF}}).toLongLong(), -1);
 
         e->mbSlaveFilter = 2;
-        QVERIFY(!e->extractFromParsed(Message{{"slave", 1}, {"fc", 3}, {"reg0", 1}}).isValid());
+        QVERIFY(!e->extractFromParsed(Message{{"slave", 1}, {"fc", 3}, {"hr0", 1}}).isValid());
     }
 
     void hexBytesWithFraming()

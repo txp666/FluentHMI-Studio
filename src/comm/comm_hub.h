@@ -63,11 +63,13 @@ class CommHub : public QObject
     void rawReceived(const QByteArray &bytes);
     void bytesSent(const QByteArray &bytes);
     void linkConnected(const QString &description);
-    void linkUp(fhmi::Link *link); // right after linkConnected, for slots that need the link itself
     void linkDisconnected(const QString &description);
     void linkError(const QString &message);
     void linkInfo(const QString &message);
     void connectionStateChanged(bool anyConnected);
+    // Which links can send may have changed: one was added or removed, connected or disconnected, or a
+    // listening server got its first device or lost its last.
+    void linksChanged();
 
   private:
     QList<QPointer<Link>> m_links;

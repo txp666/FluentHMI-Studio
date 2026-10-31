@@ -31,7 +31,7 @@ std::optional<ModbusNeed> modbusNeed(const BindingEntry &binding)
     }
     const QString table = ModbusArea::prefix(binding.mbArea);
     if (table.isEmpty()) {
-        return std::nullopt; // 响应内序号 names no address to read
+        return std::nullopt; // not a register table: nothing to read
     }
     const bool wide = binding.mbDataType == QLatin1String("uint32") || binding.mbDataType == QLatin1String("int32") ||
                       binding.mbDataType == QLatin1String("float32");

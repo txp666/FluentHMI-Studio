@@ -61,10 +61,6 @@ class TestProject : public QObject
         QTest::newRow("parser") << QByteArray(R"({"serial":{"parser":"xml"}})");
         QTest::newRow("tab index") << QByteArray(R"({"widgets":[{"type":"Label","tabIndex":-1}]})");
         QTest::newRow("nested") << QByteArray(R"({"widgets":[{"type":"TabWidget","children":[{"type":"Bad"}]}]})");
-        QTest::newRow("poll mode")
-            << QByteArray(R"({"widgets":[{"type":"ModbusConfigCard","properties":{"pollMode":"auto"}}]})");
-        QTest::newRow("auto start")
-            << QByteArray(R"({"widgets":[{"type":"ModbusConfigCard","properties":{"autoStart":1}}]})");
         QTest::newRow("period")
             << QByteArray(R"({"widgets":[{"type":"Label","binding":{"parseMode":"Modbus","mbPeriod":60001}}]})");
     }
@@ -132,35 +128,53 @@ class TestProject : public QObject
         QCOMPARE(message, error);
     }
 
-    // A Modbus card saved before pollMode existed polls as in 0.2.0: its poll table (or the request in its
-    // fields), and only after a click on 轮询, with or without a table. A card that names its mode loads as it
-    // is. mbPeriod is a whole number of ms from 0 to 60000.
-    void modbusCardsKeepTheirPollMode()
+    // There is no poll table any more: pollList, pollMode and autoStart are properties a ModbusConfigCard
+    // does not have, which a file may carry and nothing reads. A Modbus binding or chart curve names a
+    // register table; 响应内序号 is an error. Other parse modes ignore mbArea.
+    void checksModbusKeys_data()
     {
-        const QByteArray json = R"json({"widgets":[
-            {"type":"ModbusConfigCard","id":"old","properties":{"defaultPoll":500,"pollList":"1,3,0,2"}},
-            {"type":"GroupBox","id":"box","children":[
-                {"type":"ModbusConfigCard","id":"nested","properties":{"pollList":"1,1,0,4"}}]},
-            {"type":"ModbusConfigCard","id":"plain","properties":{"title":"Modbus"}},
-            {"type":"ModbusConfigCard","id":"chosen","properties":{"pollMode":"自动","pollList":"1,3,0,2"}},
-            {"type":"NumericDisplay","id":"pv",
-                "binding":{"parseMode":"Modbus","mbArea":"保持寄存器","mbPeriod":250}}]})json";
+        QTest::addColumn<QByteArray>("json");
+        QTest::addColumn<QString>("error");
+        QTest::newRow("poll table keys")
+            << QByteArray(R"json({"widgets":[{"type":"ModbusConfigCard","id":"bus","properties":{"defaultPoll":500,
+                "pollMode":"轮询表","autoStart":false,"pollList":"1,3,0,2"}}]})json")
+            << QString();
+        QTest::newRow("in response")
+            << QByteArray(R"json({"widgets":[{"type":"NumericDisplay","id":"pv",
+                "binding":{"parseMode":"Modbus","mbArea":"响应内序号","mbRegIndex":0}}]})json")
+            << QStringLiteral("控件 pv 的 mbArea 只能是 保持寄存器、输入寄存器、线圈、离散输入");
+        QTest::newRow("not Modbus")
+            << QByteArray(R"json({"widgets":[{"type":"NumericDisplay","id":"pv",
+                "binding":{"parseMode":"键值匹配","key":"t","mbArea":"响应内序号"}}]})json")
+            << QString();
+        QTest::newRow("curve")
+            << QByteArray(R"json({"widgets":[{"type":"RealtimeChart","id":"trend","properties":{"curveCount":2,
+                "_curve_0_parseMode":"Modbus","_curve_0_mbArea":"线圈",
+                "_curve_1_parseMode":"Modbus","_curve_1_mbArea":"响应内序号"}}]})json")
+            << QStringLiteral("控件 trend 的 _curve_1_mbArea 只能是 保持寄存器、输入寄存器、线圈、离散输入");
+        QTest::newRow("period")
+            << QByteArray(R"json({"widgets":[{"type":"NumericDisplay","id":"pv",
+                "binding":{"parseMode":"Modbus","mbArea":"保持寄存器","mbPeriod":250}}]})json")
+            << QString();
+    }
+
+    void checksModbusKeys()
+    {
+        QFETCH(QByteArray, json);
+        QFETCH(QString, error);
+        const QJsonObject document = QJsonDocument::fromJson(json).object();
+        QString message;
         Project project;
-        QString error;
-        QVERIFY2(Project::fromJson(QJsonDocument::fromJson(json).object(), &project, &error), qPrintable(error));
-        QVERIFY(error.isEmpty());
-        const auto props = [&project](int index) {
-            return project.widgets.at(index).toObject().value("properties").toObject();
-        };
-        const QJsonObject nested =
-            project.widgets.at(1).toObject().value("children").toArray().at(0).toObject().value("properties").toObject();
-        for (const QJsonObject &legacy : {props(0), nested, props(2)}) {
-            QCOMPARE(legacy.value("pollMode").toString(), QStringLiteral("轮询表"));
-            QCOMPARE(legacy.value("autoStart"), QJsonValue(false));
+        QCOMPARE(Project::fromJson(document, &project, &message), error.isEmpty());
+        QCOMPARE(message, error);
+        if (error.isEmpty()) { // loaded as written
+            QCOMPARE(project.widgets, document.value("widgets").toArray());
         }
-        QCOMPARE(props(3).value("pollMode").toString(), QStringLiteral("自动"));
-        QVERIFY(!props(3).contains("autoStart")); // the default, true
-        QVERIFY(Project::validate(project.toJson(), &error));
+        const WidgetMeta *card = WidgetRegistry::instance().find("ModbusConfigCard");
+        QVERIFY(card);
+        for (const char *gone : {"pollList", "pollMode", "autoStart"}) {
+            QVERIFY(!card->prop(QLatin1String(gone)));
+        }
     }
 
     void defaultsFillMissingFields()

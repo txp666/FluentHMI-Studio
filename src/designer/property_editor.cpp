@@ -837,8 +837,9 @@ void PropertyEditor::buildBindingForm()
               value("byteOrder", QStringLiteral("大端(BE)")).toString()));
     add("frameHeader", tr("帧头(HEX)"), line(value("frameHeader", QString()).toString(), tr("如 AA 55")));
     add("frameTail", tr("帧尾(HEX)"), line(value("frameTail", QString()).toString(), tr("如 0D 0A")));
-    add("mbArea", tr("寄存器区"), combo(ModbusArea::options(), value("mbArea", ModbusArea::InResponse).toString()));
-    add("mbRegIndex", tr("寄存器索引"), spin(0, 65535, value("mbRegIndex", 0).toInt()));
+    add("mbArea", tr("寄存器区"),
+        combo(ModbusArea::options(), value("mbArea", ModbusArea::HoldingRegisters).toString()));
+    add("mbRegIndex", tr("寄存器地址"), spin(0, 65535, value("mbRegIndex", 0).toInt()));
     add("mbDataType", tr("数据类型"),
         combo({QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"), QStringLiteral("int32"),
                QStringLiteral("float32")},
@@ -949,11 +950,6 @@ void PropertyEditor::updateVisibility()
             setRowVisible(QLatin1String(field), notify);
         }
     }
-    if (meta.typeName == QLatin1String("ModbusConfigCard")) {
-        // The poll table only applies to 轮询表; 自动 plans its reads from the bindings.
-        setRowVisible(QStringLiteral("pollList"),
-                      m_item->propertyValue(QStringLiteral("pollMode")).toString() == QStringLiteral("轮询表"));
-    }
     if (meta.typeName == QLatin1String("RealtimeChart")) {
         const QString mode =
             m_item->properties().value(storageKey(QStringLiteral("curveParseMode"))).toString(ParseMode::KeyValue);
@@ -975,12 +971,6 @@ void PropertyEditor::updateVisibility()
         for (const char *field :
              {"mbArea", "mbRegIndex", "mbDataType", "mbRegOrder", "mbFcFilter", "mbSlaveFilter", "mbPeriod"}) {
             setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::Modbus);
-        }
-        // 响应内序号 counts registers within one response; a register table takes an address.
-        const auto *area = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("mbArea")));
-        if (auto *label = qobject_cast<QLabel *>(m_rows.value(QStringLiteral("binding.mbRegIndex")).first)) {
-            label->setText(!area || area->currentText() == ModbusArea::InResponse ? tr("寄存器索引")
-                                                                                  : tr("寄存器地址"));
         }
     }
 }
