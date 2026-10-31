@@ -390,7 +390,14 @@ void CanvasItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
     } else if (handle == Top || handle == Bottom) {
         setCursor(Qt::SizeVerCursor);
     } else {
-        setCursor((flags() & ItemIsMovable) ? Qt::SizeAllCursor : Qt::ArrowCursor);
+        // Qt paints SizeAllCursor from an image, and on macOS 27 with Qt 6.11 that image's conversion
+        // traps inside Qt (QImage::toCGImage), so the native hand cursor marks a movable item there.
+#ifdef Q_OS_MACOS
+        const Qt::CursorShape movable = Qt::OpenHandCursor;
+#else
+        const Qt::CursorShape movable = Qt::SizeAllCursor;
+#endif
+        setCursor((flags() & ItemIsMovable) ? movable : Qt::ArrowCursor);
     }
     QGraphicsObject::hoverMoveEvent(event);
 }
