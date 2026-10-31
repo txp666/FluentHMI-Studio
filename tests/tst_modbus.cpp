@@ -149,19 +149,19 @@ class TestModbus : public QObject
         QVERIFY(!need({{"parseMode", "键值匹配"}, {"key", "t"}}));
     }
 
-    // The bindings of the two Modbus tutorials, with the slave and period of their Modbus card, plan to
-    // the blocks the tutorials describe: 02 one block of holding registers 0–3 every 200 ms, 10 the coils,
-    // the live values and the settings every 500 ms.
-    void tutorialBindingsPlanTheirBlocks_data()
+    // The two Modbus tutorials have no Modbus card: their bindings and chart curves plan, on the poller's
+    // defaults (slave 1, 500 ms), to the blocks they describe. 02 reads holding registers 0–3 for its displays
+    // and 4–5 (float32) and 1 for its curves: one block. 10 reads the coils, the live values and the settings.
+    void tutorialsPlanTheirBlocks_data()
     {
         QTest::addColumn<QString>("file");
         QTest::addColumn<QList<ModbusBlock>>("blocks");
-        QTest::newRow("02") << QStringLiteral("02-温控仪监控.uidp") << QList<ModbusBlock>{{1, 3, 0, 4, 200}};
+        QTest::newRow("02") << QStringLiteral("02-温控仪监控.uidp") << QList<ModbusBlock>{{1, 3, 0, 6, 500}};
         QTest::newRow("10") << QStringLiteral("10-PLC恒压供水.uidp")
                             << QList<ModbusBlock>{{1, 1, 0, 4, 500}, {1, 3, 100, 6, 500}, {1, 3, 200, 2, 500}};
     }
 
-    void tutorialBindingsPlanTheirBlocks()
+    void tutorialsPlanTheirBlocks()
     {
         QFETCH(QString, file);
         QFETCH(QList<ModbusBlock>, blocks);
@@ -170,28 +170,42 @@ class TestModbus : public QObject
         QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/") + file, &project, &error),
                  qPrintable(error));
         QList<ModbusNeed> needs;
-        int slave = 0;
-        int period = 0;
-        visitWidgets(project.widgets, [&](const QJsonObject &widget) {
-            const QJsonObject props = widget.value("properties").toObject();
-            if (widget.value("type").toString() == QLatin1String("ModbusConfigCard") && slave == 0) {
-                slave = props.value("defaultSlave").toInt(1);
-                period = props.value("defaultPoll").toInt(0);
-            }
+        bool card = false;
+        const auto add = [&needs](const QJsonObject &widget) {
             if (const auto binding = BindingEntry::fromWidget(widget)) {
                 if (auto need = modbusNeed(*binding)) {
                     needs.append(*need);
                 }
             }
+        };
+        visitWidgets(project.widgets, [&](const QJsonObject &widget) {
+            const QString type = widget.value("type").toString();
+            card = card || type == QLatin1String("ModbusConfigCard");
+            add(widget);
+            if (type == QLatin1String("RealtimeChart")) { // its curves, keyed as the chart reads them
+                const QJsonObject props = widget.value("properties").toObject();
+                for (int i = 0; i < props.value("curveCount").toInt(1); ++i) {
+                    const auto field = [&props, i](const char *name) {
+                        return props.value(QStringLiteral("_curve_%1_%2").arg(i).arg(QLatin1String(name)));
+                    };
+                    QJsonObject binding{{"parseMode", field("parseMode")}, {"mbRegIndex", field("regIndex")}};
+                    for (const char *key : {"mbArea", "mbDataType", "mbSlaveFilter"}) {
+                        if (!field(key).isUndefined()) {
+                            binding.insert(QLatin1String(key), field(key));
+                        }
+                    }
+                    add(QJsonObject{{"type", type}, {"binding", binding}});
+                }
+            }
             return true;
         });
-        QCOMPARE(slave, 1);
+        QVERIFY(!card);
         for (ModbusNeed &need : needs) {
             if (need.slave <= 0) {
-                need.slave = slave;
+                need.slave = 1; // the poller's fallback slave without a card
             }
         }
-        QCOMPARE(planBlocks(needs, period > 0 ? period : 500), blocks);
+        QCOMPARE(planBlocks(needs, 500), blocks);
     }
 
     // One request on the line at a time: reads wait at the back, writes go ahead of every queued read
