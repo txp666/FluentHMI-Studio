@@ -4,10 +4,12 @@
 #include "core/binding.h"
 #include "core/command_encoder.h"
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
 
+#include <functional>
 #include <vector>
 
 namespace fhmi {
@@ -42,6 +44,18 @@ class RuntimeContext : public QObject
     // Sends a widget's command over every connected link, or explains why not.
     // `sent` collects the frames the links accepted, for a status line.
     bool send(const CommandResult &result, QList<QByteArray> *sent = nullptr);
+    // A Modbus request queued as `how` says (CommHub::sendModbus), explained the same way when no link takes it.
+    bool sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how);
+
+    // What the Modbus card's automatic polling reads: every binding of a register table, visible while
+    // its widget is on screen (not on a tab page in the background), then the curves charts registered.
+    QList<ModbusNeed> modbusNeeds() const;
+    // A chart's Modbus curves; an empty list removes them.
+    void setCurveNeeds(const QObject *chart, const QList<ModbusNeed> &needs);
+
+    // Milliseconds on a steady clock, which polling schedules by; tests replace it to step time by hand.
+    qint64 now() const { return m_clock ? m_clock() : m_steady.elapsed(); }
+    void setClock(std::function<qint64()> clock) { m_clock = std::move(clock); }
     void notify(const QString &title, const QString &content, const QString &type = NotifyType::Info,
                 int durationMs = 2000);
 
@@ -56,7 +70,10 @@ class RuntimeContext : public QObject
     CommHub *m_hub = nullptr;
     QHash<QString, QPointer<HmiWidget>> m_widgets;
     std::vector<BindingEntry> m_bindings;
+    QList<QPair<const QObject *, QList<ModbusNeed>>> m_curveNeeds; // in the order charts registered
     bool m_active = false;
+    QElapsedTimer m_steady;
+    std::function<qint64()> m_clock;
 };
 
 } // namespace fhmi

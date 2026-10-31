@@ -179,6 +179,14 @@ void RealtimeChartWidget::apply()
 
 void RealtimeChartWidget::onAttached()
 {
+    // Modbus curves are read by the Modbus card's automatic polling, at the card's poll interval.
+    QList<ModbusNeed> needs;
+    for (const Curve &curve : m_curves) {
+        if (const auto need = modbusNeed(curve.binding)) {
+            needs.append(*need);
+        }
+    }
+    context()->setCurveNeeds(this, needs);
     CommHub *hub = context()->hub();
     live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message) {
         if (!context()->isActive()) {
@@ -220,6 +228,7 @@ void RealtimeChartWidget::onAttached()
 
 void RealtimeChartWidget::onDetached()
 {
+    context()->setCurveNeeds(this, {});
     m_plot->clear();
 }
 

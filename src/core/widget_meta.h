@@ -89,6 +89,10 @@ class WidgetRegistry
 QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject properties,
                                       const QString &changed = QString());
 
+// Properties a project saved before they existed, filled in as that project meant them: a ModbusConfigCard
+// with a pollList but no pollMode polls its table (轮询表). Project::fromJson() applies it on load.
+QJsonObject upgradedProperties(const QString &typeName, QJsonObject properties);
+
 // Registered in builtin_widgets.cpp.
 QList<WidgetMeta> builtinWidgets();
 

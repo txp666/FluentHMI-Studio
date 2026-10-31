@@ -199,7 +199,8 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
         widget->setAssetBaseDir(assetBaseDir);
     }
     QJsonObject merged = meta->defaultProperties();
-    for (auto it = props.begin(); it != props.end(); ++it) {
+    const QJsonObject upgraded = upgradedProperties(typeName, props); // before the defaults fill the gaps
+    for (auto it = upgraded.begin(); it != upgraded.end(); ++it) {
         merged.insert(it.key(), it.value());
     }
     widget->setProperties(merged);

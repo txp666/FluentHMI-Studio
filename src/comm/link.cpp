@@ -1,5 +1,7 @@
 #include "comm/link.h"
 
+#include "comm/modbus_master.h"
+
 #include <QtCore/QTimer>
 
 namespace fhmi {
@@ -7,6 +9,7 @@ namespace fhmi {
 Link::Link(QObject *parent)
     : QObject(parent), m_parser(createParser(m_parserType, m_parserConfig, nullptr, m_modbusRequests))
 {
+    m_modbusMaster = new ModbusMaster(this); // first to see each message, so a reply sends the next request
 }
 
 Link::~Link() = default;
@@ -48,6 +51,12 @@ QString Link::textEncoding() const
         return QStringLiteral("utf-8");
     }
     return m_parserConfig.value(QStringLiteral("encoding")).toString(QStringLiteral("utf-8")).toLower();
+}
+
+bool Link::parsesModbus() const
+{
+    return m_parserType == QLatin1String("modbus") || m_parserType == QLatin1String("modbus_tcp") ||
+           m_parserType == QLatin1String("modbus_ascii");
 }
 
 std::unique_ptr<Parser> Link::createStreamParser() const

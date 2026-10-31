@@ -6,6 +6,7 @@ namespace fhmi {
 
 RuntimeContext::RuntimeContext(QObject *parent) : QObject(parent), m_hub(new CommHub(this))
 {
+    m_steady.start();
     connect(m_hub, &CommHub::messageReceived, this, &RuntimeContext::onMessage);
     connect(m_hub, &CommHub::rawReceived, this, &RuntimeContext::onRaw);
     connect(m_hub, &CommHub::linkDisconnected, this, [this]() {
@@ -31,6 +32,46 @@ void RuntimeContext::clear()
 {
     m_widgets.clear();
     m_bindings.clear();
+    m_curveNeeds.clear();
+}
+
+QList<ModbusNeed> RuntimeContext::modbusNeeds() const
+{
+    QList<ModbusNeed> needs;
+    for (const BindingEntry &binding : m_bindings) {
+        if (auto need = modbusNeed(binding)) {
+            const QPointer<HmiWidget> widget = m_widgets.value(binding.widgetId);
+            need->visible = widget && widget->isVisible();
+            needs.append(*need);
+        }
+    }
+    for (const auto &[chart, curves] : m_curveNeeds) {
+        QString id;
+        for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd(); ++it) {
+            if (it.value().data() == chart) {
+                id = it.key();
+            }
+        }
+        for (ModbusNeed need : curves) {
+            need.widgetId = id;
+            need.visible = true; // a curve keeps recording while it is out of sight
+            needs.append(need);
+        }
+    }
+    return needs;
+}
+
+void RuntimeContext::setCurveNeeds(const QObject *chart, const QList<ModbusNeed> &needs)
+{
+    for (qsizetype i = 0; i < m_curveNeeds.size(); ++i) {
+        if (m_curveNeeds.at(i).first == chart) {
+            m_curveNeeds.removeAt(i);
+            break;
+        }
+    }
+    if (!needs.isEmpty()) {
+        m_curveNeeds.append({chart, needs});
+    }
 }
 
 void RuntimeContext::setActive(bool active)
@@ -54,6 +95,19 @@ bool RuntimeContext::send(const CommandResult &result, QList<QByteArray> *sent)
         return false;
     }
     if (m_hub->send(*result.command, sent) == 0) {
+        notify(tr("提示"), tr("没有链路接收该命令"), NotifyType::Warning);
+        return false;
+    }
+    return true;
+}
+
+bool RuntimeContext::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how)
+{
+    if (!m_hub->isConnected()) {
+        notify(tr("提示"), tr("未连接，命令未发送"), NotifyType::Warning);
+        return false;
+    }
+    if (m_hub->sendModbus(request, sent, how) == 0) {
         notify(tr("提示"), tr("没有链路接收该命令"), NotifyType::Warning);
         return false;
     }

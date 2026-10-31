@@ -37,6 +37,7 @@ void CommHub::addLink(Link *link)
     connect(link, &Link::connectedChanged, this, [this, link](bool connected) {
         if (connected) {
             emit linkConnected(link->description());
+            emit linkUp(link);
         } else {
             emit linkDisconnected(link->description());
         }
@@ -88,18 +89,24 @@ int CommHub::send(const QByteArray &bytes, QList<QByteArray> *sent)
     return accepted;
 }
 
-int CommHub::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent)
+int CommHub::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how)
 {
     int accepted = 0;
     for (Link *link : connectedLinks()) {
-        // Framed the way the link parses its replies: MBAP for Modbus TCP, ':' and LRC for
-        // Modbus ASCII, CRC-terminated RTU otherwise.
-        const QString type = link->parserType();
-        const QByteArray frame = type == QLatin1String("modbus_tcp")
-                                     ? CommandEncoder::tcpFrame(request, CommandEncoder::nextTransaction())
-                                 : type == QLatin1String("modbus_ascii") ? CommandEncoder::asciiFrame(request)
-                                                                         : CommandEncoder::rtuFrame(request);
-        if (link->send(frame)) {
+        QByteArray frame;
+        if (link->parsesModbus()) {
+            // One request on the line at a time: the master sends it once the link is free.
+            frame = link->modbusMaster()->enqueue(request, how.timeoutMs, how.priority, how.done, how.owner);
+            if (!frame.isEmpty() && how.queuedOn) {
+                how.queuedOn->append(link->modbusMaster());
+            }
+        } else if (!how.modbusLinksOnly) {
+            frame = CommandEncoder::rtuFrame(request);
+            if (!link->send(frame)) {
+                frame.clear();
+            }
+        }
+        if (!frame.isEmpty()) {
             ++accepted;
             if (sent) {
                 sent->append(frame);

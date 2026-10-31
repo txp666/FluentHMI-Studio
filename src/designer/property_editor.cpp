@@ -842,6 +842,11 @@ void PropertyEditor::buildBindingForm()
               value("mbRegOrder", QStringLiteral("大端(AB CD)")).toString()));
     add("mbFcFilter", tr("功能码过滤"), spin(-1, 255, value("mbFcFilter", -1).toInt()));
     add("mbSlaveFilter", tr("从站过滤"), spin(-1, 247, value("mbSlaveFilter", -1).toInt()));
+    auto *period = spin(0, 60000, value("mbPeriod", 0).toInt());
+    add("mbPeriod", tr("采集周期(ms)"), period);
+    const QString periodTip = tr("0 = 用 Modbus 卡片的轮询 ms");
+    period->setToolTip(periodTip);
+    m_rows.value(QStringLiteral("binding.mbPeriod")).first->setToolTip(periodTip);
     add("expression", tr("转换表达式"), line(value("expression", QString()).toString(), tr("如 value * 0.1")));
 }
 
@@ -886,6 +891,7 @@ void PropertyEditor::commitBinding()
             {QStringLiteral("mbFcFilter"), intOf("mbFcFilter")},
             {QStringLiteral("mbSlaveFilter"), intOf("mbSlaveFilter")},
             {QStringLiteral("mbArea"), textOf("mbArea")},
+            {QStringLiteral("mbPeriod"), intOf("mbPeriod")},
         };
         const QString expression = textOf("expression");
         binding.insert(QStringLiteral("expression"), expression.isEmpty() ? QJsonValue() : QJsonValue(expression));
@@ -937,6 +943,11 @@ void PropertyEditor::updateVisibility()
             setRowVisible(QLatin1String(field), notify);
         }
     }
+    if (meta.typeName == QLatin1String("ModbusConfigCard")) {
+        // The poll table only applies to 轮询表; 自动 plans its reads from the bindings.
+        setRowVisible(QStringLiteral("pollList"),
+                      m_item->propertyValue(QStringLiteral("pollMode")).toString() == QStringLiteral("轮询表"));
+    }
     if (meta.typeName == QLatin1String("RealtimeChart")) {
         const QString mode =
             m_item->properties().value(storageKey(QStringLiteral("curveParseMode"))).toString(ParseMode::KeyValue);
@@ -955,7 +966,8 @@ void PropertyEditor::updateVisibility()
         for (const char *field : {"byteOffset", "dataType", "byteOrder", "frameHeader", "frameTail"}) {
             setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::HexBytes);
         }
-        for (const char *field : {"mbArea", "mbRegIndex", "mbDataType", "mbRegOrder", "mbFcFilter", "mbSlaveFilter"}) {
+        for (const char *field :
+             {"mbArea", "mbRegIndex", "mbDataType", "mbRegOrder", "mbFcFilter", "mbSlaveFilter", "mbPeriod"}) {
             setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::Modbus);
         }
         // 响应内序号 counts registers within one response; a register table takes an address.

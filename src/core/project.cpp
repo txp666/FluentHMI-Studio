@@ -59,6 +59,50 @@ bool validateCardParser(const QJsonObject &item, const QString &projectParser, Q
     return true;
 }
 
+// The Modbus polling keys: a card's pollMode and autoStart, a binding's mbPeriod.
+bool validateModbusPolling(const QJsonObject &item, QString *error)
+{
+    const QString id = item.value(QStringLiteral("id")).toString();
+    if (item.value(QStringLiteral("type")).toString() == QLatin1String("ModbusConfigCard")) {
+        const QJsonObject props = item.value(QStringLiteral("properties")).toObject();
+        const QJsonValue mode = props.value(QStringLiteral("pollMode"));
+        if (!mode.isUndefined() && mode != QJsonValue(QStringLiteral("自动")) &&
+            mode != QJsonValue(QStringLiteral("轮询表"))) {
+            return fail(error, QStringLiteral("卡片 %1 的 pollMode 只能是 自动 或 轮询表").arg(id));
+        }
+        const QJsonValue autoStart = props.value(QStringLiteral("autoStart"));
+        if (!autoStart.isUndefined() && !autoStart.isBool()) {
+            return fail(error, QStringLiteral("卡片 %1 的 autoStart 必须是 true 或 false").arg(id));
+        }
+    }
+    const QJsonValue period = item.value(QStringLiteral("binding")).toObject().value(QStringLiteral("mbPeriod"));
+    if (!period.isUndefined() && !period.isNull() &&
+        (!isStrictInt(period) || period.toDouble() < 0 || period.toDouble() > 60000)) {
+        return fail(error, QStringLiteral("控件 %1 的 mbPeriod 必须是 0–60000 的整数").arg(id));
+    }
+    return true;
+}
+
+// Fills in what older projects left out (upgradedProperties), through the whole widget tree.
+QJsonArray upgradedWidgets(const QJsonArray &widgets)
+{
+    QJsonArray out;
+    for (const QJsonValue &value : widgets) {
+        QJsonObject widget = value.toObject();
+        const QJsonValue props = widget.value(QStringLiteral("properties"));
+        if (props.isObject()) {
+            widget.insert(QStringLiteral("properties"),
+                          upgradedProperties(widget.value(QStringLiteral("type")).toString(), props.toObject()));
+        }
+        const QJsonValue children = widget.value(QStringLiteral("children"));
+        if (children.isArray()) {
+            widget.insert(QStringLiteral("children"), upgradedWidgets(children.toArray()));
+        }
+        out.append(widget);
+    }
+    return out;
+}
+
 bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, const QString &projectParser,
                      QString *error)
 {
@@ -86,6 +130,9 @@ bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, con
             return fail(error, QStringLiteral("控件属性必须是对象"));
         }
         if (!validateCardParser(item, projectParser, error)) {
+            return false;
+        }
+        if (!validateModbusPolling(item, error)) {
             return false;
         }
         const QJsonValue binding = item.value(QStringLiteral("binding"));
@@ -205,7 +252,7 @@ bool Project::fromJson(const QJsonObject &data, Project *out, QString *error)
     project.canvasWidth = canvas.value(QStringLiteral("width")).toInt(1200);
     project.canvasHeight = canvas.value(QStringLiteral("height")).toInt(800);
     project.gridSize = canvas.value(QStringLiteral("gridSize")).toInt(10);
-    project.widgets = data.value(QStringLiteral("widgets")).toArray();
+    project.widgets = upgradedWidgets(data.value(QStringLiteral("widgets")).toArray());
     const QJsonObject serialObject = data.value(QStringLiteral("serial")).toObject();
     for (auto it = serialObject.begin(); it != serialObject.end(); ++it) {
         project.serial.insert(it.key(), it.value());

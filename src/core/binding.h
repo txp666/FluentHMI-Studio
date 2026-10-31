@@ -64,6 +64,7 @@ class BindingEntry
     QString mbRegOrder = QStringLiteral("大端(AB CD)");
     int mbFcFilter = -1;
     QString mbArea = ModbusArea::InResponse; // with a table, mbRegIndex is a register address
+    int mbPeriod = 0; // how often the Modbus card's automatic polling reads it, in ms; 0: the card's poll ms
     QString displayFormat = QStringLiteral("自动");
     QString decimals = QStringLiteral("自动");
     QString ledOnValue = QStringLiteral("1");
