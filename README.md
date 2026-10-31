@@ -43,12 +43,13 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 两者使用同一种工程格式，控件和协议规则一致：
 
-- **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的 9 个示例工程都能打开、预览，并按原样保存。
-- **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 帧、Modbus RTU、Modbus TCP 四种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / Modbus 三种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
+- **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的 10 个示例工程都能打开、预览，并按原样保存。
+- **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 二进制帧（帧头帧尾、长度字段、校验、定长、空闲分帧）、Modbus RTU、Modbus TCP、Modbus ASCII 五种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / Modbus 三种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
+- **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定可选寄存器区和地址；Modbus 卡片按轮询表逐条读取多块地址，每条等到响应或超时再发下一条；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 
 不同之处在实现和导出方式：
 
-| | FluentHMI Studio 0.1.0 | PyQt UI Designer 0.1.6 |
+| | FluentHMI Studio 0.2.0 | PyQt UI Designer 0.2.0 |
 | --- | --- | --- |
 | 实现 | C++17 / Qt 6，原生编译 | Python / PyQt5（Qt 5），用 Nuitka 打包 |
 | 导出应用 | 复制预编译的运行器，再放入工程和图片，约 0.3 秒，不需要 Python 和编译器 | 生成 Python 源码，再用 Nuitka 编译；下载的设计器要打包时需另装 Python 与编译工具 |
@@ -126,9 +127,9 @@ macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHM
 
 发布新版本：修改 `CMakeLists.txt` 中 `project(... VERSION ...)`，可选地添加 `docs/release-notes/vX.Y.Z.md`，然后推送 `vX.Y.Z` 标签。`Release` 工作流会在 Windows 和 macOS（universal）上构建、测试、打包，全部通过后才发布 GitHub Release。
 
-## 当前状态（0.1.0）
+## 当前状态（0.2.0）
 
-已完成：全部 29 种控件、拖拽设计、网格吸附、缩放、对齐与分布、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT 预览、导出独立应用、Windows 与 macOS 打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）。
+已完成：全部 29 种控件、拖拽设计、网格吸附、缩放、对齐与分布、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT 预览、导出独立应用、Windows 与 macOS 打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与轮询表、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
 
 MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQTT 模块）：支持用户名密码、QoS 0/1/2、`+`/`#` 通配符订阅，TLS 使用系统证书库；连接成功后若断开会自动重连。与 Python 版一致，每条消息视为一帧，纯数值载荷还会以主题名为键再给出一份。
 

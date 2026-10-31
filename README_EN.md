@@ -45,12 +45,13 @@ This is the raw text of [docs/uidp-format.md](docs/uidp-format.md), which an AI 
 
 Both use the same project format, and their widget and protocol rules match:
 
-- **Compatible project format**: it reads and writes `.uidp` (version 1.0) directly, and its widget types, property names, default values and enum options match PyQt UI Designer one to one. All 9 example projects in `examples/` open, preview, and save back unchanged.
-- **Same parsing and binding rules**: the four parsers (line text with key-value / JSON / CSV, HEX frame, Modbus RTU, Modbus TCP), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the three command encodings (text / HEX / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
+- **Compatible project format**: it reads and writes `.uidp` (version 1.0) directly, and its widget types, property names, default values and enum options match PyQt UI Designer one to one. All 10 example projects in `examples/` open, preview, and save back unchanged.
+- **Same parsing and binding rules**: the five parsers (line text with key-value / JSON / CSV; binary HEX frames with header and footer, length field, checksum, fixed length or idle-gap framing; Modbus RTU; Modbus TCP; Modbus ASCII), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the three command encodings (text / HEX / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
+- **Same Modbus features for PLCs**: read requests sent from here are remembered, so the registers in a reply are also named by address (holding register 100 is `hr100`) and a binding can pick a register table and an address; the Modbus card reads several address blocks from its poll table one request at a time, each waiting for its reply or the timeout; FC16 writes int16, 32-bit integers and float32 values by data type.
 
 The differences are in how they are built and how they export apps:
 
-| | FluentHMI Studio 0.1.0 | PyQt UI Designer 0.1.6 |
+| | FluentHMI Studio 0.2.0 | PyQt UI Designer 0.2.0 |
 | --- | --- | --- |
 | Implementation | C++17 / Qt 6, compiled natively | Python / PyQt5 (Qt 5), packaged with Nuitka |
 | Exporting an app | Copies a prebuilt runner and adds the project and images, about 0.3 s, no Python or compiler needed | Generates Python source, then compiles it with Nuitka; the downloaded designer needs Python and build tools installed separately to package |
@@ -128,9 +129,9 @@ On macOS this produces `FluentHMI Studio.app`, with the runner at `Contents/Help
 
 To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`, optionally add `docs/release-notes/vX.Y.Z.md`, then push a `vX.Y.Z` tag. The `Release` workflow builds, tests and packages on Windows and macOS (universal), and only publishes the GitHub Release when everything passes.
 
-## Current status (0.1.0)
+## Current status (0.2.0)
 
-Done: all 29 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT preview, standalone app export, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, and online updates (check, download and verify, replace and restart).
+Done: all 29 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT preview, standalone app export, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address with a poll table, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
 The MQTT link is a built-in MQTT 3.1.1 client (based on QSslSocket, so the Qt MQTT module isn't needed): it supports username and password, QoS 0/1/2, `+`/`#` wildcard subscriptions, and TLS with the system certificate store, and it reconnects automatically if a connection that succeeded drops. As in the Python version, each message is treated as one frame, and a payload that is a single plain number is also given with the topic name as its key.
 
