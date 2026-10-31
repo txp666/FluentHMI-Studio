@@ -282,8 +282,9 @@ class TestProtocolParser : public QObject
 
     void hexFrameFields()
     {
-        HexFrameParser parser(QByteArray::fromHex("AA55"), QByteArray::fromHex("55AA"),
-                              {{"a", 0, 1, "uint8"}, {"b", 1, 2, "int16"}, {"c", 3, 4, "float32"}});
+        HexFrameConfig config; // header AA55, footer 55AA
+        config.fields = {{"a", 0, 1, "uint8"}, {"b", 1, 2, "int16"}, {"c", 3, 4, "float32"}};
+        HexFrameParser parser(config);
         const QByteArray frame = QByteArray::fromHex("0011AA55" "7F" "FFFE" "41200000" "55AA");
         QList<Message> out = parser.feed(frame.left(6));
         QVERIFY(out.isEmpty());

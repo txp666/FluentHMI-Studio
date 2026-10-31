@@ -494,24 +494,17 @@ QVariant BindingEntry::evaluate(const QVariant &raw) const
     if (expression.trimmed().isEmpty()) {
         return raw;
     }
-    const auto number = toReal(raw);
-    if (!number) {
-        return raw;
+    // `value` has the raw value's kind: a bool, an int, or a float (numeric text included).
+    QVariant value = raw;
+    if (raw.typeId() != QMetaType::Bool && !isIntegral(raw)) {
+        const auto number = toReal(raw);
+        if (!number) {
+            return raw;
+        }
+        value = *number;
     }
-    bool boolean = false;
-    const auto result = Expression::evaluate(expression, *number, &boolean);
-    if (!result) {
-        return raw;
-    }
-    if (boolean) {
-        return *result != 0.0; // a comparison gives True / False, as in Python
-    }
-    // Keep integer results integral, as Python does for int * int.
-    if (isIntegral(raw) && *result == std::floor(*result) && std::fabs(*result) < 9e15 &&
-        !expression.contains(QLatin1Char('/')) && !expression.contains(QLatin1Char('.'))) {
-        return qlonglong(*result);
-    }
-    return *result;
+    const QVariant result = Expression::evaluate(expression, value);
+    return result.isValid() ? result : raw; // where Python's eval raises, the raw value
 }
 
 QVariant BindingEntry::formatValue(const QVariant &value) const

@@ -435,12 +435,12 @@ void DataRecvCardWidget::apply()
     m_output->document()->setMaximumBlockCount(std::max(50, integer("maxLines")));
 }
 
-QString DataRecvCardWidget::render(const QByteArray &bytes, const QString &encoding) const
+QString DataRecvCardWidget::render(const QByteArray &bytes, bool received) const
 {
     if (m_hex->isChecked()) {
         return toHexString(bytes);
     }
-    QString text = LineParser::decode(bytes, encoding);
+    QString text = received ? context()->hub()->decodeRaw(bytes) : LineParser::decode(bytes, QStringLiteral("utf-8"));
     while (text.endsWith(QLatin1Char('\n')) || text.endsWith(QLatin1Char('\r'))) {
         text.chop(1);
     }
@@ -463,9 +463,8 @@ void DataRecvCardWidget::onAttached()
 {
     CommHub *hub = context()->hub();
     // << received, >> sent, --- link events ---, coloured as in PyQt UI Designer.
-    const auto traffic = [this](const QByteArray &bytes, const QString &encoding, const char *arrows,
-                                const char *color) {
-        const QString body = render(bytes, encoding);
+    const auto traffic = [this](const QByteArray &bytes, bool received, const char *arrows, const char *color) {
+        const QString body = render(bytes, received);
         if (body.isEmpty()) {
             return;
         }
@@ -477,13 +476,13 @@ void DataRecvCardWidget::onAttached()
         append(QStringLiteral("<span style=\"color:#74c7ec\">[%1] --- %2 ---</span>")
                    .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss")), terminalEscape(message)));
     };
-    live(connect(hub, &CommHub::rawReceived, this, [this, hub, traffic](const QByteArray &bytes) {
-        traffic(bytes, hub->rawEncoding(), "<<", "#a6e3a1"); // text the way the link that sent it spells it
+    live(connect(hub, &CommHub::rawReceived, this, [this, traffic](const QByteArray &bytes) {
+        traffic(bytes, true, "<<", "#a6e3a1");
         ++m_count;
         m_counter->setText(tr("%1 条").arg(m_count));
     }));
     live(connect(hub, &CommHub::bytesSent, this,
-                 [traffic](const QByteArray &bytes) { traffic(bytes, QStringLiteral("utf-8"), ">>", "#f9e2af"); }));
+                 [traffic](const QByteArray &bytes) { traffic(bytes, false, ">>", "#f9e2af"); }));
     live(connect(hub, &CommHub::linkConnected, this,
                  [event](const QString &link) { event(tr("已连接: %1").arg(link)); }));
     live(connect(hub, &CommHub::linkDisconnected, this, [event](const QString &) { event(tr("已断开")); }));

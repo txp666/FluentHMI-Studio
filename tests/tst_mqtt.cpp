@@ -405,17 +405,14 @@ class TestMqtt : public QObject
         QCOMPARE(values.first().first().value<Message>().value("temp").toLongLong(), -10);
         hex.reset();
 
-        auto idle = connected("hex", R"json({"header": "7E", "footer": "", "idleTimeout": 1000,
+        auto idle = connected("hex", R"json({"header": "7E", "footer": "", "idleTimeout": 60000,
             "fields": [["a", 0, 1, "uint8"]]})json");
         QVERIFY(idle);
         QSignalSpy bursts(idle.get(), &Link::rawReceived);
         QTRY_VERIFY(idle->isConnected());
-        QElapsedTimer clock;
-        clock.start();
         broker.publish(QStringLiteral("device/data"), QByteArray::fromHex("007E0102"));
         broker.publish(QStringLiteral("sensor/x"), QByteArray::fromHex("7E05"));
-        QTRY_COMPARE(bursts.size(), 2);
-        QVERIFY(clock.elapsed() < 1000); // not waiting for the idle timeout
+        QTRY_COMPARE(bursts.size(), 2); // each message's end flushes its frame, long before a minute
         QCOMPARE(bursts.at(0).first().toByteArray(), QByteArray::fromHex("7E0102"));
         QCOMPARE(bursts.at(1).first().toByteArray(), QByteArray::fromHex("7E05"));
     }

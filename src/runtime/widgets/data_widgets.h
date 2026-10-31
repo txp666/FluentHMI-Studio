@@ -94,7 +94,8 @@ class DataRecvCardWidget : public HmiWidget
 
   private:
     void append(const QString &html);
-    QString render(const QByteArray &bytes, const QString &encoding) const;
+    // Bytes as HEX or text: received text the way its link spells it, what was sent as UTF-8.
+    QString render(const QByteArray &bytes, bool received) const;
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_counter = nullptr;
