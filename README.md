@@ -2,6 +2,7 @@
   <img src="resources/logo.png" width="110" alt="FluentHMI Studio">
   <h1 align="center">FluentHMI Studio</h1>
   <p align="center">面向硬件工程师的 C++ 可视化上位机设计器 · 基于 <a href="https://github.com/txp666/FluentQtWidgets">FluentQtWidgets</a></p>
+  <p align="center"><a href="README_EN.md">English</a> · 简体中文</p>
 </p>
 
 FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 的 C++/Qt 6 重写版：拖拽控件、配置属性、绑定串口、TCP 或 MQTT 数据，然后把设计导出成一个**不需要编译器**就能运行的独立应用。和 Python 版相比，安装包更小，启动约快一倍，导出不到一秒，还能在应用内更新（见[与 Python 版相比](#与-python-版相比)）。
