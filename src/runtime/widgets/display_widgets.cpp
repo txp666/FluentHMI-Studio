@@ -1,5 +1,6 @@
 #include "runtime/widgets/display_widgets.h"
 
+#include <FluentQtWidgets/Color.h>
 #include <FluentQtWidgets/Theme.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/ProgressBar.h>
@@ -22,9 +23,10 @@ bool isDarkTheme()
     return FluentQt::ThemeManager::instance()->effectiveTheme() == FluentQt::Theme::Dark;
 }
 
+// The accent as FluentQtWidgets paints it: lighter in dark mode.
 QColor accentColor()
 {
-    return FluentQt::ThemeManager::instance()->accentColor();
+    return FluentQt::themeColor();
 }
 
 namespace {

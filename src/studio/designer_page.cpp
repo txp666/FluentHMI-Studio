@@ -254,8 +254,7 @@ bool DesignerPage::maybeSave()
     box.cancelButton()->setText(tr("取消"));
     auto *discard = new FluentQt::PushButton(&box);
     discard->setText(tr("不保存"));
-    // Same width as the box's own buttons.
-    discard->setMinimumWidth(box.cancelButton()->minimumWidth());
+    // Stretch 1, like the box's own buttons, so the three share the row evenly.
     box.buttonLayout()->insertWidget(1, discard, 1, Qt::AlignVCenter);
     bool discarded = false;
     connect(discard, &QPushButton::clicked, &box, [&box, &discarded]() {

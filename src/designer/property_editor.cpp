@@ -306,13 +306,9 @@ void PropertyEditor::rebuild()
 
 QFormLayout *PropertyEditor::addSection(const QString &title)
 {
-    // SimpleCardWidget comes with its own box layout; the form goes inside it.
     auto *card = new FluentQt::SimpleCardWidget(m_content);
-    auto *box = static_cast<QBoxLayout *>(card->layout());
-    box->setContentsMargins(12, 10, 12, 10);
-    auto *form = new QFormLayout;
-    box->addLayout(form);
-    form->setContentsMargins(0, 0, 0, 0);
+    auto *form = new QFormLayout(card);
+    form->setContentsMargins(12, 10, 12, 10);
     form->setHorizontalSpacing(10);
     form->setVerticalSpacing(6);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -704,9 +700,9 @@ void PropertyEditor::buildItemForm()
     const WidgetMeta &meta = m_item->meta();
 
     auto *header = new FluentQt::SimpleCardWidget(m_content);
-    static_cast<QBoxLayout *>(header->layout())->setContentsMargins(12, 10, 12, 10);
-    auto *headerLayout = new QFormLayout;
-    static_cast<QBoxLayout *>(header->layout())->addLayout(headerLayout);
+    auto *headerLayout = new QFormLayout(header);
+    headerLayout->setContentsMargins(12, 10, 12, 10);
+    headerLayout->setSpacing(8);
     headerLayout->addRow(new FluentQt::SubtitleLabel(meta.displayName, header));
     auto *id = new FluentQt::LineEdit(header);
     id->setText(m_item->widgetId());
