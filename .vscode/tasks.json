@@ -1,0 +1,78 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Configure FluentHMI Studio (Debug)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--preset",
+        "debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build FluentHMI Studio (Debug)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "Configure FluentHMI Studio (Debug)"
+      ],
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc",
+      "windows": {
+        "problemMatcher": "$msCompile"
+      }
+    },
+    {
+      "label": "Configure FluentHMI Studio (Release)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--preset",
+        "release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build FluentHMI Studio (Release)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "Configure FluentHMI Studio (Release)"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "windows": {
+        "problemMatcher": "$msCompile"
+      }
+    }
+  ]
+}

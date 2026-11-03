@@ -1,0 +1,38 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug FluentHMI Studio",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/debug/FluentHMIStudio",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "preLaunchTask": "Build FluentHMI Studio (Debug)",
+      "linux": {
+        "program": "${workspaceFolder}/build/debug/FluentHMIStudio",
+        "MIMode": "gdb"
+      },
+      "osx": {
+        "program": "${workspaceFolder}/build/debug/FluentHMIStudio.app/Contents/MacOS/FluentHMIStudio",
+        "MIMode": "lldb"
+      }
+    },
+    {
+      "name": "Debug FluentHMI Studio (Windows, MSVC)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/debug/FluentHMIStudio.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "console": "integratedTerminal",
+      "preLaunchTask": "Build FluentHMI Studio (Debug)"
+    }
+  ]
+}

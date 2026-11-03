@@ -92,6 +92,8 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
+In VS Code, open this folder: Ctrl/Cmd+Shift+B builds, and F5 builds and starts Studio. On Windows, start VS Code from a Developer PowerShell for Visual Studio, so that CMake finds the compiler, and before the first F5 pick "Debug FluentHMI Studio (Windows, MSVC)" under Run and Debug.
+
 On macOS, run `open build/debug/FluentHMIStudio.app`. To export without the UI:
 
 ```bash

@@ -90,6 +90,8 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
+在 VS Code 中打开本目录，Ctrl/Cmd+Shift+B 构建，F5 构建并启动 Studio。Windows 上要从 Visual Studio 的 Developer PowerShell 启动 VS Code，CMake 才能找到编译器；第一次按 F5 前，在“运行和调试”里选 “Debug FluentHMI Studio (Windows, MSVC)”。
+
 macOS 运行 `open build/debug/FluentHMIStudio.app`。无界面导出：
 
 ```bash

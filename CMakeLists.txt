@@ -209,6 +209,15 @@ set_target_properties(FluentHMIStudio PROPERTIES
 )
 # The studio exports applications by copying the runtime, so build them together.
 add_dependencies(FluentHMIStudio FluentHMIRuntime)
+# On Windows, Qt's DLLs and plugins go beside the executables, which share the build folder, so they start without
+# Qt on PATH (F5 in VS Code, a double click). The tests there then load Qt from that folder too, and some run on the
+# offscreen platform. Packages are deployed by scripts/package.py instead.
+if(WIN32 AND TARGET Qt6::windeployqt)
+    add_custom_command(TARGET FluentHMIStudio POST_BUILD
+        COMMAND Qt6::windeployqt --verbose 0 --no-translations --no-system-d3d-compiler --no-opengl-sw
+                --no-compiler-runtime --include-plugins qoffscreen "$<TARGET_FILE:FluentHMIStudio>"
+        VERBATIM)
+endif()
 
 # Icons: an .icns in each macOS bundle, an icon plus version information in each .exe.
 foreach(target IN ITEMS FluentHMIStudio FluentHMIRuntime)
