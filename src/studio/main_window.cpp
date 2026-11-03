@@ -50,6 +50,9 @@ MainWindow::MainWindow(QWidget *parent) : FluentQt::FluentWindow(parent)
     connect(m_designer, &DesignerPage::notify, this, [this](const QString &title, const QString &content, bool error) {
         showInfoBar(this, title, content, error ? NotifyType::Error : NotifyType::Success, error ? 4000 : 1500);
     });
+    connect(m_designer, &DesignerPage::warning, this, [this](const QString &title, const QString &content) {
+        showInfoBar(this, title, content, NotifyType::Warning, 3000);
+    });
     connect(m_preview, &PreviewPage::exportRequested, this, &MainWindow::exportApplication);
 
     m_updates = new UpdateController(this);

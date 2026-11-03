@@ -64,7 +64,7 @@ The differences are in how they are built and how they export apps:
 
 Package sizes are taken from each project's GitHub Release. Startup and memory were measured on the same Mac (Apple M5 Pro, 48 GB, macOS 27.0.1) with the Apple Silicon builds of both versions: an empty project, launched 4 times each, counting the last 3 (the first launch took 2.0 s and 3.9 s respectively); memory is the resident memory 5 seconds after the window appears. The export time is from exporting `examples/demo.uidp` three times (0.26–0.41 s).
 
-What the Python version still has and this one doesn't yet: exporting a source project you can keep editing, and the live chart's cursor and data save / load (see the roadmap below).
+What the Python version still has and this one doesn't yet: exporting a source project you can keep editing (see the roadmap below).
 
 ## Architecture
 
@@ -133,7 +133,7 @@ To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`,
 
 ## Current status (0.2.1)
 
-Done: all 28 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT preview, standalone app export, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
+Done: all 28 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
 The MQTT link is a built-in MQTT 3.1.1 client (based on QSslSocket, so the Qt MQTT module isn't needed): it supports username and password, QoS 0/1/2, `+`/`#` wildcard subscriptions, and TLS with the system certificate store, and it reconnects automatically if a connection that succeeded drops. As in the Python version, each message is treated as one frame, and a payload that is a single plain number is also given with the topic name as its key.
 
@@ -141,9 +141,6 @@ Tested end to end on macOS: data display, charts and commands with simulated TCP
 
 Roadmap:
 
-- Undo / redo, copy / paste
-- Full history, cursor and CSV/JSON loading for the live chart
-- Exported apps using the project's own icon
 - Exporting a C++/CMake source project for people who need to develop it further
 - Developer ID signing and notarization, Windows code signing
 - UDP, Bluetooth; an English interface

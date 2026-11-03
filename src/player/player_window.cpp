@@ -2,6 +2,7 @@
 
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
+#include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/Widgets/InfoBar.h>
 #include <FluentQtWidgets/Widgets/ScrollArea.h>
@@ -16,7 +17,8 @@ namespace fhmi {
 PlayerWindow::PlayerWindow(const Project &project, QWidget *parent) : FluentQt::FluentWidget(parent)
 {
     setWindowTitle(project.appName);
-    setWindowIcon(QIcon(QStringLiteral(":/fluenthmi/logo.png")));
+    const QIcon icon = iconFromFile(project.iconPath());
+    setWindowIcon(icon.isNull() ? QIcon(QStringLiteral(":/fluenthmi/logo.png")) : icon);
     titleBar()->raise();
 
     auto *layout = new QVBoxLayout(this);

@@ -175,7 +175,7 @@ Project::Project()
 
 QJsonObject Project::toJson() const
 {
-    return QJsonObject{
+    QJsonObject document{
         {QStringLiteral("version"), QLatin1String(FormatVersion)},
         {QStringLiteral("appName"), appName},
         {QStringLiteral("canvas"),
@@ -185,6 +185,10 @@ QJsonObject Project::toJson() const
         {QStringLiteral("widgets"), widgets},
         {QStringLiteral("serial"), serial},
     };
+    if (!icon.isEmpty()) {
+        document.insert(QStringLiteral("icon"), icon);
+    }
+    return document;
 }
 
 bool Project::validate(const QJsonObject &data, QString *error)
@@ -237,8 +241,15 @@ bool Project::fromJson(const QJsonObject &data, Project *out, QString *error)
     if (!validate(data, error)) {
         return false;
     }
+    *out = fromTrustedJson(data);
+    return true;
+}
+
+Project Project::fromTrustedJson(const QJsonObject &data)
+{
     Project project;
     project.appName = data.value(QStringLiteral("appName")).toString(QStringLiteral("上位机"));
+    project.icon = data.value(QStringLiteral("icon")).toString();
     const QJsonObject canvas = data.value(QStringLiteral("canvas")).toObject();
     project.canvasWidth = canvas.value(QStringLiteral("width")).toInt(1200);
     project.canvasHeight = canvas.value(QStringLiteral("height")).toInt(800);
@@ -248,8 +259,7 @@ bool Project::fromJson(const QJsonObject &data, Project *out, QString *error)
     for (auto it = serialObject.begin(); it != serialObject.end(); ++it) {
         project.serial.insert(it.key(), it.value());
     }
-    *out = project;
-    return true;
+    return project;
 }
 
 bool Project::load(const QString &path, Project *out, QString *error)
@@ -295,6 +305,14 @@ bool Project::save(const QString &path, QString *error) const
 QString Project::assetBaseDir() const
 {
     return filePath.isEmpty() ? QDir::currentPath() : QFileInfo(filePath).absolutePath();
+}
+
+QString Project::iconPath() const
+{
+    if (icon.isEmpty()) {
+        return QString();
+    }
+    return QDir::isRelativePath(icon) ? QDir(assetBaseDir()).absoluteFilePath(icon) : icon;
 }
 
 QString Project::parserType() const

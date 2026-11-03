@@ -38,14 +38,17 @@ class PropertyEditor : public FluentQt::ScrollArea
     void refreshGeometry();
 
   signals:
-    void projectSettingsChanged();
-    void modified();
+    // A design change. Changes with the same key in a row (typing in one field, a spin box's arrows) are one
+    // undo step; an empty key always starts a new one.
+    void projectSettingsChanged(const QString &mergeKey);
+    void modified(const QString &mergeKey);
     void message(const QString &title, const QString &content, bool error);
 
   private:
     using Commit = std::function<void(const QJsonValue &)>;
     using ConfigRead = std::function<QJsonObject()>;
-    using ConfigWrite = std::function<void(const QJsonObject &)>;
+    // The edited config, and the key of the row that changed it.
+    using ConfigWrite = std::function<void(const QJsonObject &, const QString &key)>;
 
     void rebuild();
     void clearContent();
@@ -54,6 +57,8 @@ class PropertyEditor : public FluentQt::ScrollArea
     QWidget *createEditor(const PropDef &def, const QJsonValue &value, const Commit &commit);
 
     void buildProjectForm();
+    // The project's icon beside its name: choose an image or go back to the default.
+    QWidget *createIconButton(QWidget *nameField);
     void buildItemForm();
     void buildBindingForm();
     // The parserConfig rows, the same for the project's default frame format and a link card's
@@ -69,8 +74,9 @@ class PropertyEditor : public FluentQt::ScrollArea
     // per-curve / per-page keys, exactly as PyQt UI Designer stores them.
     QString storageKey(const QString &name) const;
     QJsonValue itemValue(const PropDef &def) const;
-    void commitProperty(const QString &name, const QJsonValue &value);
-    void commitBinding();
+    // `detail` tells apart edits of one property that are not one step (the rows of a card's frame format).
+    void commitProperty(const QString &name, const QJsonValue &value, const QString &detail = QString());
+    void commitBinding(const QString &field);
     void updateVisibility();
     void setRowVisible(const QString &key, bool visible);
 
