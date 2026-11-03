@@ -400,6 +400,12 @@ class ChartPlot : public FluentQt::RealtimePlotWidget
             const qreal padding = std::max(0.2, std::max(1e-6, high - low) * 0.12);
             yLow = low - padding;
             yHigh = high + padding;
+            // As the plot's own auto range: no negative axis for readings that are never negative.
+            if (low >= 0) {
+                yLow = std::max<qreal>(0, yLow);
+            } else if (high <= 0) {
+                yHigh = std::min<qreal>(0, yHigh);
+            }
         }
         m_fitting = true;
         setXRange(0, qreal(std::max<qsizetype>(1, count - 1)));
