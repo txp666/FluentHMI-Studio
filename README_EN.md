@@ -82,7 +82,7 @@ The design canvas shows the real runtime widgets, wrapped in QGraphicsProxyWidge
 
 ## Building
 
-Requires CMake 3.21+, C++17 and Qt 6.5+ (Core, Gui, Widgets, Svg, Network, SerialPort).
+Requires CMake 3.21+, C++17 and Qt 6.12 (Core, Gui, Widgets, Svg, Network, SerialPort). A Qt in the default folder of the Qt installer or aqtinstall (`~/Qt`, `C:\Qt`) is found by itself; for one anywhere else, add `-DCMAKE_PREFIX_PATH=<qt-dir>`.
 
 ```bash
 git clone --recursive https://github.com/txp666/FluentHMI-Studio.git

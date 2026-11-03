@@ -80,7 +80,7 @@ tools         uidp_reference    从控件注册表重新生成 docs/uidp-widgets
 
 ## 构建
 
-需要 CMake 3.21+、C++17、Qt 6.5+（Core、Gui、Widgets、Svg、Network、SerialPort）。
+需要 CMake 3.21+、C++17、Qt 6.12（Core、Gui、Widgets、Svg、Network、SerialPort）。Qt 装在 Qt 安装器或 aqtinstall 的默认位置（`~/Qt`、`C:\Qt`）时会被自动找到；装在其他位置时，用 `-DCMAKE_PREFIX_PATH=<Qt 目录>` 指定。
 
 ```bash
 git clone --recursive https://github.com/txp666/FluentHMI-Studio.git
