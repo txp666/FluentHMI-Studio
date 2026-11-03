@@ -194,10 +194,11 @@ void LinkCardBase::showStatus()
     m_stripStatus->setMinimumWidth(polling ? m_stripStatus->fontMetrics().horizontalAdvance(m_connection) : 0);
 }
 
-void LinkCardBase::addField(const QString &label, QWidget *field)
+void LinkCardBase::addField(const QString &label, QWidget *field, bool small)
 {
     const int row = m_grid->rowCount();
-    auto *caption = new FluentQt::BodyLabel(label, this);
+    QLabel *caption = small ? static_cast<QLabel *>(new FluentQt::CaptionLabel(label, this))
+                            : static_cast<QLabel *>(new FluentQt::BodyLabel(label, this));
     m_grid->addWidget(caption, row, 0);
     m_grid->addWidget(field, row, 1);
     caption->show();
@@ -278,9 +279,20 @@ SerialConfigCardWidget::SerialConfigCardWidget(const WidgetMeta &meta, QWidget *
     portLayout->addWidget(m_port, 1);
     portLayout->addWidget(m_refresh);
     m_baud = comboOf(this, enumOptions(meta, "defaultBaud"));
-    m_dataBits = comboOf(this, enumOptions(meta, "defaultDatabits"));
-    m_parity = comboOf(this, enumOptions(meta, "defaultParity"));
-    m_stopBits = comboOf(this, enumOptions(meta, "defaultStopbits"));
+    // Data bits, parity and stop bits share one row, as in PyQt UI Designer.
+    m_paramsRow = new QWidget(this);
+    auto *paramsLayout = new QHBoxLayout(m_paramsRow);
+    paramsLayout->setContentsMargins(0, 0, 0, 0);
+    paramsLayout->setSpacing(6);
+    m_dataBits = comboOf(m_paramsRow, enumOptions(meta, "defaultDatabits"));
+    m_parity = comboOf(m_paramsRow, enumOptions(meta, "defaultParity"));
+    m_stopBits = comboOf(m_paramsRow, enumOptions(meta, "defaultStopbits"));
+    paramsLayout->addWidget(m_dataBits, 1);
+    paramsLayout->addWidget(new FluentQt::CaptionLabel(tr("校验"), m_paramsRow));
+    paramsLayout->addWidget(m_parity, 1);
+    paramsLayout->addWidget(new FluentQt::CaptionLabel(tr("停止位"), m_paramsRow));
+    paramsLayout->addWidget(m_stopBits, 1);
+    m_paramsRow->hide();
     m_flow = comboOf(this, enumOptions(meta, "defaultFlow"));
     connect(m_refresh, &QToolButton::clicked, this, &SerialConfigCardWidget::refreshPorts);
 }
@@ -302,9 +314,7 @@ void SerialConfigCardWidget::apply()
     updatePolling(); // modbusPeriod and the like apply at once
 
     clearFields();
-    for (QWidget *w : {static_cast<QWidget *>(m_dataBits), static_cast<QWidget *>(m_parity),
-                       static_cast<QWidget *>(m_stopBits), static_cast<QWidget *>(m_flow),
-                       static_cast<QWidget *>(m_parser)}) {
+    for (QWidget *w : {m_paramsRow, static_cast<QWidget *>(m_flow), static_cast<QWidget *>(m_parser)}) {
         w->hide();
     }
     const QString mode = text("displayMode");
@@ -312,9 +322,14 @@ void SerialConfigCardWidget::apply()
     m_title->setVisible(!singleRow);
     m_status->setVisible(!singleRow);
     auto *layout = static_cast<QVBoxLayout *>(this->layout());
+    // In a strip the port takes the width (long names like /dev/cu.usbserial-…), the baud rate a
+    // fixed 90 px, as in PyQt UI Designer; in the rows every field stretches.
+    m_grid->setColumnStretch(0, singleRow ? 1 : 0);
+    m_grid->setColumnStretch(1, singleRow ? 0 : 1);
     if (singleRow) {
         // Port, baud rate and the button on one line, for a toolbar-like strip.
         layout->setContentsMargins(8, 4, 8, 4);
+        m_baud->setFixedWidth(90);
         m_grid->addWidget(m_portRow, 0, 0);
         m_grid->addWidget(m_baud, 0, 1);
         m_grid->addWidget(m_stripStatus, 0, 3);
@@ -325,12 +340,12 @@ void SerialConfigCardWidget::apply()
         return;
     }
     layout->setContentsMargins(14, 10, 14, 12);
+    m_baud->setMinimumWidth(0);
+    m_baud->setMaximumWidth(QWIDGETSIZE_MAX);
     addField(tr("串口"), m_portRow);
     addField(tr("波特率"), m_baud);
     if (mode != QStringLiteral("简洁")) {
-        addField(tr("数据位"), m_dataBits);
-        addField(tr("校验位"), m_parity);
-        addField(tr("停止位"), m_stopBits);
+        addField(tr("数据位"), m_paramsRow, true);
         addField(tr("流控制"), m_flow);
         addField(tr("解析模式"), m_parser);
     }
@@ -353,6 +368,7 @@ void SerialConfigCardWidget::onAttached()
     live(connect(m_connect, &QPushButton::clicked, this, &SerialConfigCardWidget::toggleConnection));
     live(connect(m_link, &Link::connectedChanged, this, [this](bool connected) {
         setConnectedUi(connected, connected ? m_link->description() : tr("未连接"));
+        setFieldsEnabled(!connected);
     }));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
         context()->notify(tr("串口错误"), message, NotifyType::Error, 3000);
@@ -365,6 +381,16 @@ Link *SerialConfigCardWidget::currentLink() const
     return m_link;
 }
 
+void SerialConfigCardWidget::setFieldsEnabled(bool enabled)
+{
+    for (QWidget *w : {static_cast<QWidget *>(m_port), static_cast<QWidget *>(m_refresh),
+                       static_cast<QWidget *>(m_baud), static_cast<QWidget *>(m_dataBits),
+                       static_cast<QWidget *>(m_parity), static_cast<QWidget *>(m_stopBits),
+                       static_cast<QWidget *>(m_flow), static_cast<QWidget *>(m_parser)}) {
+        w->setEnabled(enabled);
+    }
+}
+
 void SerialConfigCardWidget::onDetached()
 {
     if (m_link) {
@@ -374,6 +400,7 @@ void SerialConfigCardWidget::onDetached()
         m_link = nullptr;
     }
     LinkCardBase::onDetached();
+    setFieldsEnabled(true);
 }
 
 void SerialConfigCardWidget::toggleConnection()
@@ -457,6 +484,15 @@ void TcpConfigCardWidget::onDetached()
 {
     dropLink();
     LinkCardBase::onDetached();
+    setFieldsEnabled(true);
+}
+
+void TcpConfigCardWidget::setFieldsEnabled(bool enabled)
+{
+    for (QWidget *w : {static_cast<QWidget *>(m_mode), static_cast<QWidget *>(m_host), static_cast<QWidget *>(m_port),
+                       static_cast<QWidget *>(m_parser)}) {
+        w->setEnabled(enabled);
+    }
 }
 
 void TcpConfigCardWidget::dropLink()
@@ -479,7 +515,7 @@ void TcpConfigCardWidget::toggleConnection()
         // Disconnect, or cancel a pending connection attempt.
         dropLink();
         setConnectedUi(false, tr("未连接"));
-        m_mode->setEnabled(true);
+        setFieldsEnabled(true);
         return;
     }
     const bool server = m_mode->currentIndex() == 1;
@@ -498,7 +534,7 @@ void TcpConfigCardWidget::toggleConnection()
             QTimer::singleShot(0, this, [this, link]() {
                 if (m_link == link) {
                     dropLink();
-                    m_mode->setEnabled(true);
+                    setFieldsEnabled(true);
                 }
             });
         }
@@ -506,7 +542,7 @@ void TcpConfigCardWidget::toggleConnection()
     connect(link, &Link::errorOccurred, this, [this](const QString &message) {
         context()->notify(tr("TCP 错误"), message, NotifyType::Error, 3000);
     });
-    m_mode->setEnabled(false);
+    setFieldsEnabled(false);
     const quint16 port = quint16(m_port->value());
     if (server) {
         auto *serverLink = static_cast<TcpServerLink *>(link);
@@ -517,7 +553,7 @@ void TcpConfigCardWidget::toggleConnection()
         if (!serverLink->listen(m_host->text(), port, &error)) {
             context()->notify(tr("监听失败"), error, NotifyType::Error, 3000);
             dropLink();
-            m_mode->setEnabled(true);
+            setFieldsEnabled(true);
         }
     } else {
         setConnectedUi(false, tr("连接中..."));
