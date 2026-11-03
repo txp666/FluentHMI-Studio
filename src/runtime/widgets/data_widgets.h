@@ -8,7 +8,6 @@
 class QLabel;
 class QTextEdit;
 class QTimer;
-class QVBoxLayout;
 
 namespace FluentQt {
 class BodyLabel;
@@ -19,18 +18,20 @@ class LineEdit;
 class PushButton;
 class StrongBodyLabel;
 class TableWidget;
+class ToolButton;
 } // namespace FluentQt
 
 namespace fhmi {
 
+class ChartHeader;
 class ChartHistory;
 class ChartPlot;
 
 // Multi-curve live chart; every curve has its own parse configuration, stored as
 // _curve_{i}_{field} properties exactly as PyQt UI Designer stores them. As PyQt UI Designer's
 // RealtimeLineChart does, it keeps every sample of the run and plots the last 显示点数 of them, shows each
-// curve's value now or at a cursor in a table beside the plot, saves the whole run and lays a saved run
-// over the live curves for comparison.
+// curve's value now or at a cursor in a header above the plot, saves the whole run and lays a saved run over
+// the live curves for comparison.
 class RealtimeChartWidget : public HmiWidget
 {
   public:
@@ -47,7 +48,8 @@ class RealtimeChartWidget : public HmiWidget
 
     // A sample for a curve, as one arriving from a link is added.
     void appendSample(int curve, double value);
-    // What 保存 and 加载 do once a file is chosen; a failure shows in the table's mode line.
+    // What 保存 and 加载 do once a file is chosen; a failure shows in the toolbar, where 实时 or the cursor's
+    // sample does.
     void saveHistory(const QString &path);
     void loadReference(const QString &path);
     void clearReference();
@@ -66,26 +68,23 @@ class RealtimeChartWidget : public HmiWidget
 
     void rebuildCurves();
     void applyTheme();
-    // The plot and the table from the samples now; data arriving schedules it.
+    // The plot and the header from the samples now; data arriving schedules it.
     void refresh();
     QColor curveColor(int index) const;
     // The sample number the live window starts at, which a loaded run is lined up with.
     qint64 windowStart() const;
     void showLiveValues();
     void showCursorValues();
-    void showReferenceValues(qint64 sample);
-    // The table grows to fit its rows but never shrinks, so a shorter reading does not shift the plot.
-    void holdTableWidth();
+    // The header: the live curves' readings, then the loaded run's at a sample number.
+    void showValues(const QStringList &live, qint64 referenceSample);
+    // A click on a header entry hides or shows its curve.
+    void toggleCurve(int index);
 
-    QLabel *m_title = nullptr;
+    ChartHeader *m_header = nullptr;
     ChartPlot *m_plot = nullptr;
-    QWidget *m_table = nullptr;
     QLabel *m_mode = nullptr;
-    QVBoxLayout *m_rows = nullptr;
-    QList<QLabel *> m_valueLabels;
-    QList<QLabel *> m_referenceLabels;
     FluentQt::LineEdit *m_displayEdit = nullptr;
-    FluentQt::PushButton *m_clearReference = nullptr;
+    FluentQt::ToolButton *m_clearReference = nullptr;
     QTimer *m_refreshTimer = nullptr;
     std::vector<Curve> m_curves;
     std::vector<std::unique_ptr<ChartHistory>> m_histories;
