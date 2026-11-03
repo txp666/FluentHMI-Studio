@@ -4,6 +4,7 @@
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Theme.h>
+#include <FluentQtWidgets/Translator.h>
 
 #include <QtCore/QCommandLineParser>
 #include <QtCore/QDir>
@@ -17,6 +18,8 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     Q_INIT_RESOURCE(app);
     Q_INIT_RESOURCE(fluentqtwidgets);
+    // The studio's texts are Chinese, so FluentQtWidgets' own (On/Off, the colour dialog) are too.
+    FluentQt::installFluentTranslator(&app, QLocale(QLocale::Chinese, QLocale::China));
     app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("FluentHMI"));
     QCoreApplication::setApplicationName(QStringLiteral("FluentHMI Studio"));
