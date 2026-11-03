@@ -59,7 +59,8 @@ class ModbusExchange
 // on its own: no widget has to ask. Before each read it collects the needs again (RuntimeContext::
 // modbusNeeds(), the widgets on screen and every curve) and plans them into blocks (planBlocks()). Each
 // block has a time it is due; whenever the masters of those links are free, the block due first goes out
-// to all of them as a read, and the next one right after its reply. A new plan starts a new round: blocks
+// to all of them as a read, and the next one right after its reply; one that falls due between two
+// ticks goes out then, not a tick later. A new plan starts a new round: blocks
 // it keeps keep their times, new ones are read at once. It reads while the runtime is active and a link
 // that parses Modbus can send.
 //
@@ -137,6 +138,7 @@ class ModbusPoller : public QObject
 
     RuntimeContext *m_context;
     QTimer *m_timer;
+    QTimer *m_wake = nullptr; // single shot: when the block due next falls between two ticks
     QList<LinkCard> m_cards;
     bool m_active = false;
     bool m_waiting = false;

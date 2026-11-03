@@ -285,7 +285,14 @@ QVariant BindingEntry::extractFromParsed(const Message &data) const
         return data.value(key);
     }
     if (parseMode == ParseMode::JsonPath) {
-        return resolvePath(data, jsonPath);
+        // The first name is one of the message's fields, the rest walks into its value.
+        const qsizetype dot = jsonPath.indexOf(QLatin1Char('.'));
+        const QString field = dot < 0 ? jsonPath : jsonPath.left(dot);
+        if (!data.contains(field)) {
+            return {};
+        }
+        const QVariant top = data.value(field);
+        return dot < 0 ? top : resolvePath(top, jsonPath.mid(dot + 1));
     }
     if (parseMode == ParseMode::Modbus) {
         return extractModbus(data);

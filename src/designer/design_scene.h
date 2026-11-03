@@ -9,6 +9,8 @@ namespace fhmi {
 class CanvasItem;
 
 inline constexpr const char *WidgetMimeType = "application/x-fluenthmi-widget";
+// Copied widgets on the clipboard, shared with PyQt UI Designer: {"version": "1.0", "widgets": [...]}.
+inline constexpr const char *WidgetsClipboardType = "application/x-fluenthmi-widgets";
 
 enum class Alignment
 {
@@ -48,6 +50,7 @@ class DesignScene : public QGraphicsScene
     QList<CanvasItem *> allItems() const;
     QList<CanvasItem *> selectedCanvasItems() const;
     CanvasItem *findItem(const QString &id) const;
+    void selectIds(const QStringList &ids);
 
     CanvasItem *createItem(const QString &typeName, const QPointF &scenePos);
     void deleteSelected();
@@ -56,8 +59,18 @@ class DesignScene : public QGraphicsScene
     QString uniqueId(const QString &typeName) const;
     bool renameItem(CanvasItem *item, const QString &id, QString *error);
 
+    // The selected widgets as the clipboard carries them: a selected container takes its children, the
+    // top-level ones have canvas positions and no tabIndex, and relative image paths become absolute.
+    QJsonArray selectionJson() const;
+    // Adds checked widgets, as copied, into `container` (its current page) with their bounding box at
+    // (grid × step, grid × step), or at the top level shifted by that much; kept on the page (or in the
+    // container) when they fit. Ids already in use are replaced. The pasted widgets become the selection.
+    QList<CanvasItem *> paste(const QJsonArray &widgets, CanvasItem *container, int step);
+
   signals:
-    void modified();
+    // A design change. Changes with the same non-empty key in a row (a run of arrow-key nudges) are one
+    // undo step.
+    void modified(const QString &mergeKey = QString());
     void itemPropertiesChanged(fhmi::CanvasItem *item);
 
   protected:

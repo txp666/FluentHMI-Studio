@@ -3,6 +3,7 @@
 #include "designer/canvas_item.h"
 #include "runtime/widgets/display_widgets.h"
 
+#include <QtCore/QDir>
 #include <QtCore/QJsonArray>
 #include <QtCore/QMimeData>
 #include <QtCore/QSet>
@@ -16,6 +17,70 @@
 #include <numeric>
 
 namespace fhmi {
+
+namespace {
+
+// The usual id for a new widget: the type with a lower-case initial and the first free number.
+QString freeId(const QString &typeName, const QSet<QString> &used)
+{
+    QString base = typeName;
+    base[0] = base.at(0).toLower();
+    for (int n = 1;; ++n) {
+        const QString candidate = QStringLiteral("%1%2").arg(base).arg(n);
+        if (!used.contains(candidate)) {
+            return candidate;
+        }
+    }
+}
+
+// Relative image paths made absolute, so the widgets still find their images in another project.
+QJsonObject withAbsoluteImages(QJsonObject widget, const QDir &base)
+{
+    QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
+    const QString image = props.value(QStringLiteral("imagePath")).toString();
+    if (!image.isEmpty() && QDir::isRelativePath(image)) {
+        props.insert(QStringLiteral("imagePath"), QDir::cleanPath(base.absoluteFilePath(image)));
+        widget.insert(QStringLiteral("properties"), props);
+    }
+    QJsonArray children = widget.value(QStringLiteral("children")).toArray();
+    if (!children.isEmpty()) {
+        for (qsizetype i = 0; i < children.size(); ++i) {
+            children[i] = withAbsoluteImages(children.at(i).toObject(), base);
+        }
+        widget.insert(QStringLiteral("children"), children);
+    }
+    return widget;
+}
+
+void collectIds(const QJsonArray &widgets, QSet<QString> *ids)
+{
+    for (const QJsonValue &value : widgets) {
+        const QJsonObject widget = value.toObject();
+        ids->insert(widget.value(QStringLiteral("id")).toString());
+        collectIds(widget.value(QStringLiteral("children")).toArray(), ids);
+    }
+}
+
+// Gives a widget whose id the project already has (or that has none) a new one, children too.
+QJsonObject withFreeIds(QJsonObject widget, const QSet<QString> &taken, QSet<QString> *used)
+{
+    const QString id = widget.value(QStringLiteral("id")).toString();
+    if (id.isEmpty() || taken.contains(id)) {
+        const QString fresh = freeId(widget.value(QStringLiteral("type")).toString(), *used);
+        used->insert(fresh);
+        widget.insert(QStringLiteral("id"), fresh);
+    }
+    QJsonArray children = widget.value(QStringLiteral("children")).toArray();
+    if (!children.isEmpty()) {
+        for (qsizetype i = 0; i < children.size(); ++i) {
+            children[i] = withFreeIds(children.at(i).toObject(), taken, used);
+        }
+        widget.insert(QStringLiteral("children"), children);
+    }
+    return widget;
+}
+
+} // namespace
 
 DesignScene::DesignScene(QObject *parent) : QGraphicsScene(parent)
 {
@@ -173,20 +238,23 @@ CanvasItem *DesignScene::findItem(const QString &id) const
     return nullptr;
 }
 
+void DesignScene::selectIds(const QStringList &ids)
+{
+    clearSelection();
+    for (const QString &id : ids) {
+        if (CanvasItem *item = findItem(id)) {
+            item->setSelected(true);
+        }
+    }
+}
+
 QString DesignScene::uniqueId(const QString &typeName) const
 {
     QSet<QString> used;
     for (const CanvasItem *item : allItems()) {
         used.insert(item->widgetId());
     }
-    QString base = typeName;
-    base[0] = base.at(0).toLower();
-    for (int n = 1;; ++n) {
-        const QString candidate = QStringLiteral("%1%2").arg(base).arg(n);
-        if (!used.contains(candidate)) {
-            return candidate;
-        }
-    }
+    return freeId(typeName, used);
 }
 
 bool DesignScene::renameItem(CanvasItem *item, const QString &id, QString *error)
@@ -250,6 +318,94 @@ void DesignScene::deleteSelected()
         }
     }
     emit modified();
+}
+
+QJsonArray DesignScene::selectionJson() const
+{
+    QJsonArray out;
+    const QList<CanvasItem *> selected = selectedCanvasItems();
+    const QDir base(m_assetBaseDir);
+    // In stacking order, so pasting keeps what covers what.
+    for (CanvasItem *item : allItems()) {
+        const bool inSelectedContainer = std::any_of(selected.begin(), selected.end(), [item](CanvasItem *other) {
+            return other != item && other->isAncestorOf(item);
+        });
+        if (!item->isSelected() || inSelectedContainer) {
+            continue;
+        }
+        QJsonObject widget = item->toJson();
+        QJsonObject geometry = widget.value(QStringLiteral("geometry")).toObject();
+        geometry.insert(QStringLiteral("x"), qRound(item->scenePos().x()));
+        geometry.insert(QStringLiteral("y"), qRound(item->scenePos().y()));
+        widget.insert(QStringLiteral("geometry"), geometry);
+        widget.remove(QStringLiteral("tabIndex"));
+        out.append(withAbsoluteImages(widget, base));
+    }
+    return out;
+}
+
+QList<CanvasItem *> DesignScene::paste(const QJsonArray &widgets, CanvasItem *container, int step)
+{
+    QSet<QString> taken;
+    for (const CanvasItem *item : allItems()) {
+        taken.insert(item->widgetId());
+    }
+    // Free ids are kept first, so a widget given a new id never takes one a later widget keeps.
+    QSet<QString> used = taken;
+    collectIds(widgets, &used);
+    QList<QJsonObject> pasted;
+    QRectF bounds;
+    for (const QJsonValue &value : widgets) {
+        QJsonObject widget = withFreeIds(value.toObject(), taken, &used);
+        widget.remove(QStringLiteral("tabIndex"));
+        const WidgetMeta *meta = WidgetRegistry::instance().find(widget.value(QStringLiteral("type")).toString());
+        if (!meta) {
+            continue;
+        }
+        const QJsonObject geometry = widget.value(QStringLiteral("geometry")).toObject();
+        const QRectF rect(geometry.value(QStringLiteral("x")).toDouble(0),
+                          geometry.value(QStringLiteral("y")).toDouble(0),
+                          geometry.value(QStringLiteral("w")).toDouble(meta->defaultWidth),
+                          geometry.value(QStringLiteral("h")).toDouble(meta->defaultHeight));
+        bounds = pasted.isEmpty() ? rect : bounds.united(rect);
+        pasted.append(widget);
+    }
+    if (pasted.isEmpty()) {
+        return {};
+    }
+    const qreal shift = qreal(m_gridSize) * step;
+    const QSizeF area = container ? container->size() : QSizeF(m_canvasSize);
+    QPointF topLeft = container ? QPointF(shift, shift) : bounds.topLeft() + QPointF(shift, shift);
+    if (bounds.width() <= area.width()) {
+        topLeft.setX(std::clamp<qreal>(topLeft.x(), 0, area.width() - bounds.width()));
+    }
+    if (bounds.height() <= area.height()) {
+        topLeft.setY(std::clamp<qreal>(topLeft.y(), 0, area.height() - bounds.height()));
+    }
+    const QPointF offset = topLeft - bounds.topLeft();
+
+    QList<CanvasItem *> items;
+    for (const QJsonObject &widget : std::as_const(pasted)) {
+        CanvasItem *item = CanvasItem::fromJson(widget, m_assetBaseDir);
+        if (!item) {
+            continue;
+        }
+        const QPointF position = item->pos() + offset;
+        addItem(item);
+        adopt(item);
+        if (container) {
+            container->addChild(item, -1, &position);
+        } else {
+            item->setPos(position);
+        }
+        items.append(item);
+    }
+    clearSelection();
+    for (CanvasItem *item : std::as_const(items)) {
+        item->setSelected(true);
+    }
+    emit modified();
+    return items;
 }
 
 void DesignScene::clearAll()
@@ -467,14 +623,17 @@ void DesignScene::keyPressEvent(QKeyEvent *event)
         return;
     }
     const QList<CanvasItem *> items = selectedCanvasItems();
+    QStringList ids;
     for (CanvasItem *item : items) {
+        ids.append(item->widgetId());
         if (item->flags() & QGraphicsItem::ItemIsMovable) {
             item->setPos(item->pos() + delta);
             emit itemPropertiesChanged(item);
         }
     }
     if (!items.isEmpty()) {
-        emit modified();
+        ids.sort();
+        emit modified(QStringLiteral("nudge:") + ids.join(QLatin1Char('\n')));
     }
     event->accept();
 }

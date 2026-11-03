@@ -62,7 +62,7 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 安装包大小取自两者的 GitHub Release。启动和内存在同一台 Mac（Apple M5 Pro，48 GB，macOS 27.0.1）上用两个版本的 Apple Silicon 程序测得：空工程，各启动 4 次，取后 3 次（第一次分别为 2.0 秒和 3.9 秒）；内存为窗口出现 5 秒后的常驻内存。导出时间是导出 `examples/demo.uidp` 三次的耗时（0.26–0.41 秒）。
 
-Python 版目前仍有、这里还没有的：导出可以继续修改的源码工程，实时曲线的游标和数据保存 / 加载（见下方路线图）。
+Python 版目前仍有、这里还没有的：导出可以继续修改的源码工程（见下方路线图）。
 
 ## 架构
 
@@ -80,7 +80,7 @@ tools         uidp_reference    从控件注册表重新生成 docs/uidp-widgets
 
 ## 构建
 
-需要 CMake 3.21+、C++17、Qt 6.5+（Core、Gui、Widgets、Svg、Network、SerialPort）。
+需要 CMake 3.21+、C++17、Qt 6.12（Core、Gui、Widgets、Svg、Network、SerialPort）。Qt 装在 Qt 安装器或 aqtinstall 的默认位置（`~/Qt`、`C:\Qt`）时会被自动找到；装在其他位置时，用 `-DCMAKE_PREFIX_PATH=<Qt 目录>` 指定。
 
 ```bash
 git clone --recursive https://github.com/txp666/FluentHMI-Studio.git
@@ -89,6 +89,8 @@ cmake --preset debug
 cmake --build --preset debug
 ctest --preset debug
 ```
+
+在 VS Code 中打开本目录，Ctrl/Cmd+Shift+B 构建，F5 构建并启动 Studio。Windows 上要从 Visual Studio 的 Developer PowerShell 启动 VS Code，CMake 才能找到编译器；第一次按 F5 前，在“运行和调试”里选 “Debug FluentHMI Studio (Windows, MSVC)”。
 
 macOS 运行 `open build/debug/FluentHMIStudio.app`。无界面导出：
 
@@ -129,7 +131,7 @@ macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHM
 
 ## 当前状态（0.2.1）
 
-已完成：全部 28 种控件、拖拽设计、网格吸附、缩放、对齐与分布、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT 预览、导出独立应用、Windows 与 macOS 打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
+已完成：全部 28 种控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows 与 macOS 打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
 
 MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQTT 模块）：支持用户名密码、QoS 0/1/2、`+`/`#` 通配符订阅，TLS 使用系统证书库；连接成功后若断开会自动重连。与 Python 版一致，每条消息视为一帧，纯数值载荷还会以主题名为键再给出一份。
 
@@ -137,9 +139,6 @@ MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQT
 
 路线图：
 
-- 撤销 / 重做、复制 / 粘贴
-- 实时曲线的完整历史记录、游标、CSV/JSON 加载
-- 导出应用使用工程自己的图标
 - 导出 C++/CMake 源码工程，供需要二次开发的用户使用
 - Developer ID 签名与公证、Windows 代码签名
 - UDP、蓝牙；英文界面

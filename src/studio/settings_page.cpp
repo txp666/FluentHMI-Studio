@@ -3,18 +3,50 @@
 #include "studio/update_controller.h"
 
 #include <FluentQtWidgets/Config.h>
+#include <FluentQtWidgets/ConfigItem.h>
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/Settings/SettingCard.h>
 #include <FluentQtWidgets/Theme.h>
-#include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/ScrollArea.h>
+#include <FluentQtWidgets/Window/FluentWindow.h>
 
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
 #include <QtWidgets/QVBoxLayout>
 
 namespace fhmi {
+
+namespace {
+
+#ifdef Q_OS_WIN
+// Mica needs Windows 11, so on Windows 10 the switch stays off and disabled.
+FluentQt::SwitchSettingCard *createMicaCard(QWidget *parent)
+{
+    const bool available = FluentQt::isMicaEffectAvailable();
+    auto *card = new FluentQt::SwitchSettingCard(
+        FluentQt::FluentIcon::Transparent, SettingsPage::tr("云母效果"),
+        available ? SettingsPage::tr("窗口和表面显示半透明") : SettingsPage::tr("需要 Windows 11"), parent);
+    card->setObjectName(QStringLiteral("micaEffectCard"));
+    card->setEnabled(available);
+    if (!available) {
+        return card;
+    }
+
+    // The main window follows the setting.
+    auto *config = FluentQt::FluentConfig::instance();
+    card->setChecked(config->isMicaEnabled());
+    QObject::connect(card, &FluentQt::SwitchSettingCard::checkedChanged, card, [config](bool checked) {
+        config->setMicaEnabled(checked);
+        config->save();
+    });
+    QObject::connect(config, &FluentQt::FluentConfig::micaEnabledChanged, card,
+                     &FluentQt::SwitchSettingCard::setChecked);
+    return card;
+}
+#endif
+
+} // namespace
 
 SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
 {
@@ -32,20 +64,42 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
     layout->addWidget(new FluentQt::TitleLabel(tr("设置"), content));
 
     auto *appearance = new FluentQt::SettingCardGroup(tr("外观"), content);
-    auto *theme = new FluentQt::ComboBoxSettingCard(
-        QStringList{tr("浅色"), tr("深色"), tr("跟随系统")}, FluentQt::FluentIcon::Brush, tr("主题"),
-        tr("设计画布、预览和导出的应用都跟随这里的选择"), appearance);
-    const FluentQt::Theme current = FluentQt::FluentConfig::instance()->themeMode();
-    theme->comboBox()->setCurrentIndex(current == FluentQt::Theme::Dark ? 1 : current == FluentQt::Theme::Auto ? 2 : 0);
-    connect(theme->comboBox(), &FluentQt::ComboBox::currentIndexChanged, this, [](int index) {
-        const FluentQt::Theme mode = index == 1   ? FluentQt::Theme::Dark
-                                     : index == 2 ? FluentQt::Theme::Auto
-                                                  : FluentQt::Theme::Light;
+    // FluentConfig keeps the theme; this item only feeds the card, in the order of its texts.
+    auto *themeMode = new FluentQt::OptionsConfigItem(
+        QStringLiteral("Studio"), QStringLiteral("ThemeMode"),
+        static_cast<int>(FluentQt::FluentConfig::instance()->themeMode()),
+        QVariantList{static_cast<int>(FluentQt::Theme::Light), static_cast<int>(FluentQt::Theme::Dark),
+                     static_cast<int>(FluentQt::Theme::Auto)},
+        this);
+    auto *theme = new FluentQt::ComboBoxSettingCard(themeMode, FluentQt::FluentIcon::Brush, tr("主题"),
+                                                    tr("设计画布、预览和导出的应用都跟随这里的选择"),
+                                                    {tr("浅色"), tr("深色"), tr("跟随系统")}, appearance);
+    connect(themeMode, &FluentQt::ConfigItem::valueChanged, this, [](const QVariant &value) {
+        const auto mode = static_cast<FluentQt::Theme>(value.toInt());
         FluentQt::FluentConfig::instance()->setThemeMode(mode);
         FluentQt::FluentConfig::instance()->save();
         FluentQt::ThemeManager::instance()->setTheme(mode);
     });
     appearance->addSettingCard(theme);
+
+    auto *themeColor = new FluentQt::CustomColorSettingCard(
+        QColor(QStringLiteral("#009faa")), FluentQt::FluentConfig::instance()->themeColor(),
+        FluentQt::FluentIcon::Palette, tr("主题色"), tr("选择 Fluent 控件的强调色"), appearance);
+    connect(themeColor, &FluentQt::CustomColorSettingCard::colorChanged, this, [](const QColor &color) {
+        FluentQt::FluentConfig::instance()->setThemeColor(color);
+        FluentQt::FluentConfig::instance()->save();
+        FluentQt::ThemeManager::instance()->setAccentColor(color);
+    });
+    connect(FluentQt::ThemeManager::instance(), &FluentQt::ThemeManager::accentColorChanged, this,
+            [themeColor](const QColor &color) {
+                if (themeColor->color() != color) {
+                    themeColor->setColor(color);
+                }
+            });
+    appearance->addSettingCard(themeColor);
+#ifdef Q_OS_WIN
+    appearance->addSettingCard(createMicaCard(appearance));
+#endif
     layout->addWidget(appearance);
 
     auto *about = new FluentQt::SettingCardGroup(tr("关于"), content);

@@ -116,7 +116,7 @@ class TestProtocolParser : public QObject
             for (const QByteArray &unit : units) {
                 QJsonArray messages;
                 for (const Message &message : parser->parse(unit)) {
-                    messages.append(QJsonObject::fromVariantMap(message));
+                    messages.append(QJsonObject::fromVariantMap(message.toVariantMap()));
                 }
                 got.append(QJsonObject{{QStringLiteral("frame"), QString::fromLatin1(unit.toHex())},
                                        {QStringLiteral("messages"), messages}});
@@ -244,6 +244,18 @@ class TestProtocolParser : public QObject
         QCOMPARE(out.at(0).value("humidity").typeId(), int(QMetaType::LongLong));
         QCOMPARE(out.at(0).value("humidity").toLongLong(), 60);
         QCOMPARE(out.at(1).value("running").toLongLong(), 1);
+    }
+
+    // A log box listed a frame's fields alphabetically (i, mah, run, v) and showed 32.0 as 32;
+    // the device's order and a float's kind are part of the frame.
+    void lineFieldsKeepTheDevicesOrder()
+    {
+        LineParser parser;
+        const QList<Message> out = parser.feed("v=4.18,i=0.0,mah=0,run=0\n{\"temperature\": 24.6, \"pressure\": 32.0}\n");
+        QCOMPARE(out.size(), 2);
+        QCOMPARE(out.at(0).keys(), QStringList({"v", "i", "mah", "run"}));
+        QCOMPARE(out.at(1).keys(), QStringList({"temperature", "pressure"}));
+        QCOMPARE(out.at(1).value("pressure").typeId(), int(QMetaType::Double));
     }
 
     void lineCsvIsIndexed()

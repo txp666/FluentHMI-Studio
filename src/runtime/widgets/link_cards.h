@@ -50,7 +50,8 @@ class LinkCardBase : public HmiWidget
     void setConnectedUi(bool connected, const QString &status);
     // Tells the poller the card's link and settings again: after apply() and whenever the link changes.
     void updatePolling();
-    void addField(const QString &label, QWidget *field);
+    // A labelled row; `small` labels it in the caption size, as a row of several fields is.
+    void addField(const QString &label, QWidget *field, bool small = false);
     // Empties the field grid; the fields themselves stay owned by the card.
     void clearFields();
     // Puts the button at the right end of the last field row, its field still stretching, then
@@ -95,8 +96,11 @@ class SerialConfigCardWidget : public LinkCardBase
   private:
     void refreshPorts();
     void toggleConnection();
+    // The settings can be changed only while the port is closed.
+    void setFieldsEnabled(bool enabled);
 
     QWidget *m_portRow = nullptr;
+    QWidget *m_paramsRow = nullptr; // data bits, parity and stop bits on one row
     FluentQt::ComboBox *m_port = nullptr;
     FluentQt::ToolButton *m_refresh = nullptr;
     FluentQt::ComboBox *m_baud = nullptr;
@@ -122,6 +126,8 @@ class TcpConfigCardWidget : public LinkCardBase
   private:
     void toggleConnection();
     void dropLink();
+    // The settings can be changed only while there is no link (connecting, connected or listening).
+    void setFieldsEnabled(bool enabled);
 
     FluentQt::ComboBox *m_mode = nullptr;
     FluentQt::LineEdit *m_host = nullptr;

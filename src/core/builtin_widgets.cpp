@@ -220,19 +220,19 @@ QList<WidgetMeta> basicWidgets()
         return props;
     };
 
-    return {meta(QStringLiteral("PushButton"), QStringLiteral("按钮"), WidgetCategory::Basic, QStringLiteral("send"),
+    return {meta(QStringLiteral("PushButton"), QStringLiteral("按钮"), WidgetCategory::Basic, QStringLiteral("button"),
                  120, 36, button),
             meta(QStringLiteral("Label"), QStringLiteral("标签"), WidgetCategory::Basic, QStringLiteral("font"), 120,
                  30, label),
-            meta(QStringLiteral("LineEdit"), QStringLiteral("输入框"), WidgetCategory::Basic, QStringLiteral("edit"),
-                 200, 36, lineEdit),
-            meta(QStringLiteral("ComboBox"), QStringLiteral("下拉框"), WidgetCategory::Basic, QStringLiteral("menu"),
-                 160, 36, combo),
+            meta(QStringLiteral("LineEdit"), QStringLiteral("输入框"), WidgetCategory::Basic,
+                 QStringLiteral("text_field"), 200, 36, lineEdit),
+            meta(QStringLiteral("ComboBox"), QStringLiteral("下拉框"), WidgetCategory::Basic,
+                 QStringLiteral("dropdown"), 160, 36, combo),
             meta(QStringLiteral("ToggleSwitch"), QStringLiteral("开关"), WidgetCategory::Basic,
-                 QStringLiteral("power_button"), 140, 30, toggle),
-            meta(QStringLiteral("Slider"), QStringLiteral("滑块"), WidgetCategory::Basic, QStringLiteral("scroll"), 200,
+                 QStringLiteral("toggle"), 140, 30, toggle),
+            meta(QStringLiteral("Slider"), QStringLiteral("滑块"), WidgetCategory::Basic, QStringLiteral("slider"), 200,
                  30, ranged(50, false)),
-            meta(QStringLiteral("SpinBox"), QStringLiteral("数值框"), WidgetCategory::Basic, QStringLiteral("setting"),
+            meta(QStringLiteral("SpinBox"), QStringLiteral("数值框"), WidgetCategory::Basic, QStringLiteral("spin_box"),
                  140, 36, ranged(0, true))};
 }
 
@@ -241,10 +241,10 @@ QList<WidgetMeta> layoutWidgets()
     const PropDef spacing = integer(QStringLiteral("spacing"), QStringLiteral("间距"), 8, 0, 100);
     return {
         meta(QStringLiteral("HBoxLayout"), QStringLiteral("水平布局"), WidgetCategory::Layout,
-             QStringLiteral("right_arrow"), 300, 80,
+             QStringLiteral("columns"), 300, 80,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("水平布局")), spacing}, 60, 40, true),
         meta(QStringLiteral("VBoxLayout"), QStringLiteral("垂直布局"), WidgetCategory::Layout,
-             QStringLiteral("arrow_down"), 200, 200,
+             QStringLiteral("rows"), 200, 200,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("垂直布局")), spacing}, 60, 40, true),
         meta(QStringLiteral("FlexLayout"), QStringLiteral("弹性布局"), WidgetCategory::Layout, QStringLiteral("layout"),
              400, 200,
@@ -253,9 +253,9 @@ QList<WidgetMeta> layoutWidgets()
                      {QStringLiteral("row"), QStringLiteral("column")}),
               spacing},
              100, 60, true),
-        meta(QStringLiteral("GroupBox"), QStringLiteral("分组框"), WidgetCategory::Layout, QStringLiteral("folder"), 280,
-             180, {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("分组"))}, 80, 60, true),
-        meta(QStringLiteral("TabWidget"), QStringLiteral("选项卡"), WidgetCategory::Layout, QStringLiteral("tiles"), 350,
+        meta(QStringLiteral("GroupBox"), QStringLiteral("分组框"), WidgetCategory::Layout, QStringLiteral("group_box"),
+             280, 180, {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("分组"))}, 80, 60, true),
+        meta(QStringLiteral("TabWidget"), QStringLiteral("选项卡"), WidgetCategory::Layout, QStringLiteral("tabs"), 350,
              250,
              {text(QStringLiteral("tabNames"), QStringLiteral("标签名称"), QStringLiteral("标签1\n标签2\n标签3")),
               integer(QStringLiteral("currentTab"), QStringLiteral("当前标签页"), 0, 0, 9999),
@@ -269,7 +269,7 @@ QList<WidgetMeta> layoutWidgets()
                      {QStringLiteral("horizontal"), QStringLiteral("vertical")})},
              20, 2),
         meta(QStringLiteral("CardContainer"), QStringLiteral("卡片容器"), WidgetCategory::Layout,
-             QStringLiteral("label"), 300, 200,
+             QStringLiteral("card"), 300, 200,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QString()),
               choice(QStringLiteral("layout"), QStringLiteral("布局"), QStringLiteral("自由"),
                      {QStringLiteral("自由"), QStringLiteral("垂直"), QStringLiteral("水平")}),
@@ -282,7 +282,7 @@ QList<WidgetMeta> displayWidgets()
 {
     return {
         meta(QStringLiteral("LEDIndicator"), QStringLiteral("LED指示灯"), WidgetCategory::Display,
-             QStringLiteral("calories"), 140, 30,
+             QStringLiteral("led"), 140, 30,
              {str(QStringLiteral("label"), QStringLiteral("标签"), QStringLiteral("状态")),
               choice(QStringLiteral("color"), QStringLiteral("颜色"), QStringLiteral("green"),
                      {QStringLiteral("green"), QStringLiteral("red"), QStringLiteral("yellow"), QStringLiteral("blue"),
@@ -291,7 +291,7 @@ QList<WidgetMeta> displayWidgets()
               str(QStringLiteral("onValue"), QStringLiteral("亮值"), QStringLiteral("1")),
               str(QStringLiteral("offValue"), QStringLiteral("灭值"), QStringLiteral("0"))}),
         meta(QStringLiteral("NumericDisplay"), QStringLiteral("数值显示"), WidgetCategory::Display,
-             QStringLiteral("speed_high"), 160, 90,
+             QStringLiteral("seven_segment"), 160, 90,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("温度")),
               str(QStringLiteral("value"), QStringLiteral("数值"), QStringLiteral("0.00"), true),
               str(QStringLiteral("unit"), QStringLiteral("单位"), QStringLiteral("°C")),
@@ -300,10 +300,16 @@ QList<WidgetMeta> displayWidgets()
                      kDisplayFormats),
               choice(QStringLiteral("decimals"), QStringLiteral("小数位数"), QStringLiteral("自动"), kDecimals)}),
         meta(QStringLiteral("ProgressBar"), QStringLiteral("进度条"), WidgetCategory::Display,
-             QStringLiteral("speed_medium"), 250, 20,
+             QStringLiteral("progress_bar"), 250, 20,
              {integer(QStringLiteral("value"), QStringLiteral("当前值"), 50, 0, 100, true),
               integer(QStringLiteral("maximum"), QStringLiteral("最大值"), 100, 1, 99999)},
              30, 10),
+        meta(QStringLiteral("ProgressRingDisplay"), QStringLiteral("进度环"), WidgetCategory::Display,
+             QStringLiteral("progress_ring"), 120, 130,
+             {str(QStringLiteral("label"), QStringLiteral("标签"), QStringLiteral("进度")),
+              integer(QStringLiteral("value"), QStringLiteral("当前值"), 0, 0, 100, true),
+              integer(QStringLiteral("maximum"), QStringLiteral("最大值"), 100, 1, 99999)},
+             80, 80),
         meta(QStringLiteral("ImageDisplay"), QStringLiteral("图片显示"), WidgetCategory::Display,
              QStringLiteral("photo"), 200, 150, {str(QStringLiteral("imagePath"), QStringLiteral("图片路径"), QString())}),
     };
@@ -317,7 +323,7 @@ QList<WidgetMeta> chartWidgets()
                                  QStringLiteral("int32"), QStringLiteral("float32")};
     return {
         meta(QStringLiteral("RealtimeChart"), QStringLiteral("实时曲线"), WidgetCategory::Chart,
-             QStringLiteral("history"), 400, 280,
+             QStringLiteral("market"), 400, 280,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("实时曲线")),
               integer(QStringLiteral("displayPoints"), QStringLiteral("显示点数"), 200, 10, 10000),
               integer(QStringLiteral("curveCount"), QStringLiteral("曲线数量"), 1, 1, 8),
@@ -354,8 +360,8 @@ QList<WidgetMeta> chartWidgets()
               real(QStringLiteral("maximum"), QStringLiteral("最大值"), 100.0, -99999, 99999)},
              80, 80),
         // The Python designer files the data table under charts as well.
-        meta(QStringLiteral("DataTable"), QStringLiteral("数据表格"), WidgetCategory::Chart, QStringLiteral("view"), 350,
-             250,
+        meta(QStringLiteral("DataTable"), QStringLiteral("数据表格"), WidgetCategory::Chart, QStringLiteral("table"),
+             350, 250,
              {text(QStringLiteral("columns"), QStringLiteral("列名"), QStringLiteral("字段\n值")),
               choice(QStringLiteral("recordMode"), QStringLiteral("记录方式"), QStringLiteral("最新值"),
                      {QStringLiteral("最新值"), QStringLiteral("逐行记录")}),
@@ -364,11 +370,11 @@ QList<WidgetMeta> chartWidgets()
     };
 }
 
-QList<WidgetMeta> compositeWidgets()
+QList<WidgetMeta> commWidgets()
 {
     return {
-        meta(QStringLiteral("SerialConfigCard"), QStringLiteral("串口配置卡片"), WidgetCategory::Composite,
-             QStringLiteral("connect"), 360, 320,
+        meta(QStringLiteral("SerialConfigCard"), QStringLiteral("串口配置卡片"), WidgetCategory::Comm,
+             QStringLiteral("serial_port"), 360, 320,
              QList<PropDef>{str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("串口配置")),
                             choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
                                    {QStringLiteral("完整"), QStringLiteral("简洁"), QStringLiteral("单行")})} +
@@ -389,7 +395,7 @@ QList<WidgetMeta> compositeWidgets()
                             {QStringLiteral("无"), QStringLiteral("RTS/CTS"), QStringLiteral("XON/XOFF"),
                              QStringLiteral("DTR/DSR")})},
              200, 50),
-        meta(QStringLiteral("TcpConfigCard"), QStringLiteral("TCP 配置卡片"), WidgetCategory::Composite,
+        meta(QStringLiteral("TcpConfigCard"), QStringLiteral("TCP 配置卡片"), WidgetCategory::Comm,
              QStringLiteral("globe"), 360, 250,
              QList<PropDef>{str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("TCP 配置")),
                             choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
@@ -400,7 +406,7 @@ QList<WidgetMeta> compositeWidgets()
                             integer(QStringLiteral("defaultPort"), QStringLiteral("默认端口"), 8080, 1, 65535)} +
                  linkParsing(),
              240, 50),
-        meta(QStringLiteral("MqttConfigCard"), QStringLiteral("MQTT 配置卡片"), WidgetCategory::Composite,
+        meta(QStringLiteral("MqttConfigCard"), QStringLiteral("MQTT 配置卡片"), WidgetCategory::Comm,
              QStringLiteral("cloud"), 380, 390,
              QList<PropDef>{
                  str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("MQTT 配置")),
@@ -418,25 +424,18 @@ QList<WidgetMeta> compositeWidgets()
                  boolean(QStringLiteral("defaultTls"), QStringLiteral("默认启用 TLS"), false)} +
                  linkParsing(),
              260, 50),
-        meta(QStringLiteral("DataSendCard"), QStringLiteral("数据发送卡片"), WidgetCategory::Composite,
+        meta(QStringLiteral("DataSendCard"), QStringLiteral("数据发送卡片"), WidgetCategory::Comm,
              QStringLiteral("send"), 350, 140,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("数据发送")),
               str(QStringLiteral("placeholder"), QStringLiteral("提示文字"), QStringLiteral("输入要发送的数据..."))},
              240, 100),
-        meta(QStringLiteral("DataRecvCard"), QStringLiteral("数据接收卡片"), WidgetCategory::Composite,
+        meta(QStringLiteral("DataRecvCard"), QStringLiteral("数据接收卡片"), WidgetCategory::Comm,
              QStringLiteral("download"), 350, 250,
              {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("数据接收")),
               integer(QStringLiteral("maxLines"), QStringLiteral("最大行数"), 1000, 50, 50000)},
              240, 120),
-        meta(QStringLiteral("LogBox"), QStringLiteral("日志显示框"), WidgetCategory::Composite,
-             QStringLiteral("history"), 400, 200,
-             {integer(QStringLiteral("maxLines"), QStringLiteral("最大行数"), 500, 50, 50000)}, 200, 80),
-        meta(QStringLiteral("ProgressRingDisplay"), QStringLiteral("进度环"), WidgetCategory::Composite,
-             QStringLiteral("speed_medium"), 120, 130,
-             {str(QStringLiteral("label"), QStringLiteral("标签"), QStringLiteral("进度")),
-              integer(QStringLiteral("value"), QStringLiteral("当前值"), 0, 0, 100, true),
-              integer(QStringLiteral("maximum"), QStringLiteral("最大值"), 100, 1, 99999)},
-             80, 80),
+        meta(QStringLiteral("LogBox"), QStringLiteral("日志显示框"), WidgetCategory::Comm, QStringLiteral("document"),
+             400, 200, {integer(QStringLiteral("maxLines"), QStringLiteral("最大行数"), 500, 50, 50000)}, 200, 80),
     };
 }
 
@@ -449,7 +448,7 @@ QList<WidgetMeta> builtinWidgets()
     all += layoutWidgets();
     all += displayWidgets();
     all += chartWidgets();
-    all += compositeWidgets();
+    all += commWidgets();
     return all;
 }
 

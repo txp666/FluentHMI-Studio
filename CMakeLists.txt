@@ -18,8 +18,6 @@ set(CMAKE_AUTORCC ON)
 
 option(FHMI_BUILD_TESTS "Build unit tests" ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Svg Network SerialPort)
-
 set(FLUENTQTWIDGETS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/FluentQtWidgets" CACHE PATH
     "Path to a FluentQtWidgets checkout")
 if(NOT EXISTS "${FLUENTQTWIDGETS_ROOT}/CMakeLists.txt")
@@ -27,6 +25,11 @@ if(NOT EXISTS "${FLUENTQTWIDGETS_ROOT}/CMakeLists.txt")
         "FluentQtWidgets was not found at ${FLUENTQTWIDGETS_ROOT}. "
         "Run: git submodule update --init --recursive")
 endif()
+
+# Finds a Qt from the Qt installer or aqtinstall in ~/Qt or C:/Qt when CMAKE_PREFIX_PATH names none.
+include("${FLUENTQTWIDGETS_ROOT}/cmake/FqwLocateQt.cmake")
+fqw_locate_qt(6.12)
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Widgets Svg Network SerialPort)
 
 set(CMAKE_DISABLE_FIND_PACKAGE_Qt6Multimedia ON CACHE BOOL "" FORCE)
 set(CMAKE_DISABLE_FIND_PACKAGE_Qt6MultimediaWidgets ON CACHE BOOL "" FORCE)
@@ -57,6 +60,8 @@ add_library(fhmi_core STATIC
     src/core/binding.cpp
     src/core/binding.h
     src/core/builtin_widgets.cpp
+    src/core/chart_file.cpp
+    src/core/chart_file.h
     src/core/command_encoder.cpp
     src/core/command_encoder.h
     src/core/expression.cpp
@@ -65,6 +70,7 @@ add_library(fhmi_core STATIC
     src/core/gbk_table.h
     src/core/hex_utils.cpp
     src/core/hex_utils.h
+    src/core/message.h
     src/core/mqtt_codec.cpp
     src/core/mqtt_codec.h
     src/core/project.cpp
@@ -166,6 +172,7 @@ set_target_properties(FluentHMIRuntime PROPERTIES
 # ---------------------------------------------------------------------------
 add_executable(FluentHMIStudio
     resources/app.qrc
+    resources/widget_icons.qrc
     src/studio/designer_page.cpp
     src/studio/designer_page.h
     src/studio/export_service.cpp
@@ -206,6 +213,15 @@ set_target_properties(FluentHMIStudio PROPERTIES
 )
 # The studio exports applications by copying the runtime, so build them together.
 add_dependencies(FluentHMIStudio FluentHMIRuntime)
+# On Windows, Qt's DLLs and plugins go beside the executables, which share the build folder, so they start without
+# Qt on PATH (F5 in VS Code, a double click). The tests there then load Qt from that folder too, and some run on the
+# offscreen platform. Packages are deployed by scripts/package.py instead.
+if(WIN32 AND TARGET Qt6::windeployqt)
+    add_custom_command(TARGET FluentHMIStudio POST_BUILD
+        COMMAND Qt6::windeployqt --verbose 0 --no-translations --no-system-d3d-compiler --no-opengl-sw
+                --no-compiler-runtime --include-plugins qoffscreen "$<TARGET_FILE:FluentHMIStudio>"
+        VERBATIM)
+endif()
 
 # Icons: an .icns in each macOS bundle, an icon plus version information in each .exe.
 foreach(target IN ITEMS FluentHMIStudio FluentHMIRuntime)
@@ -234,7 +250,7 @@ file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/FluentHMIStudio-version.txt" CONTENT "
 if(FHMI_BUILD_TESTS)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
-    foreach(test_name IN ITEMS protocol_parser binding command_encoder project)
+    foreach(test_name IN ITEMS protocol_parser binding command_encoder project chart_file)
         add_executable(tst_${test_name} tests/tst_${test_name}.cpp)
         target_link_libraries(tst_${test_name} PRIVATE fhmi_core Qt6::Test)
         target_compile_definitions(tst_${test_name} PRIVATE

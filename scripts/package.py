@@ -83,20 +83,23 @@ def sha256_file(path):
     return out
 
 
-def check_export(studio_exe, exported_runtime, workdir):
-    """Export the demo project with the packaged studio and start the result."""
+def run_packaged(cmd):
+    """Run a packaged program as a user's machine would."""
+    # A timeout, so a check that ends up waiting on a window fails instead of hanging.
+    run(cmd, timeout=CHECK_TIMEOUT, env=user_env())
+
+
+def check_export(studio_exe, exported_runtime, workdir, launch=run_packaged):
+    """Export the demo project with the packaged studio and start the result, each with launch(cmd)."""
     out_dir = Path(workdir) / "export-check"
     out_dir.mkdir()
-    # Timeouts, so a check that ends up waiting on a window fails instead of hanging.
-    run([studio_exe, "--export", out_dir, ROOT / "examples" / "demo.uidp"], timeout=CHECK_TIMEOUT, env=user_env())
+    launch([studio_exe, "--export", out_dir, ROOT / "examples" / "demo.uidp"])
     exported = [p for p in out_dir.iterdir() if not p.name.endswith(".partial")]
     if len(exported) != 1:
         sys.exit(f"export produced {exported!r}")
-    app = exported[0]
     # The platform's own plugin: deployed applications carry no offscreen plugin, and
     # --check never shows a window.
-    run([exported_runtime(app), "--check"], timeout=CHECK_TIMEOUT, env=user_env())
-    return app
+    launch([exported_runtime(exported[0]), "--check"])
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +227,14 @@ def macos_loaded_outside(cmd, bundle):
             if not image.startswith(("/System/", "/usr/lib/")) and not os.path.realpath(image).startswith(root)]
 
 
+def macos_run_inside(cmd):
+    """Run a packaged program, failing if it loads anything from outside its own bundle."""
+    bundle = Path(cmd[0]).parents[2]  # <bundle>.app/Contents/MacOS/<program>
+    outside = macos_loaded_outside(cmd, bundle)
+    if outside:
+        sys.exit(f"{bundle.name} loads libraries from outside itself:\n  " + "\n  ".join(outside))
+
+
 def macos_linked_outside(bundle, forbidden_prefix):
     """Binaries that would still load something from the build machine's Qt prefix."""
     offenders = []
@@ -265,21 +276,11 @@ def package_macos(build_dir, output_dir, version, config):
         sys.exit("still linked against the build machine's Qt:\n  " + "\n  ".join(offenders))
     run(["codesign", "--force", "--deep", "--sign", "-", studio])
     run(["codesign", "--verify", "--deep", "--strict", studio])
-    run([runtime / "Contents" / "MacOS" / "FluentHMIRuntime", "--check", ROOT / "examples" / "demo.uidp"],
-        timeout=CHECK_TIMEOUT, env=user_env())
 
-    studio_exe = studio / "Contents" / "MacOS" / "FluentHMIStudio"
+    # The exported application is a copy of Helpers/FluentHMIRuntime.app, whose files the scan above covered.
     with tempfile.TemporaryDirectory() as work:
-        app = check_export(studio_exe, lambda exported: exported / "Contents" / "MacOS" / "FluentHMIRuntime", work)
-        offenders = macos_linked_outside(app, qt_prefix)
-        if offenders:
-            sys.exit("the exported application still uses the build machine's Qt")
-        (Path(work) / "dyld-check").mkdir()
-        for cmd, bundle in (([studio_exe, "--export", Path(work) / "dyld-check", ROOT / "examples" / "demo.uidp"], studio),
-                            ([app / "Contents" / "MacOS" / "FluentHMIRuntime", "--check"], app)):
-            outside = macos_loaded_outside(cmd, bundle)
-            if outside:
-                sys.exit(f"{bundle.name} loads libraries from outside itself:\n  " + "\n  ".join(outside))
+        check_export(studio / "Contents" / "MacOS" / "FluentHMIStudio",
+                     lambda exported: exported / "Contents" / "MacOS" / "FluentHMIRuntime", work, macos_run_inside)
 
     arch = "universal" if "x86_64" in cache_value(build_dir, "CMAKE_OSX_ARCHITECTURES") and \
         "arm64" in cache_value(build_dir, "CMAKE_OSX_ARCHITECTURES") else platform.machine()

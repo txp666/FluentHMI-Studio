@@ -1,5 +1,6 @@
 #include "studio/export_service.h"
 
+#include <QtCore/QBuffer>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDir>
@@ -10,6 +11,19 @@
 #include <QtCore/QProcess>
 #include <QtCore/QSet>
 #include <QtCore/QStandardPaths>
+#include <QtCore/QTemporaryDir>
+#include <QtCore/QtEndian>
+#include <QtGui/QImage>
+#include <QtGui/QImageReader>
+#include <QtGui/QImageWriter>
+#include <QtGui/QPainter>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace fhmi {
 
@@ -54,6 +68,48 @@ bool copyTree(const QString &source, const QString &target, QString *error)
     return true;
 }
 
+// A name in assets/ that no other copied file has taken.
+QString assetName(const QString &source, QSet<QString> &used)
+{
+    const QFileInfo info(source);
+    QString name = info.fileName();
+    for (int n = 1; used.contains(name); ++n) {
+        name = QStringLiteral("%1_%2.%3").arg(info.completeBaseName()).arg(n).arg(info.suffix());
+    }
+    used.insert(name);
+    return name;
+}
+
+// The largest image in the file (an .ico holds several), or a null image when it cannot be read.
+QImage largestImage(const QString &path)
+{
+    QImageReader reader(path);
+    QImage largest;
+    for (int i = 0; i < std::max(1, reader.imageCount()); ++i) {
+        if (i > 0 && !reader.jumpToImage(i)) {
+            break;
+        }
+        const QImage image = reader.read();
+        if (image.width() * image.height() > largest.width() * largest.height()) {
+            largest = image;
+        }
+    }
+    return largest;
+}
+
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+// The image scaled into a square of `side` pixels, centred on a transparent background.
+QImage squared(const QImage &image, int side)
+{
+    QImage canvas(side, side, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    const QImage scaled = image.scaled(side, side, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    QPainter painter(&canvas);
+    painter.drawImage((side - scaled.width()) / 2, (side - scaled.height()) / 2, scaled);
+    return canvas;
+}
+#endif
+
 // Copies every image the project uses into assets/ and points the widgets at the copies.
 bool bundleImages(QJsonArray &widgets, const QDir &base, const QDir &assets, QSet<QString> &used, QString *error)
 {
@@ -66,11 +122,7 @@ bool bundleImages(QJsonArray &widgets, const QDir &base, const QDir &assets, QSe
             if (!QFileInfo(source).isReadable()) {
                 return fail(error, QObject::tr("图片不存在或不可读: %1").arg(QDir::toNativeSeparators(source)));
             }
-            QString name = QFileInfo(source).fileName();
-            for (int n = 1; used.contains(name); ++n) {
-                name = QStringLiteral("%1_%2.%3").arg(QFileInfo(source).completeBaseName()).arg(n).arg(QFileInfo(source).suffix());
-            }
-            used.insert(name);
+            const QString name = assetName(source, used);
             if (!assets.mkpath(QStringLiteral(".")) || !QFile::copy(source, assets.filePath(name))) {
                 return fail(error, QObject::tr("无法复制图片: %1").arg(QDir::toNativeSeparators(source)));
             }
@@ -95,8 +147,8 @@ QString plistEscape(const QString &text)
     return text.toHtmlEscaped();
 }
 
-// Sets the name the Finder and Dock show, and an identifier of the app's own.
-bool rebrandInfoPlist(const QString &plistPath, const QString &appName, QString *error)
+// Sets the name the Finder and Dock show, an identifier of the app's own and, if given, its icon file.
+bool rebrandInfoPlist(const QString &plistPath, const QString &appName, const QString &iconFile, QString *error)
 {
     QFile file(plistPath);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -122,6 +174,9 @@ bool rebrandInfoPlist(const QString &plistPath, const QString &appName, QString 
     setKey(QStringLiteral("CFBundleName"), appName);
     setKey(QStringLiteral("CFBundleDisplayName"), appName);
     setKey(QStringLiteral("CFBundleIdentifier"), QStringLiteral("io.github.txp666.fluenthmi.app") + QString::fromLatin1(hash));
+    if (!iconFile.isEmpty()) {
+        setKey(QStringLiteral("CFBundleIconFile"), iconFile);
+    }
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return fail(error, QObject::tr("无法写入 Info.plist"));
     }
@@ -129,6 +184,202 @@ bool rebrandInfoPlist(const QString &plistPath, const QString &appName, QString 
     return true;
 }
 
+// The bundle's icon, made by iconutil (part of every macOS) from an iconset of the image.
+bool writeIcns(const QImage &image, const QString &target, QString *error)
+{
+    const QString cannot = QObject::tr("无法生成应用图标");
+    QTemporaryDir dir;
+    const QString iconset = dir.filePath(QStringLiteral("icon.iconset"));
+    if (!dir.isValid() || !QDir().mkpath(iconset)) {
+        return fail(error, cannot);
+    }
+    for (const int side : {16, 32, 128, 256, 512}) {
+        if (!squared(image, side).save(QStringLiteral("%1/icon_%2x%2.png").arg(iconset).arg(side), "PNG") ||
+            !squared(image, side * 2).save(QStringLiteral("%1/icon_%2x%2@2x.png").arg(iconset).arg(side), "PNG")) {
+            return fail(error, cannot);
+        }
+    }
+    QProcess iconutil;
+    iconutil.start(QStringLiteral("/usr/bin/iconutil"),
+                   {QStringLiteral("-c"), QStringLiteral("icns"), QStringLiteral("-o"), target, iconset});
+    if (!iconutil.waitForFinished(60000) || iconutil.exitStatus() != QProcess::NormalExit || iconutil.exitCode() != 0 ||
+        !QFileInfo(target).isFile()) {
+        return fail(error, QStringLiteral("%1: %2").arg(
+                               cannot, QString::fromLocal8Bit(iconutil.readAllStandardError()).trimmed()));
+    }
+    return true;
+}
+
+#endif
+
+#ifdef Q_OS_WIN
+// The exported program's icon on Windows. Explorer shows the first icon group in an .exe, and Qt's windows
+// start with the one named IDI_ICON1 (resources/app_icon.rc.in); the runtime's groups and their images are
+// replaced by one group of the project's icon, under the name and language the runtime's first group had.
+
+// One image of an icon: its directory entry and its data (a DIB or a PNG), as an RT_ICON resource holds it.
+struct IconImage
+{
+    quint8 width = 0; // 0 means 256
+    quint8 height = 0;
+    quint8 colors = 0;
+    quint16 planes = 1;
+    quint16 bitCount = 32;
+    QByteArray data;
+};
+
+// The images of an .ico file, or none if it is not one.
+QList<IconImage> icoImages(const QByteArray &ico)
+{
+    if (ico.size() < 6 || qFromLittleEndian<quint16>(ico.constData()) != 0 ||
+        qFromLittleEndian<quint16>(ico.constData() + 2) != 1) {
+        return {};
+    }
+    QList<IconImage> images;
+    const int count = qFromLittleEndian<quint16>(ico.constData() + 4);
+    for (int i = 0; i < count; ++i) {
+        if (6 + 16 * (i + 1) > ico.size()) {
+            return {};
+        }
+        const char *entry = ico.constData() + 6 + 16 * i;
+        const quint32 size = qFromLittleEndian<quint32>(entry + 8);
+        const quint32 offset = qFromLittleEndian<quint32>(entry + 12);
+        if (size == 0 || quint64(offset) + size > quint64(ico.size())) {
+            return {};
+        }
+        IconImage image;
+        image.width = quint8(entry[0]);
+        image.height = quint8(entry[1]);
+        image.colors = quint8(entry[2]);
+        // Some writers leave these 0 for PNG images.
+        image.planes = std::max<quint16>(1, qFromLittleEndian<quint16>(entry + 4));
+        image.bitCount = qFromLittleEndian<quint16>(entry + 6) ? qFromLittleEndian<quint16>(entry + 6) : quint16(32);
+        image.data = ico.mid(offset, size);
+        images.append(image);
+    }
+    return images;
+}
+
+// The image at the usual icon sizes, each written by Qt's ICO writer.
+QList<IconImage> iconImagesOf(const QImage &image)
+{
+    QList<IconImage> images;
+    for (const int side : {16, 24, 32, 48, 64, 128, 256}) {
+        QBuffer buffer;
+        buffer.open(QIODevice::WriteOnly);
+        QImageWriter writer(&buffer, "ico");
+        const QList<IconImage> one = writer.write(squared(image, side)) ? icoImages(buffer.data()) : QList<IconImage>();
+        if (one.size() != 1) {
+            return {};
+        }
+        images.append(one.first());
+    }
+    return images;
+}
+
+// A group icon resource of the program, with each language it exists in and the RT_ICON ids it uses.
+struct IconGroup
+{
+    std::wstring name; // empty for a numeric id
+    WORD id = 0;
+    WORD language = 0;
+    QList<WORD> icons;
+
+    LPCWSTR key() const { return name.empty() ? MAKEINTRESOURCEW(id) : name.c_str(); }
+};
+
+const LPCWSTR kIconType = MAKEINTRESOURCEW(3);       // RT_ICON
+const LPCWSTR kGroupIconType = MAKEINTRESOURCEW(14); // RT_GROUP_ICON
+
+BOOL CALLBACK collectGroupName(HMODULE, LPCWSTR, LPWSTR name, LONG_PTR groups)
+{
+    IconGroup group;
+    if (IS_INTRESOURCE(name)) {
+        group.id = WORD(reinterpret_cast<ULONG_PTR>(name));
+    } else {
+        group.name = name;
+    }
+    reinterpret_cast<QList<IconGroup> *>(groups)->append(group);
+    return TRUE;
+}
+
+BOOL CALLBACK collectLanguage(HMODULE, LPCWSTR, LPCWSTR, WORD language, LONG_PTR languages)
+{
+    reinterpret_cast<QList<WORD> *>(languages)->append(language);
+    return TRUE;
+}
+
+bool replaceProgramIcon(const QString &exe, const QList<IconImage> &images, QString *error)
+{
+    const QString cannot = QObject::tr("无法写入程序图标: %1").arg(QDir::toNativeSeparators(exe));
+    const std::wstring path = QDir::toNativeSeparators(exe).toStdWString();
+    QList<IconGroup> groups;
+    HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if (!module) {
+        return fail(error, cannot);
+    }
+    QList<IconGroup> named;
+    EnumResourceNamesW(module, kGroupIconType, collectGroupName, reinterpret_cast<LONG_PTR>(&named));
+    for (const IconGroup &name : std::as_const(named)) {
+        QList<WORD> languages;
+        EnumResourceLanguagesW(module, kGroupIconType, name.key(), collectLanguage,
+                               reinterpret_cast<LONG_PTR>(&languages));
+        for (const WORD language : std::as_const(languages)) {
+            IconGroup group = name;
+            group.language = language;
+            // GRPICONDIR: 6 bytes, then 14 per image, each ending in its RT_ICON id.
+            HRSRC found = FindResourceExW(module, kGroupIconType, group.key(), language);
+            HGLOBAL loaded = found ? LoadResource(module, found) : nullptr;
+            const auto *data = loaded ? static_cast<const uchar *>(LockResource(loaded)) : nullptr;
+            const DWORD size = found ? SizeofResource(module, found) : 0;
+            const int count = data && size >= 6 ? qFromLittleEndian<quint16>(data + 4) : 0;
+            for (int i = 0; i < count && DWORD(6 + 14 * (i + 1)) <= size; ++i) {
+                group.icons.append(qFromLittleEndian<quint16>(data + 6 + 14 * i + 12));
+            }
+            groups.append(group);
+        }
+    }
+    FreeLibrary(module); // a mapped file cannot be rewritten
+
+    HANDLE update = BeginUpdateResourceW(path.c_str(), FALSE);
+    if (!update) {
+        return fail(error, cannot);
+    }
+    // Removing what is not there only fails; the writes below are what must succeed.
+    for (const IconGroup &group : std::as_const(groups)) {
+        UpdateResourceW(update, kGroupIconType, group.key(), group.language, nullptr, 0);
+        for (const WORD icon : group.icons) {
+            UpdateResourceW(update, kIconType, MAKEINTRESOURCEW(icon), group.language, nullptr, 0);
+        }
+    }
+    const IconGroup target = groups.isEmpty()
+                                 ? IconGroup{L"IDI_ICON1", 0, WORD(MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL)), {}}
+                                 : groups.first();
+    QByteArray directory(6, '\0');
+    qToLittleEndian<quint16>(1, directory.data() + 2);
+    qToLittleEndian<quint16>(quint16(images.size()), directory.data() + 4);
+    bool ok = true;
+    for (int i = 0; i < images.size(); ++i) {
+        const IconImage &image = images.at(i);
+        const WORD id = WORD(i + 1);
+        ok = ok && UpdateResourceW(update, kIconType, MAKEINTRESOURCEW(id), target.language,
+                                   const_cast<char *>(image.data.constData()), DWORD(image.data.size()));
+        char entry[14] = {};
+        entry[0] = char(image.width);
+        entry[1] = char(image.height);
+        entry[2] = char(image.colors);
+        qToLittleEndian<quint16>(image.planes, entry + 4);
+        qToLittleEndian<quint16>(image.bitCount, entry + 6);
+        qToLittleEndian<quint32>(quint32(image.data.size()), entry + 8);
+        qToLittleEndian<quint16>(id, entry + 12);
+        directory.append(entry, sizeof entry);
+    }
+    ok = ok && UpdateResourceW(update, kGroupIconType, target.key(), target.language, directory.data(),
+                               DWORD(directory.size()));
+    // On a failed write, discard every change rather than leave the program without an icon.
+    const bool written = EndUpdateResourceW(update, ok ? FALSE : TRUE) && ok;
+    return written || fail(error, cannot);
+}
 #endif
 } // namespace
 
@@ -189,6 +440,13 @@ QString ExportService::exportApplication(const Project &project, const QString &
     }
     const QString name = safeName(project.appName);
     QJsonArray widgets = project.widgets;
+    // Read before anything is copied: a set icon that cannot be read fails the export, as images do.
+    const QString iconSource = project.iconPath();
+    const QImage icon = iconSource.isEmpty() ? QImage() : largestImage(iconSource);
+    if (!iconSource.isEmpty() && icon.isNull()) {
+        fail(error, QObject::tr("图标不存在或不可读: %1").arg(QDir::toNativeSeparators(iconSource)));
+        return QString();
+    }
 
 #ifdef Q_OS_MACOS
     const QString target = QDir(outputDir).filePath(name + QStringLiteral(".app"));
@@ -216,8 +474,17 @@ QString ExportService::exportApplication(const Project &project, const QString &
         return abort(QString());
     }
     const QString stagedResources = QDir(staging).filePath(QStringLiteral("Contents/Resources"));
-    if (!rebrandInfoPlist(QDir(staging).filePath(QStringLiteral("Contents/Info.plist")), project.appName, error)) {
+    const QString icnsName = QStringLiteral("AppIcon.icns");
+    if (!rebrandInfoPlist(QDir(staging).filePath(QStringLiteral("Contents/Info.plist")), project.appName,
+                          icon.isNull() ? QString() : icnsName, error)) {
         return abort(QString());
+    }
+    if (!icon.isNull()) {
+        if (!writeIcns(icon, QDir(stagedResources).filePath(icnsName), error)) {
+            return abort(QString());
+        }
+        // The runtime's own icon, which the bundle no longer names.
+        QFile::remove(QDir(stagedResources).filePath(QStringLiteral("app_icon.icns")));
     }
 #else
     // A packaged runtime shares its folder, and Qt, with the studio; runtime-files.txt beside
@@ -266,6 +533,26 @@ QString ExportService::exportApplication(const Project &project, const QString &
         fail(error, QObject::tr("无法重命名程序"));
         return abort(QString());
     }
+#ifdef Q_OS_WIN
+    if (!icon.isNull()) {
+        // An .ico goes in as it is, with all its sizes; anything else (or an .ico that is not one) as made here.
+        QList<IconImage> images;
+        QFile iconFile(iconSource);
+        if (iconSource.endsWith(QLatin1String(".ico"), Qt::CaseInsensitive) && iconFile.open(QIODevice::ReadOnly)) {
+            images = icoImages(iconFile.readAll());
+        }
+        if (images.isEmpty()) {
+            images = iconImagesOf(icon);
+        }
+        if (images.isEmpty()) {
+            fail(error, QObject::tr("无法生成应用图标"));
+            return abort(QString());
+        }
+        if (!replaceProgramIcon(renamed, images, error)) {
+            return abort(QString());
+        }
+    }
+#endif
 #endif
     Q_UNUSED(resources);
 
@@ -280,6 +567,16 @@ QString ExportService::exportApplication(const Project &project, const QString &
     }
     Project exported = project;
     exported.widgets = widgets;
+    // A copy beside the project, for the runtime's window icon.
+    if (!icon.isNull()) {
+        const QString copy = assetName(iconSource, used);
+        const QDir assets(QDir(stagedResources).filePath(QStringLiteral("assets")));
+        if (!assets.mkpath(QStringLiteral(".")) || !QFile::copy(iconSource, assets.filePath(copy))) {
+            fail(error, QObject::tr("无法复制图标: %1").arg(QDir::toNativeSeparators(iconSource)));
+            return abort(QString());
+        }
+        exported.icon = QStringLiteral("assets/") + copy;
+    }
     if (!exported.save(QDir(stagedResources).filePath(QStringLiteral("project.uidp")), error)) {
         return abort(QString());
     }

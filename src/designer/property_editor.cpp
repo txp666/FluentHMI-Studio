@@ -13,6 +13,7 @@
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/LineEdit.h>
+#include <FluentQtWidgets/Widgets/Menu.h>
 #include <FluentQtWidgets/Widgets/SpinBox.h>
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
 
@@ -306,13 +307,9 @@ void PropertyEditor::rebuild()
 
 QFormLayout *PropertyEditor::addSection(const QString &title)
 {
-    // SimpleCardWidget comes with its own box layout; the form goes inside it.
     auto *card = new FluentQt::SimpleCardWidget(m_content);
-    auto *box = static_cast<QBoxLayout *>(card->layout());
-    box->setContentsMargins(12, 10, 12, 10);
-    auto *form = new QFormLayout;
-    box->addLayout(form);
-    form->setContentsMargins(0, 0, 0, 0);
+    auto *form = new QFormLayout(card);
+    form->setContentsMargins(12, 10, 12, 10);
     form->setHorizontalSpacing(10);
     form->setVerticalSpacing(6);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -450,27 +447,27 @@ void PropertyEditor::buildProjectForm()
     name->setText(m_project->appName);
     connect(name, &QLineEdit::textChanged, this, [this](const QString &text) {
         m_project->appName = text;
-        emit projectSettingsChanged();
+        emit projectSettingsChanged(QStringLiteral("appName"));
     });
-    addRow(general, QString(), tr("应用名称"), name);
+    addRow(general, QString(), tr("应用名称"), createIconButton(name));
 
-    const auto spin = [this](int lo, int hi, int value, const std::function<void(int)> &apply) {
+    const auto spin = [this](const char *key, int lo, int hi, int value, const std::function<void(int)> &apply) {
         auto *box = new FluentQt::SpinBox(m_content);
         box->setRange(lo, hi);
         box->setValue(value);
         box->setKeyboardTracking(false);
-        connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [this, apply](int v) {
+        connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [this, apply, key](int v) {
             apply(v);
-            emit projectSettingsChanged();
+            emit projectSettingsChanged(QLatin1String(key));
         });
         return box;
     };
     addRow(general, QString(), tr("画布宽度"),
-           spin(100, 9999, m_project->canvasWidth, [this](int v) { m_project->canvasWidth = v; }));
+           spin("canvasWidth", 100, 9999, m_project->canvasWidth, [this](int v) { m_project->canvasWidth = v; }));
     addRow(general, QString(), tr("画布高度"),
-           spin(100, 9999, m_project->canvasHeight, [this](int v) { m_project->canvasHeight = v; }));
+           spin("canvasHeight", 100, 9999, m_project->canvasHeight, [this](int v) { m_project->canvasHeight = v; }));
     addRow(general, QString(), tr("网格大小"),
-           spin(1, 100, m_project->gridSize, [this](int v) { m_project->gridSize = v; }));
+           spin("gridSize", 1, 100, m_project->gridSize, [this](int v) { m_project->gridSize = v; }));
 
     QFormLayout *frame = addSection(tr("默认帧格式"));
     auto *hint = new FluentQt::CaptionLabel(tr("链路卡片选择“项目设置”时使用"), m_content);
@@ -485,18 +482,70 @@ void PropertyEditor::buildProjectForm()
     connect(parser, &FluentQt::ComboBox::currentTextChanged, this, [this](const QString &type) {
         m_project->serial.insert(QStringLiteral("parser"), type);
         updateVisibility();
-        emit projectSettingsChanged();
+        emit projectSettingsChanged(QStringLiteral("parser"));
     });
     addFrameRows(
         frame, QString(), [this]() { return m_project->parserConfig(); },
-        [this](const QJsonObject &config) {
+        [this](const QJsonObject &config, const QString &key) {
             m_project->serial.insert(QStringLiteral("parserConfig"), config);
-            emit projectSettingsChanged();
+            emit projectSettingsChanged(QStringLiteral("parserConfig.") + key);
         });
 
     auto *tip = new FluentQt::CaptionLabel(tr("从左侧拖拽控件到画布；选中控件后在这里编辑属性和数据绑定。"), m_content);
     tip->setWordWrap(true);
     m_layout->addWidget(tip);
+}
+
+QWidget *PropertyEditor::createIconButton(QWidget *nameField)
+{
+    auto *row = new QWidget(m_content);
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+    auto *button = new FluentQt::ToolButton(row);
+    button->setToolTip(tr("应用图标"));
+    button->setIconSize(QSize(20, 20));
+    // The studio's own logo stands for the default icon, which is what an exported application gets.
+    const QIcon icon = iconFromFile(m_project->iconPath());
+    button->setIcon(icon.isNull() ? QIcon(QStringLiteral(":/fluenthmi/logo.png")) : icon);
+    keepSquareBeside(button, nameField);
+    nameField->setParent(row);
+    layout->addWidget(button);
+    layout->addWidget(nameField, 1);
+
+    const auto setIcon = [this](const QString &icon) {
+        m_project->icon = icon;
+        emit projectSettingsChanged(QString());
+        QMetaObject::invokeMethod(this, [this]() { rebuild(); }, Qt::QueuedConnection);
+    };
+    const auto choose = [this, setIcon]() {
+        const QString file =
+            QFileDialog::getOpenFileName(this, tr("选择应用图标"), QString(), tr("图片 (*.png *.jpg *.jpeg *.ico)"));
+        if (file.isEmpty() || !m_project) {
+            return;
+        }
+        // Stored like an image path: relative to a saved project when inside its folder.
+        QString stored = file;
+        if (!m_project->filePath.isEmpty()) {
+            const QString relative = QDir(m_project->assetBaseDir()).relativeFilePath(file);
+            if (!relative.startsWith(QLatin1String(".."))) {
+                stored = relative;
+            }
+        }
+        setIcon(stored);
+    };
+    connect(button, &QToolButton::clicked, this, [this, button, setIcon, choose]() {
+        auto *menu = new FluentQt::RoundMenu(this);
+        connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
+        // The dialog runs an event loop of its own, which may delete the menu: open it once the menu is done.
+        connect(menu->addAction(tr("选择图标…")), &QAction::triggered, this,
+                [this, choose]() { QMetaObject::invokeMethod(this, choose, Qt::QueuedConnection); });
+        QAction *reset = menu->addAction(tr("使用默认图标"));
+        reset->setEnabled(!m_project->icon.isEmpty());
+        connect(reset, &QAction::triggered, this, [setIcon]() { setIcon(QString()); });
+        menu->exec(button->mapToGlobal(QPoint(0, button->height())), true);
+    });
+    return row;
 }
 
 void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, const ConfigRead &read,
@@ -506,7 +555,7 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
     const auto store = [read, write](const char *key, const QJsonValue &value) {
         QJsonObject edited = read();
         edited.insert(QLatin1String(key), value);
-        write(edited);
+        write(edited, QLatin1String(key));
     };
     const auto row = [&](const char *key, const QString &label, QWidget *editor) {
         addRow(form, prefix + QLatin1String(key), label, editor);
@@ -654,13 +703,14 @@ QJsonValue PropertyEditor::itemValue(const PropDef &def) const
     return def.defaultValue;
 }
 
-void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value)
+void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value, const QString &detail)
 {
     if (m_loading || !m_item) {
         return;
     }
-    m_item->setPropertyValue(storageKey(name), value);
-    emit modified();
+    const QString key = storageKey(name);
+    m_item->setPropertyValue(key, value);
+    emit modified(QStringLiteral("property:%1:%2:%3").arg(m_item->widgetId(), key, detail));
     // These change which per-curve / per-page values, or which fields, the form shows;
     // defaultParser decides whether a link card has a frame format section, and what it starts from.
     static const QSet<QString> structural = {QStringLiteral("currentCurve"), QStringLiteral("curveCount"),
@@ -704,9 +754,9 @@ void PropertyEditor::buildItemForm()
     const WidgetMeta &meta = m_item->meta();
 
     auto *header = new FluentQt::SimpleCardWidget(m_content);
-    static_cast<QBoxLayout *>(header->layout())->setContentsMargins(12, 10, 12, 10);
-    auto *headerLayout = new QFormLayout;
-    static_cast<QBoxLayout *>(header->layout())->addLayout(headerLayout);
+    auto *headerLayout = new QFormLayout(header);
+    headerLayout->setContentsMargins(12, 10, 12, 10);
+    headerLayout->setSpacing(8);
     headerLayout->addRow(new FluentQt::SubtitleLabel(meta.displayName, header));
     auto *id = new FluentQt::LineEdit(header);
     id->setText(m_item->widgetId());
@@ -746,7 +796,7 @@ void PropertyEditor::buildItemForm()
             if (CanvasItem *parent = m_item->containerParent()) {
                 parent->relayoutChildren();
             }
-            emit modified();
+            emit modified(QStringLiteral("geometry:%1:%2").arg(m_item->widgetId()).arg(i));
         });
         geometry->addRow(new FluentQt::BodyLabel(labels[i], m_content), spin);
     }
@@ -777,7 +827,9 @@ void PropertyEditor::buildItemForm()
         m_item->propertyValue(QStringLiteral("defaultParser")).toString() != kProjectParser) {
         addFrameRows(
             addSection(tr("帧格式")), QStringLiteral("parserConfig."), [this]() { return cardFrameConfig(); },
-            [this](const QJsonObject &config) { commitProperty(QStringLiteral("parserConfig"), config); });
+            [this](const QJsonObject &config, const QString &key) {
+                commitProperty(QStringLiteral("parserConfig"), config, key);
+            });
     }
     if (!meta.bindProperty().isEmpty()) {
         buildBindingForm();
@@ -796,29 +848,35 @@ void PropertyEditor::buildBindingForm()
         const QJsonValue v = binding.value(QLatin1String(key));
         return v.isUndefined() || v.isNull() ? fallback : v;
     };
+    // Each editor commits under its own key, so typing in one field is one undo step.
     const auto add = [&](const char *key, const QString &label, QWidget *editor) {
         m_bindingEditors.insert(QLatin1String(key), editor);
         addRow(form, QStringLiteral("binding.") + QLatin1String(key), label, editor);
+        const QString field = QLatin1String(key);
+        if (auto *box = qobject_cast<FluentQt::ComboBox *>(editor)) {
+            connect(box, &FluentQt::ComboBox::currentTextChanged, this, [this, field]() { commitBinding(field); });
+        } else if (auto *edit = qobject_cast<QLineEdit *>(editor)) {
+            connect(edit, &QLineEdit::textChanged, this, [this, field]() { commitBinding(field); });
+        } else if (auto *number = qobject_cast<QSpinBox *>(editor)) {
+            connect(number, qOverload<int>(&QSpinBox::valueChanged), this, [this, field]() { commitBinding(field); });
+        }
     };
     const auto combo = [this](const QStringList &items, const QString &current) {
         auto *box = new FluentQt::ComboBox(m_content);
         box->addItems(items);
         box->setCurrentIndex(std::max(0, box->findText(current)));
-        connect(box, &FluentQt::ComboBox::currentTextChanged, this, [this]() { commitBinding(); });
         return box;
     };
     const auto line = [this](const QString &text, const QString &placeholder) {
         auto *edit = new FluentQt::LineEdit(m_content);
         edit->setText(text);
         edit->setPlaceholderText(placeholder);
-        connect(edit, &QLineEdit::textChanged, this, [this]() { commitBinding(); });
         return edit;
     };
     const auto spin = [this](int lo, int hi, int current) {
         auto *box = new FluentQt::SpinBox(m_content);
         box->setRange(lo, hi);
         box->setValue(current);
-        connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { commitBinding(); });
         return box;
     };
 
@@ -857,7 +915,7 @@ void PropertyEditor::buildBindingForm()
     add("expression", tr("转换表达式"), line(value("expression", QString()).toString(), tr("如 value * 0.1")));
 }
 
-void PropertyEditor::commitBinding()
+void PropertyEditor::commitBinding(const QString &field)
 {
     if (m_loading || !m_item) {
         return;
@@ -905,7 +963,7 @@ void PropertyEditor::commitBinding()
         m_item->setBinding(binding);
     }
     updateVisibility();
-    emit modified();
+    emit modified(QStringLiteral("binding:%1:%2").arg(m_item->widgetId(), field));
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
 #include "designer/widget_palette.h"
+#include "runtime/hmi_widget.h"
 
 #include <FluentQtWidgets/Dialogs/Dialog.h>
 #include <FluentQtWidgets/FluentIcon.h>
@@ -14,9 +15,16 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QMimeData>
 #include <QtCore/QTimer>
 #include <QtGui/QAction>
+#include <QtGui/QClipboard>
 #include <QtGui/QCursor>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QIconEngine>
+#include <QtGui/QPainter>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QGraphicsView>
@@ -25,6 +33,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 
 namespace fhmi {
 
@@ -54,9 +63,81 @@ class DesignView : public QGraphicsView
     }
 };
 
+// 重做 is 撤销's arrow turned left to right, as Fluent has no redo icon. It paints through the Fluent icon, so it
+// follows the theme as that does.
+class MirroredIconEngine : public QIconEngine
+{
+  public:
+    explicit MirroredIconEngine(const QIcon &icon) : m_icon(icon) {}
+
+    void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode, QIcon::State state) override
+    {
+        painter->save();
+        painter->translate(rect.left() + rect.right() + 1, 0);
+        painter->scale(-1, 1);
+        m_icon.paint(painter, rect, Qt::AlignCenter, mode, state);
+        painter->restore();
+    }
+
+    QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+    {
+        return QPixmap::fromImage(m_icon.pixmap(size, mode, state).toImage().flipped(Qt::Horizontal));
+    }
+
+    QIconEngine *clone() const override { return new MirroredIconEngine(m_icon); }
+
+  private:
+    QIcon m_icon;
+};
+
 QString projectFilter()
 {
     return QObject::tr("FluentHMI / PyQt UI Designer 工程 (*.uidp)");
+}
+
+constexpr int kHistoryLimit = 100;
+
+// The widgets in clipboard text: the object copying writes, or (from plain text, such as widgets an AI wrote
+// from the .uidp guide) a bare array of widgets or one widget.
+std::optional<QJsonArray> clipboardWidgets(const QByteArray &content, bool plainText)
+{
+    const QJsonDocument document = QJsonDocument::fromJson(content);
+    const QJsonObject object = document.object();
+    if (document.isObject() && object.value(QStringLiteral("widgets")).isArray()) {
+        return object.value(QStringLiteral("widgets")).toArray();
+    }
+    if (plainText && document.isArray()) {
+        return document.array();
+    }
+    if (plainText && document.isObject() && object.contains(QStringLiteral("type"))) {
+        return QJsonArray{object};
+    }
+    return std::nullopt;
+}
+
+QString rebasedPath(const QString &path, const QDir &from, const QDir &to)
+{
+    return path.isEmpty() || !QDir::isRelativePath(path) ? path : to.relativeFilePath(from.absoluteFilePath(path));
+}
+
+QJsonArray rebasedImages(QJsonArray widgets, const QDir &from, const QDir &to)
+{
+    for (qsizetype i = 0; i < widgets.size(); ++i) {
+        QJsonObject widget = widgets.at(i).toObject();
+        QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
+        if (widget.value(QStringLiteral("type")).toString() == QLatin1String("ImageDisplay") &&
+            props.contains(QStringLiteral("imagePath"))) {
+            props.insert(QStringLiteral("imagePath"),
+                         rebasedPath(props.value(QStringLiteral("imagePath")).toString(), from, to));
+            widget.insert(QStringLiteral("properties"), props);
+        }
+        if (widget.contains(QStringLiteral("children"))) {
+            widget.insert(QStringLiteral("children"),
+                          rebasedImages(widget.value(QStringLiteral("children")).toArray(), from, to));
+        }
+        widgets[i] = widget;
+    }
+    return widgets;
 }
 
 } // namespace
@@ -85,11 +166,15 @@ void DesignerPage::buildUi()
     // Fluent overlay scroll bars instead of the platform ones; Ctrl+wheel still zooms.
     new FluentQt::SmoothScrollDelegate(m_view);
 
+    // The same buttons in the same order as PyQt UI Designer's; icons only, the tooltip names each and its keys.
     auto *bar = new FluentQt::CommandBar(this);
-    bar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    bar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    bar->setButtonTight(true);
     const auto action = [this, bar](FluentIcon icon, const QString &text, const QKeySequence &shortcut,
                                     const std::function<void()> &slot) {
         QAction *a = bar->addAction(icon, text);
+        a->setToolTip(shortcut.isEmpty() ? text
+                                         : QStringLiteral("%1 (%2)").arg(text, shortcut.toString(QKeySequence::NativeText)));
         if (!shortcut.isEmpty()) {
             a->setShortcut(shortcut);
             a->setShortcutContext(Qt::WindowShortcut);
@@ -98,15 +183,36 @@ void DesignerPage::buildUi()
         connect(a, &QAction::triggered, this, slot);
         return a;
     };
+    // The side panels' switches sit at the two ends of the bar; the canvas takes a hidden panel's room.
+    const auto panelSwitch = [this, bar](QWidget *panel, const QString &title, const QString &icon) {
+        QAction *a = bar->addAction(widgetIcon(icon + QStringLiteral("_on")), tr("隐藏%1").arg(title));
+        a->setToolTip(a->text());
+        connect(a, &QAction::triggered, this, [a, panel, title, icon]() {
+            const bool shown = panel->isHidden();
+            panel->setVisible(shown);
+            a->setIcon(widgetIcon(shown ? icon + QStringLiteral("_on") : icon));
+            a->setText((shown ? DesignerPage::tr("隐藏%1") : DesignerPage::tr("显示%1")).arg(title));
+            a->setToolTip(a->text());
+        });
+    };
+    panelSwitch(m_palette, tr("控件库"), QStringLiteral("panel_left"));
+    bar->addSeparator();
     action(FluentIcon::Add, tr("新建"), QKeySequence::New, [this]() { newProject(); });
     action(FluentIcon::Folder, tr("打开"), QKeySequence::Open, [this]() { openProject(); });
     action(FluentIcon::Save, tr("保存"), QKeySequence::Save, [this]() { save(); });
     action(FluentIcon::SaveAs, tr("另存为"), QKeySequence::SaveAs, [this]() { saveAs(); });
     bar->addSeparator();
+    // A focused text field takes these keys first, and keeps its own undo, copy and paste.
+    m_undoAction = action(FluentIcon::Cancel, tr("撤销"), QKeySequence::Undo, [this]() { undo(); });
+    m_redoAction = action(FluentIcon::Cancel, tr("重做"), QKeySequence::Redo, [this]() { redo(); });
+    m_redoAction->setIcon(QIcon(new MirroredIconEngine(m_redoAction->icon())));
+    m_redoAction->setShortcuts(QKeySequence::Redo); // Ctrl+Y and Ctrl+Shift+Z on Windows
+    bar->addSeparator();
+    m_copyAction = action(FluentIcon::Copy, tr("复制"), QKeySequence::Copy, [this]() { copy(); });
+    action(FluentIcon::Paste, tr("粘贴"), QKeySequence::Paste, [this]() { paste(); });
     action(FluentIcon::Delete, tr("删除"), QKeySequence(), [this]() { m_scene->deleteSelected(); });
     bar->addSeparator();
     const auto aligner = [this](Alignment alignment) { return [this, alignment]() { m_scene->align(alignment); }; };
-    QAction *alignAction = bar->addAction(FluentIcon::Alignment, tr("对齐"));
     auto *menu = new FluentQt::RoundMenu(this);
     const QList<QPair<QString, Alignment>> alignments = {
         {tr("左对齐"), Alignment::Left},
@@ -121,16 +227,18 @@ void DesignerPage::buildUi()
     for (const auto &entry : alignments) {
         connect(menu->addAction(entry.first), &QAction::triggered, this, aligner(entry.second));
     }
-    connect(alignAction, &QAction::triggered, this, [menu]() { menu->exec(QCursor::pos(), true); });
+    action(FluentIcon::Alignment, tr("对齐"), QKeySequence(), [menu]() { menu->exec(QCursor::pos(), true); });
+    bar->addSeparator();
     QAction *grid = action(FluentIcon::Tiles, tr("网格"), QKeySequence(), []() {});
     grid->setCheckable(true);
     grid->setChecked(true);
     connect(grid, &QAction::toggled, m_scene, &DesignScene::setGridVisible);
-    bar->addSeparator();
     action(FluentIcon::ZoomIn, tr("放大"), QKeySequence::ZoomIn, [this]() { zoomBy(1.15); });
     action(FluentIcon::ZoomOut, tr("缩小"), QKeySequence::ZoomOut, [this]() { zoomBy(1 / 1.15); });
     action(FluentIcon::FitPage, tr("适应窗口"), QKeySequence(Qt::CTRL | Qt::Key_0), [this]() { fitCanvas(); });
     action(FluentIcon::Zoom, tr("实际大小"), QKeySequence(), [this]() { m_view->resetTransform(); });
+    bar->addSeparator();
+    panelSwitch(m_properties, tr("属性"), QStringLiteral("panel_right"));
 
     auto *center = new QWidget(this);
     auto *centerLayout = new QVBoxLayout(center);
@@ -162,17 +270,18 @@ void DesignerPage::buildUi()
     connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]() {
         const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
         m_properties->showItem(selected.size() == 1 ? selected.first() : nullptr);
+        updateEditActions();
     });
     connect(m_scene, &DesignScene::itemPropertiesChanged, this, [this](CanvasItem *item) {
         if (m_properties->currentItem() == item) {
             m_properties->refreshGeometry();
         }
     });
-    connect(m_scene, &DesignScene::modified, this, [this]() { setModified(true); });
-    connect(m_properties, &PropertyEditor::modified, this, [this]() { setModified(true); });
-    connect(m_properties, &PropertyEditor::projectSettingsChanged, this, [this]() {
+    connect(m_scene, &DesignScene::modified, this, [this](const QString &key) { recordChange(key); });
+    connect(m_properties, &PropertyEditor::modified, this, [this](const QString &key) { recordChange(key); });
+    connect(m_properties, &PropertyEditor::projectSettingsChanged, this, [this](const QString &key) {
         applyProjectSettings();
-        setModified(true);
+        recordChange(key.isEmpty() ? key : QStringLiteral("project:") + key);
     });
     connect(m_properties, &PropertyEditor::message, this, &DesignerPage::notify);
 }
@@ -239,8 +348,155 @@ void DesignerPage::load(const Project &project)
     applyProjectSettings();
     // Once the view has its size: a page larger than the view opens fitted.
     QTimer::singleShot(0, this, [this]() { fitCanvas(); });
+    resetHistory();
     setModified(false);
     emit projectChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Undo and redo
+// ---------------------------------------------------------------------------
+
+void DesignerPage::resetHistory()
+{
+    m_history = {snapshot().toJson()};
+    m_historyIndex = 0;
+    m_savedIndex = 0;
+    m_lastMergeKey.clear();
+    m_pasteContent.clear();
+    m_pasteCount = 0;
+    updateEditActions();
+}
+
+void DesignerPage::recordChange(const QString &mergeKey)
+{
+    const QJsonObject state = snapshot().toJson();
+    if (state == m_history.at(m_historyIndex)) {
+        return; // a click that moved nothing
+    }
+    // A burst of edits is one step, but never folded into the saved design, which undo must still reach.
+    const bool merge = !mergeKey.isEmpty() && mergeKey == m_lastMergeKey && m_historyIndex > 0 &&
+                       m_historyIndex + 1 == m_history.size() && m_historyIndex != m_savedIndex;
+    if (merge) {
+        m_history[m_historyIndex] = state;
+    } else {
+        m_history.erase(m_history.begin() + m_historyIndex + 1, m_history.end());
+        if (m_savedIndex > m_historyIndex) {
+            m_savedIndex = -1;
+        }
+        m_history.append(state);
+        ++m_historyIndex;
+        if (m_history.size() > kHistoryLimit) {
+            m_history.removeFirst();
+            --m_historyIndex;
+            m_savedIndex = std::max(-1, m_savedIndex - 1);
+        }
+    }
+    m_lastMergeKey = mergeKey;
+    setModified(m_historyIndex != m_savedIndex);
+    updateEditActions();
+}
+
+void DesignerPage::undo()
+{
+    if (canUndo()) {
+        restore(m_historyIndex - 1);
+    }
+}
+
+void DesignerPage::redo()
+{
+    if (canRedo()) {
+        restore(m_historyIndex + 1);
+    }
+}
+
+void DesignerPage::restore(int index)
+{
+    QStringList selected;
+    for (const CanvasItem *item : m_scene->selectedCanvasItems()) {
+        selected.append(item->widgetId());
+    }
+    Project project = Project::fromTrustedJson(m_history.at(index));
+    project.filePath = m_project.filePath;
+    m_properties->showItem(nullptr);
+    QString error;
+    if (!m_scene->loadWidgets(project.widgets, &error)) {
+        emit notify(tr("无法撤销"), error, true);
+        return;
+    }
+    m_historyIndex = index;
+    m_lastMergeKey.clear();
+    m_project = project;
+    m_properties->setProject(&m_project);
+    applyProjectSettings();
+    m_scene->selectIds(selected);
+    const bool modified = m_historyIndex != m_savedIndex;
+    setModified(modified);
+    if (!modified) {
+        emit projectChanged(); // back at the saved design, but still not the design the preview has
+    }
+    updateEditActions();
+}
+
+void DesignerPage::updateEditActions()
+{
+    if (!m_undoAction) {
+        return;
+    }
+    m_undoAction->setEnabled(canUndo());
+    m_redoAction->setEnabled(canRedo());
+    m_copyAction->setEnabled(!m_scene->selectedCanvasItems().isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// Copy and paste
+// ---------------------------------------------------------------------------
+
+void DesignerPage::copy()
+{
+    const QJsonArray widgets = m_scene->selectionJson();
+    if (widgets.isEmpty()) {
+        return;
+    }
+    const QByteArray json =
+        QJsonDocument(QJsonObject{{QStringLiteral("version"), QLatin1String(Project::FormatVersion)},
+                                  {QStringLiteral("widgets"), widgets}})
+            .toJson(QJsonDocument::Compact);
+    auto *mime = new QMimeData;
+    mime->setData(QLatin1String(WidgetsClipboardType), json);
+    mime->setText(QString::fromUtf8(json));
+    QGuiApplication::clipboard()->setMimeData(mime);
+}
+
+void DesignerPage::paste()
+{
+    const QMimeData *mime = QGuiApplication::clipboard()->mimeData();
+    QByteArray content;
+    std::optional<QJsonArray> widgets;
+    if (mime && mime->hasFormat(QLatin1String(WidgetsClipboardType))) {
+        content = mime->data(QLatin1String(WidgetsClipboardType));
+        widgets = clipboardWidgets(content, false);
+    }
+    if (!widgets && mime && mime->hasText()) {
+        content = mime->text().toUtf8();
+        widgets = clipboardWidgets(content, true);
+    }
+    // Checked as opening a project checks them; a link card's frame format against this project's mode.
+    const QJsonObject document{
+        {QStringLiteral("widgets"), widgets.value_or(QJsonArray())},
+        {QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()}}}};
+    if (!widgets || widgets->isEmpty() || !Project::validate(document, nullptr)) {
+        emit warning(tr("剪贴板里没有可粘贴的控件"), QString());
+        return;
+    }
+    const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
+    CanvasItem *container = selected.size() == 1 && selected.first()->isContainer() ? selected.first() : nullptr;
+    const QString target = container ? container->widgetId() : QString();
+    m_pasteCount = content == m_pasteContent && target == m_pasteTarget ? m_pasteCount + 1 : 1;
+    m_pasteContent = content;
+    m_pasteTarget = target;
+    m_scene->paste(*widgets, container, m_pasteCount);
 }
 
 bool DesignerPage::maybeSave()
@@ -254,8 +510,7 @@ bool DesignerPage::maybeSave()
     box.cancelButton()->setText(tr("取消"));
     auto *discard = new FluentQt::PushButton(&box);
     discard->setText(tr("不保存"));
-    // Same width as the box's own buttons.
-    discard->setMinimumWidth(box.cancelButton()->minimumWidth());
+    // Stretch 1, like the box's own buttons, so the three share the row evenly.
     box.buttonLayout()->insertWidget(1, discard, 1, Qt::AlignVCenter);
     bool discarded = false;
     connect(discard, &QPushButton::clicked, &box, [&box, &discarded]() {
@@ -321,17 +576,18 @@ bool DesignerPage::saveAs()
 
 bool DesignerPage::saveTo(const QString &path)
 {
-    // Relative image paths follow the project to its new folder.
+    // Relative image and icon paths follow the project to its new folder.
     const QDir oldBase(m_project.assetBaseDir());
     const QDir newBase(QFileInfo(path).absolutePath());
-    if (oldBase.absolutePath() != newBase.absolutePath()) {
+    const bool moved = oldBase.absolutePath() != newBase.absolutePath();
+    if (moved) {
         for (CanvasItem *item : m_scene->allItems()) {
             const QString image = item->propertyValue(QStringLiteral("imagePath")).toString();
             if (item->typeName() == QLatin1String("ImageDisplay") && !image.isEmpty() && QDir::isRelativePath(image)) {
-                item->setPropertyValue(QStringLiteral("imagePath"),
-                                       newBase.relativeFilePath(oldBase.absoluteFilePath(image)));
+                item->setPropertyValue(QStringLiteral("imagePath"), rebasedPath(image, oldBase, newBase));
             }
         }
+        m_project.icon = rebasedPath(m_project.icon, oldBase, newBase);
     }
     Project project = snapshot();
     QString error;
@@ -341,6 +597,20 @@ bool DesignerPage::saveTo(const QString &path)
     }
     m_project.filePath = QFileInfo(path).absoluteFilePath();
     m_scene->setAssetBaseDir(m_project.assetBaseDir());
+    // The undo steps follow too, so undoing past the save still finds the images.
+    if (moved) {
+        for (QJsonObject &state : m_history) {
+            state.insert(QStringLiteral("widgets"),
+                         rebasedImages(state.value(QStringLiteral("widgets")).toArray(), oldBase, newBase));
+            const QString icon = rebasedPath(state.value(QStringLiteral("icon")).toString(), oldBase, newBase);
+            if (!icon.isEmpty()) {
+                state.insert(QStringLiteral("icon"), icon);
+            }
+        }
+    }
+    m_history[m_historyIndex] = project.toJson();
+    m_savedIndex = m_historyIndex;
+    m_lastMergeKey.clear();
     setModified(false);
     emit notify(tr("已保存"), QFileInfo(path).fileName(), false);
     return true;

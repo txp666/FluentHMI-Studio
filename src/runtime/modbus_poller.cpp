@@ -11,7 +11,7 @@ namespace fhmi {
 namespace {
 
 // A block counts as due this much early, so a tick that arrives a moment before a block's time does
-// not leave it waiting a whole further tick.
+// not leave it waiting; also how soon to look again while a control's write is on the line.
 constexpr qint64 kDueSlackMs = 10;
 
 } // namespace
@@ -125,6 +125,11 @@ ModbusPoller::ModbusPoller(RuntimeContext *context) : QObject(context), m_contex
 {
     m_timer->setTimerType(Qt::PreciseTimer); // a block's period is kept to the tick
     connect(m_timer, &QTimer::timeout, this, &ModbusPoller::poll);
+    // When the block due next falls between two ticks, or a control's write is on the line.
+    m_wake = new QTimer(this);
+    m_wake->setSingleShot(true);
+    m_wake->setTimerType(Qt::PreciseTimer);
+    connect(m_wake, &QTimer::timeout, this, &ModbusPoller::poll);
     // A link that connects, or a listening server that gets a device, is read from at once.
     connect(context->hub(), &CommHub::linksChanged, this, &ModbusPoller::poll);
 }
@@ -201,6 +206,7 @@ void ModbusPoller::begin()
 void ModbusPoller::halt()
 {
     m_timer->stop();
+    m_wake->stop();
     m_read.cancel(); // its reads still waiting in a queue never go out; one on the line gets its reply
     clearPlan();
 }
@@ -226,6 +232,7 @@ QList<Link *> ModbusPoller::modbusLinks() const
 
 void ModbusPoller::poll()
 {
+    m_wake->stop();
     if (!m_active) {
         return;
     }
@@ -240,14 +247,17 @@ void ModbusPoller::poll()
     replan();
     updateInterval();
     if (m_blocks.isEmpty() || m_read.isActive()) {
-        return;
-    }
-    for (Link *link : links) {
-        if (link->modbusMaster()->busy()) {
-            return; // a read or a write is on the line
-        }
+        return; // the read's reply polls again
     }
     const qint64 now = m_context->now();
+    const qint64 due = *std::min_element(m_due.cbegin(), m_due.cend());
+    for (Link *link : links) {
+        if (link->modbusMaster()->busy()) {
+            // A control's write is on the line: look again once the next block is due, at the soonest.
+            m_wake->start(int(std::max(kDueSlackMs, due - now)));
+            return;
+        }
+    }
     int next = -1;
     for (int i = 0; i < int(m_blocks.size()); ++i) {
         if (m_due.at(i) <= now + kDueSlackMs && (next < 0 || m_due.at(i) < m_due.at(next))) {
@@ -255,6 +265,7 @@ void ModbusPoller::poll()
         }
     }
     if (next < 0) {
+        m_wake->start(int(due - now)); // when it is due, rather than at a later tick, up to a period late
         return;
     }
     const ModbusBlock block = m_blocks.at(next);

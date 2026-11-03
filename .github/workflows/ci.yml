@@ -10,6 +10,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # One Qt for every job and for the local builds. aqtinstall comes from GitHub until a release reads
+  # the Windows x64 repository layout of Qt 6.11 and later (miurahr/aqtinstall#1000).
+  QT_VERSION: "6.12.0"
+  AQT_SOURCE: "git+https://github.com/miurahr/aqtinstall.git"
+
 jobs:
   build:
     name: ${{ matrix.os }}
@@ -28,7 +34,8 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.8.3"
+          version: ${{ env.QT_VERSION }}
+          aqtsource: ${{ env.AQT_SOURCE }}
           modules: "qtserialport"
           cache: true
 

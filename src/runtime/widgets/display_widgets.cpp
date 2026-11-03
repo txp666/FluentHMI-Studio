@@ -1,5 +1,6 @@
 #include "runtime/widgets/display_widgets.h"
 
+#include <FluentQtWidgets/Color.h>
 #include <FluentQtWidgets/Theme.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/ProgressBar.h>
@@ -22,9 +23,10 @@ bool isDarkTheme()
     return FluentQt::ThemeManager::instance()->effectiveTheme() == FluentQt::Theme::Dark;
 }
 
+// The accent as FluentQtWidgets paints it: lighter in dark mode.
 QColor accentColor()
 {
-    return FluentQt::ThemeManager::instance()->accentColor();
+    return FluentQt::themeColor();
 }
 
 namespace {
@@ -150,8 +152,9 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
 void NumericDisplayWidget::apply()
 {
     m_title->setText(text("title"));
+    // An empty unit keeps its line, so the titles of cards with and without one line up.
     m_unit->setText(text("unit"));
-    m_unit->setVisible(!text("unit").isEmpty());
+    m_unit->setMinimumHeight(m_unit->fontMetrics().height());
     m_value->setText(text("value"));
     QFont font = m_value->font();
     font.setPixelSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
@@ -333,9 +336,8 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     font.setPixelSize(std::max(10, int(side / 5.5)));
     painter.setFont(font);
     painter.setPen(fg);
-    const QString number = std::fabs(m_value) >= 1000 || m_value == std::floor(m_value)
-                               ? QString::number(m_value, 'f', 0)
-                               : QString::number(m_value, 'f', 1);
+    // One decimal always, of the value held within the range, as PyQt UI Designer shows it (0.0, 996.0).
+    const QString number = QString::number(std::clamp(m_value, lo, std::max(lo, hi)), 'f', 1);
     painter.drawText(arc, Qt::AlignCenter, number);
 
     font.setBold(false);

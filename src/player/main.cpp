@@ -99,6 +99,10 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName(project.appName);
 
     fhmi::PlayerWindow window(project);
+    // The project's icon for the whole application too: the Dock and the taskbar show it.
+    if (!project.icon.isEmpty()) {
+        QApplication::setWindowIcon(window.windowIcon());
+    }
     if (check) {
         QTextStream(stdout) << "ok: " << project.appName << '\n';
         return 0;

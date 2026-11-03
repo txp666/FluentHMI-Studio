@@ -5,9 +5,9 @@
 
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
-#include <QtCore/QJsonDocument>
 #include <QtCore/QRegularExpression>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -302,21 +302,318 @@ qsizetype jsonLength(const QByteArray &buf)
     return 0;
 }
 
-// A JSON object as its keys, an array as keys "0", "1", ...; empty when the text is no JSON.
+// JSON as Python's json.loads reads it, which QJsonDocument does not: an object keeps the order
+// of its keys, and a number with a fraction or an exponent stays a float (32.0 is not 32).
+// NaN and Infinity are no JSON, and control characters in strings are refused (strict mode).
+class JsonReader
+{
+  public:
+    explicit JsonReader(const QString &text) : m_text(text) {}
+
+    // Reads the one JSON object or array the text holds: an object's fields into `object`, in
+    // order, an array's items into `array`. False when the text is anything else.
+    bool readDocument(Message *object, QVariantList *array, bool *isObject)
+    {
+        skipSpace();
+        if (peek() == QLatin1Char('{')) {
+            *isObject = true;
+            if (!readObject([object](const QString &key, const QVariant &value) { object->insert(key, value); })) {
+                return false;
+            }
+        } else if (peek() == QLatin1Char('[')) {
+            *isObject = false;
+            if (!readArray(array)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        skipSpace();
+        return m_at == m_text.size();
+    }
+
+  private:
+    static constexpr int kMaxDepth = 512;
+
+    QChar peek() const { return m_at < m_text.size() ? m_text.at(m_at) : QChar(); }
+
+    void skipSpace()
+    {
+        while (m_at < m_text.size()) {
+            const QChar c = m_text.at(m_at);
+            if (c != QLatin1Char(' ') && c != QLatin1Char('\t') && c != QLatin1Char('\n') && c != QLatin1Char('\r')) {
+                break;
+            }
+            ++m_at;
+        }
+    }
+
+    bool consume(QLatin1StringView word)
+    {
+        if (QStringView(m_text).mid(m_at, word.size()) != word) {
+            return false;
+        }
+        m_at += word.size();
+        return true;
+    }
+
+    template <typename Insert> bool readObject(Insert insert)
+    {
+        if (++m_depth > kMaxDepth) {
+            return false;
+        }
+        ++m_at; // {
+        skipSpace();
+        if (peek() == QLatin1Char('}')) {
+            ++m_at;
+            --m_depth;
+            return true;
+        }
+        while (true) {
+            skipSpace();
+            QString key;
+            if (peek() != QLatin1Char('"') || !readString(&key)) {
+                return false;
+            }
+            skipSpace();
+            if (peek() != QLatin1Char(':')) {
+                return false;
+            }
+            ++m_at;
+            QVariant value;
+            if (!readValue(&value)) {
+                return false;
+            }
+            insert(key, value);
+            skipSpace();
+            if (peek() == QLatin1Char(',')) {
+                ++m_at;
+                continue;
+            }
+            if (peek() == QLatin1Char('}')) {
+                ++m_at;
+                --m_depth;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    bool readArray(QVariantList *out)
+    {
+        if (++m_depth > kMaxDepth) {
+            return false;
+        }
+        ++m_at; // [
+        skipSpace();
+        if (peek() == QLatin1Char(']')) {
+            ++m_at;
+            --m_depth;
+            return true;
+        }
+        while (true) {
+            QVariant value;
+            if (!readValue(&value)) {
+                return false;
+            }
+            out->append(value);
+            skipSpace();
+            if (peek() == QLatin1Char(',')) {
+                ++m_at;
+                continue;
+            }
+            if (peek() == QLatin1Char(']')) {
+                ++m_at;
+                --m_depth;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    bool readValue(QVariant *out)
+    {
+        skipSpace();
+        const QChar c = peek();
+        if (c == QLatin1Char('{')) {
+            // Nested objects are QVariantMaps; only a message's own fields keep their order.
+            QVariantMap map;
+            if (!readObject([&map](const QString &key, const QVariant &value) { map.insert(key, value); })) {
+                return false;
+            }
+            *out = map;
+            return true;
+        }
+        if (c == QLatin1Char('[')) {
+            QVariantList list;
+            if (!readArray(&list)) {
+                return false;
+            }
+            *out = list;
+            return true;
+        }
+        if (c == QLatin1Char('"')) {
+            QString text;
+            if (!readString(&text)) {
+                return false;
+            }
+            *out = text;
+            return true;
+        }
+        if (consume(QLatin1StringView("true"))) {
+            *out = true;
+            return true;
+        }
+        if (consume(QLatin1StringView("false"))) {
+            *out = false;
+            return true;
+        }
+        if (consume(QLatin1StringView("null"))) {
+            *out = QVariant::fromValue(nullptr);
+            return true;
+        }
+        return readNumber(out);
+    }
+
+    bool readNumber(QVariant *out)
+    {
+        const qsizetype start = m_at;
+        const auto digits = [this]() {
+            const qsizetype from = m_at;
+            while (m_at < m_text.size() && m_text.at(m_at) >= QLatin1Char('0') && m_text.at(m_at) <= QLatin1Char('9')) {
+                ++m_at;
+            }
+            return m_at - from;
+        };
+        if (peek() == QLatin1Char('-')) {
+            ++m_at;
+        }
+        if (peek() == QLatin1Char('0')) {
+            ++m_at;
+        } else if (digits() == 0) {
+            return false;
+        }
+        bool integral = true;
+        if (peek() == QLatin1Char('.')) {
+            ++m_at;
+            integral = false;
+            if (digits() == 0) {
+                return false;
+            }
+        }
+        if (peek() == QLatin1Char('e') || peek() == QLatin1Char('E')) {
+            ++m_at;
+            integral = false;
+            if (peek() == QLatin1Char('+') || peek() == QLatin1Char('-')) {
+                ++m_at;
+            }
+            if (digits() == 0) {
+                return false;
+            }
+        }
+        const QString literal = m_text.mid(start, m_at - start);
+        bool ok = false;
+        if (integral) {
+            const qlonglong n = literal.toLongLong(&ok);
+            if (ok) {
+                *out = n;
+                return true;
+            }
+        }
+        // A float; also an integer beyond 64 bits, which Python would keep exact. A float too
+        // large for a double is inf, as Python reads it.
+        const double d = literal.toDouble(&ok);
+        if (!ok && !std::isinf(d)) {
+            return false;
+        }
+        *out = d;
+        return true;
+    }
+
+    bool readString(QString *out)
+    {
+        ++m_at; // "
+        while (m_at < m_text.size()) {
+            const QChar c = m_text.at(m_at++);
+            if (c == QLatin1Char('"')) {
+                return true;
+            }
+            if (c.unicode() < 0x20) {
+                return false;
+            }
+            if (c != QLatin1Char('\\')) {
+                out->append(c);
+                continue;
+            }
+            if (m_at >= m_text.size()) {
+                return false;
+            }
+            switch (m_text.at(m_at++).unicode()) {
+            case '"':
+                out->append(QLatin1Char('"'));
+                break;
+            case '\\':
+                out->append(QLatin1Char('\\'));
+                break;
+            case '/':
+                out->append(QLatin1Char('/'));
+                break;
+            case 'b':
+                out->append(QLatin1Char('\b'));
+                break;
+            case 'f':
+                out->append(QLatin1Char('\f'));
+                break;
+            case 'n':
+                out->append(QLatin1Char('\n'));
+                break;
+            case 'r':
+                out->append(QLatin1Char('\r'));
+                break;
+            case 't':
+                out->append(QLatin1Char('\t'));
+                break;
+            case 'u': {
+                const QString hex = m_text.mid(m_at, 4);
+                const bool ok = hex.size() == 4 && std::all_of(hex.cbegin(), hex.cend(), [](QChar h) {
+                                    return h.unicode() < 0x80 && std::isxdigit(h.unicode());
+                                });
+                if (!ok) {
+                    return false;
+                }
+                const ushort unit = hex.toUShort(nullptr, 16);
+                m_at += 4;
+                out->append(QChar(unit)); // a surrogate pair comes as two escapes, joined in the QString
+                break;
+            }
+            default:
+                return false;
+            }
+        }
+        return false;
+    }
+
+    const QString &m_text;
+    qsizetype m_at = 0;
+    int m_depth = 0;
+};
+
+// A JSON object as its keys in the order they were sent, an array as keys "0", "1", ...; empty
+// when the text is no JSON.
 Message jsonMessage(const QString &text)
 {
-    QJsonParseError error{};
-    const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &error);
-    if (error.error != QJsonParseError::NoError) {
+    Message object;
+    QVariantList array;
+    bool isObject = false;
+    if (!JsonReader(text).readDocument(&object, &array, &isObject)) {
         return {};
     }
-    if (doc.isObject()) {
-        return doc.object().toVariantMap();
+    if (isObject) {
+        return object;
     }
     Message out;
-    const QJsonArray items = doc.array();
-    for (qsizetype i = 0; i < items.size(); ++i) {
-        out.insert(QString::number(i), items.at(i).toVariant());
+    for (qsizetype i = 0; i < array.size(); ++i) {
+        out.insert(QString::number(i), array.at(i));
     }
     return out;
 }

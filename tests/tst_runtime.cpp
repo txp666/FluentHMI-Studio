@@ -587,6 +587,49 @@ class TestRuntime : public QObject
         surface.context()->hub()->removeLink(&link);
     }
 
+    // Seen with the PLC tutorial: a reply quicker than the round before left the next block due a moment
+    // later, and that block waited for the next tick, a whole period late.
+    void pollerReadsABlockDueBetweenTicksWhenDue()
+    {
+        Project project;
+        QString error;
+        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/10-PLC恒压供水.uidp"), &project, &error),
+                 qPrintable(error));
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus_tcp"), {}));
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.show();
+        qint64 now = 0;
+        surface.context()->setClock([&now]() { return now; });
+        const auto reply = [&link](int index) { link.inject(plcReply(link.sent.at(index), {})); };
+        const QByteArray coils = QByteArray::fromHex("0100000004");
+        const QByteArray live = QByteArray::fromHex("0300640006");
+        const QByteArray setting = QByteArray::fromHex("0300c80002");
+
+        surface.context()->hub()->addLink(&link); // the coils at 0
+        now = 30;
+        reply(0); // the live block at 30
+        now = 60;
+        reply(1);
+        reply(2);
+        now = 500;
+        tickPoller(surface.context());
+        now = 515; // the live block is due at 530
+        reply(3);
+        QCOMPARE(pdus(link.sent), (QList<QByteArray>{coils, live, setting, coils}));
+        QTimer *wake = nullptr;
+        for (QTimer *timer : surface.context()->modbusPoller()->findChildren<QTimer *>()) {
+            wake = timer->isSingleShot() ? timer : wake;
+        }
+        QVERIFY(wake && wake->isActive());
+        QCOMPARE(wake->interval(), 15);
+        now = 530;
+        QMetaObject::invokeMethod(wake, "timeout");
+        QCOMPARE(pdus(link.sent), (QList<QByteArray>{coils, live, setting, coils, live}));
+        surface.context()->hub()->removeLink(&link);
+    }
+
     // Without a link card whose link parses Modbus the poller runs on its defaults (500 ms, 1000 ms, slave 1)
     // and waits for a link that can send: a listening link without a device sends nothing until one connects.
     // The temperature controller tutorial plans its four bindings and its chart's two curves (holding

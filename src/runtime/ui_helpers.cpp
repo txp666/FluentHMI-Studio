@@ -4,7 +4,11 @@
 
 #include <QtCore/QEvent>
 #include <QtCore/QPointer>
+#include <QtGui/QImageReader>
+#include <QtGui/QPixmap>
 #include <QtWidgets/QAbstractButton>
+
+#include <algorithm>
 
 namespace fhmi {
 
@@ -42,6 +46,25 @@ void keepSquareBeside(QAbstractButton *button, QWidget *field)
         QStringLiteral("QToolButton[fqw=\"ToolButton\"] { padding: 0px; min-width: 0px; min-height: 0px; }");
     FluentQt::FluentStyleSheet::setCustomStyleSheet(button, compact, compact);
     new SquareFollower(button, field);
+}
+
+QIcon iconFromFile(const QString &path)
+{
+    QIcon icon;
+    if (path.isEmpty()) {
+        return icon;
+    }
+    QImageReader reader(path);
+    for (int i = 0; i < std::max(1, reader.imageCount()); ++i) {
+        if (i > 0 && !reader.jumpToImage(i)) {
+            break;
+        }
+        const QImage image = reader.read();
+        if (!image.isNull()) {
+            icon.addPixmap(QPixmap::fromImage(image));
+        }
+    }
+    return icon;
 }
 
 } // namespace fhmi
