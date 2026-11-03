@@ -54,8 +54,8 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 | 实现 | C++17 / Qt 6，原生编译 | Python / PyQt5（Qt 5），用 Nuitka 打包 |
 | 导出应用 | 复制预编译的运行器，再放入工程和图片，约 0.3 秒，不需要 Python 和编译器 | 生成 Python 源码，再用 Nuitka 编译；下载的设计器要打包时需另装 Python 与编译工具 |
 | 预览与导出 | 预览和导出的应用是同一个运行器，预览看到的就是导出后的效果 | 预览在设计器内运行，导出的是另外生成的代码 |
-| macOS 安装包 | 一个 universal 包，32.7 MB（解压后 76 MB），Apple Silicon 与 Intel 通用；导出的应用同样是 universal | arm64、x64 各一个包，53.8 / 62.8 MB（arm64 版解压后 155 MB）；打包只生成本机架构的程序 |
-| Windows 安装包 | 16.7 MB | 54.2 MB |
+| macOS 安装包 | 一个 universal 包，32.7 MB（解压后 79 MB），Apple Silicon 与 Intel 通用；导出的应用同样是 universal | arm64、x64 各一个包，51.7 / 60.3 MB（arm64 版解压后 156 MB）；打包只生成本机架构的程序 |
+| Windows 安装包 | 17.7 MB | 52.0 MB |
 | 启动到出现窗口 | 0.7–1.1 秒 | 1.5–2.2 秒 |
 | 启动后内存 | 71–85 MB | 126–137 MB |
 | 更新 | 应用内检查、下载、校验并替换，可设为启动时检查 | 设置页手动检查，有新版本时打开下载页 |

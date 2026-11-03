@@ -56,8 +56,8 @@ The differences are in how they are built and how they export apps:
 | Implementation | C++17 / Qt 6, compiled natively | Python / PyQt5 (Qt 5), packaged with Nuitka |
 | Exporting an app | Copies a prebuilt runner and adds the project and images, about 0.3 s, no Python or compiler needed | Generates Python source, then compiles it with Nuitka; the downloaded designer needs Python and build tools installed separately to package |
 | Preview and export | The preview and the exported app are the same runner, so the preview shows exactly what the export will look like | The preview runs inside the designer; the export is separately generated code |
-| macOS package | One universal package, 32.7 MB (76 MB unpacked), for both Apple Silicon and Intel; exported apps are universal too | One package each for arm64 and x64, 53.8 / 62.8 MB (155 MB unpacked for arm64); packaging only builds for the local architecture |
-| Windows package | 16.7 MB | 54.2 MB |
+| macOS package | One universal package, 32.7 MB (79 MB unpacked), for both Apple Silicon and Intel; exported apps are universal too | One package each for arm64 and x64, 51.7 / 60.3 MB (156 MB unpacked for arm64); packaging only builds for the local architecture |
+| Windows package | 17.7 MB | 52.0 MB |
 | Time to first window | 0.7–1.1 s | 1.5–2.2 s |
 | Memory after startup | 71–85 MB | 126–137 MB |
 | Updates | Checks, downloads, verifies and replaces itself in the app; can check at startup | Manual check on the settings page, which opens the download page when there is a new version |
