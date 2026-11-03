@@ -32,6 +32,7 @@ int main(int argc, char *argv[])
     FluentQt::FluentConfig::instance()->setFileName(QDir(configDir).filePath(QStringLiteral("fluent.json")));
     FluentQt::FluentConfig::instance()->load();
     FluentQt::ThemeManager::instance()->setTheme(FluentQt::FluentConfig::instance()->themeMode());
+    FluentQt::ThemeManager::instance()->setAccentColor(FluentQt::FluentConfig::instance()->themeColor());
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("FluentHMI Studio"));

@@ -7,6 +7,7 @@
 #include "studio/settings_page.h"
 #include "studio/update_controller.h"
 
+#include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/Navigation/NavigationInterface.h>
 
@@ -36,6 +37,10 @@ MainWindow::MainWindow(QWidget *parent) : FluentQt::FluentWindow(parent)
     addSubInterface(m_preview, FluentQt::icon(FluentQt::FluentIcon::Play), tr("预览运行"), QStringLiteral("preview"));
     addSubInterface(m_settings, FluentQt::icon(FluentQt::FluentIcon::Setting), tr("设置"), QStringLiteral("settings"),
                     FluentQt::NavigationItemPosition::Bottom);
+    // Mica (Windows 11 only) is a setting, switched on the settings page.
+    setMicaEffectEnabled(FluentQt::FluentConfig::instance()->isMicaEnabled());
+    connect(FluentQt::FluentConfig::instance(), &FluentQt::FluentConfig::micaEnabledChanged, this,
+            &MainWindow::setMicaEffectEnabled);
 
     connect(m_designer, &DesignerPage::projectChanged, this, [this]() {
         m_preview->invalidate();

@@ -9,12 +9,44 @@
 #include <FluentQtWidgets/Theme.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/ScrollArea.h>
+#include <FluentQtWidgets/Window/FluentWindow.h>
 
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
 #include <QtWidgets/QVBoxLayout>
 
 namespace fhmi {
+
+namespace {
+
+#ifdef Q_OS_WIN
+// Mica needs Windows 11, so on Windows 10 the switch stays off and disabled.
+FluentQt::SwitchSettingCard *createMicaCard(QWidget *parent)
+{
+    const bool available = FluentQt::isMicaEffectAvailable();
+    auto *card = new FluentQt::SwitchSettingCard(
+        FluentQt::FluentIcon::Transparent, SettingsPage::tr("云母效果"),
+        available ? SettingsPage::tr("窗口和表面显示半透明") : SettingsPage::tr("需要 Windows 11"), parent);
+    card->setObjectName(QStringLiteral("micaEffectCard"));
+    card->setEnabled(available);
+    if (!available) {
+        return card;
+    }
+
+    // The main window follows the setting.
+    auto *config = FluentQt::FluentConfig::instance();
+    card->setChecked(config->isMicaEnabled());
+    QObject::connect(card, &FluentQt::SwitchSettingCard::checkedChanged, card, [config](bool checked) {
+        config->setMicaEnabled(checked);
+        config->save();
+    });
+    QObject::connect(config, &FluentQt::FluentConfig::micaEnabledChanged, card,
+                     &FluentQt::SwitchSettingCard::setChecked);
+    return card;
+}
+#endif
+
+} // namespace
 
 SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
 {
@@ -49,6 +81,25 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
         FluentQt::ThemeManager::instance()->setTheme(mode);
     });
     appearance->addSettingCard(theme);
+
+    auto *themeColor = new FluentQt::CustomColorSettingCard(
+        QColor(QStringLiteral("#009faa")), FluentQt::FluentConfig::instance()->themeColor(),
+        FluentQt::FluentIcon::Palette, tr("主题色"), tr("选择 Fluent 控件的强调色"), appearance);
+    connect(themeColor, &FluentQt::CustomColorSettingCard::colorChanged, this, [](const QColor &color) {
+        FluentQt::FluentConfig::instance()->setThemeColor(color);
+        FluentQt::FluentConfig::instance()->save();
+        FluentQt::ThemeManager::instance()->setAccentColor(color);
+    });
+    connect(FluentQt::ThemeManager::instance(), &FluentQt::ThemeManager::accentColorChanged, this,
+            [themeColor](const QColor &color) {
+                if (themeColor->color() != color) {
+                    themeColor->setColor(color);
+                }
+            });
+    appearance->addSettingCard(themeColor);
+#ifdef Q_OS_WIN
+    appearance->addSettingCard(createMicaCard(appearance));
+#endif
     layout->addWidget(appearance);
 
     auto *about = new FluentQt::SettingCardGroup(tr("关于"), content);
