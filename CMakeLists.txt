@@ -70,6 +70,7 @@ add_library(fhmi_core STATIC
     src/core/gbk_table.h
     src/core/hex_utils.cpp
     src/core/hex_utils.h
+    src/core/message.h
     src/core/mqtt_codec.cpp
     src/core/mqtt_codec.h
     src/core/project.cpp

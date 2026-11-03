@@ -9,15 +9,13 @@
 
 #include <QtCore/QHash>
 
+#include "core/message.h"
+
 #include <memory>
 #include <optional>
 #include <utility>
 
 namespace fhmi {
-
-// One decoded message: field name -> value (qlonglong, double, QString, bool, or nested
-// QVariantMap / QVariantList for JSON lines).
-using Message = QVariantMap;
 
 // Incremental frame parsers, in two steps. frames() cuts the bytes a link read into complete
 // raw units (keeping partial input for the next call); parse() turns one unit into messages.
