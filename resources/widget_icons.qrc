@@ -12,6 +12,14 @@
         <file>widget_icons/GroupBox_white.svg</file>
         <file>widget_icons/Led_black.svg</file>
         <file>widget_icons/Led_white.svg</file>
+        <file>widget_icons/PanelLeftOn_black.svg</file>
+        <file>widget_icons/PanelLeftOn_white.svg</file>
+        <file>widget_icons/PanelLeft_black.svg</file>
+        <file>widget_icons/PanelLeft_white.svg</file>
+        <file>widget_icons/PanelRightOn_black.svg</file>
+        <file>widget_icons/PanelRightOn_white.svg</file>
+        <file>widget_icons/PanelRight_black.svg</file>
+        <file>widget_icons/PanelRight_white.svg</file>
         <file>widget_icons/ProgressBar_black.svg</file>
         <file>widget_icons/ProgressBar_white.svg</file>
         <file>widget_icons/ProgressRing_black.svg</file>

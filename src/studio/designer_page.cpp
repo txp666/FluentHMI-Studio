@@ -4,6 +4,7 @@
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
 #include "designer/widget_palette.h"
+#include "runtime/hmi_widget.h"
 
 #include <FluentQtWidgets/Dialogs/Dialog.h>
 #include <FluentQtWidgets/FluentIcon.h>
@@ -182,6 +183,20 @@ void DesignerPage::buildUi()
         connect(a, &QAction::triggered, this, slot);
         return a;
     };
+    // The side panels' switches sit at the two ends of the bar; the canvas takes a hidden panel's room.
+    const auto panelSwitch = [this, bar](QWidget *panel, const QString &title, const QString &icon) {
+        QAction *a = bar->addAction(widgetIcon(icon + QStringLiteral("_on")), tr("隐藏%1").arg(title));
+        a->setToolTip(a->text());
+        connect(a, &QAction::triggered, this, [a, panel, title, icon]() {
+            const bool shown = panel->isHidden();
+            panel->setVisible(shown);
+            a->setIcon(widgetIcon(shown ? icon + QStringLiteral("_on") : icon));
+            a->setText((shown ? DesignerPage::tr("隐藏%1") : DesignerPage::tr("显示%1")).arg(title));
+            a->setToolTip(a->text());
+        });
+    };
+    panelSwitch(m_palette, tr("控件库"), QStringLiteral("panel_left"));
+    bar->addSeparator();
     action(FluentIcon::Add, tr("新建"), QKeySequence::New, [this]() { newProject(); });
     action(FluentIcon::Folder, tr("打开"), QKeySequence::Open, [this]() { openProject(); });
     action(FluentIcon::Save, tr("保存"), QKeySequence::Save, [this]() { save(); });
@@ -222,6 +237,8 @@ void DesignerPage::buildUi()
     action(FluentIcon::ZoomOut, tr("缩小"), QKeySequence::ZoomOut, [this]() { zoomBy(1 / 1.15); });
     action(FluentIcon::FitPage, tr("适应窗口"), QKeySequence(Qt::CTRL | Qt::Key_0), [this]() { fitCanvas(); });
     action(FluentIcon::Zoom, tr("实际大小"), QKeySequence(), [this]() { m_view->resetTransform(); });
+    bar->addSeparator();
+    panelSwitch(m_properties, tr("属性"), QStringLiteral("panel_right"));
 
     auto *center = new QWidget(this);
     auto *centerLayout = new QVBoxLayout(center);

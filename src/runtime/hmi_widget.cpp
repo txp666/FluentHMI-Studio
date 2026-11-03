@@ -209,8 +209,9 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
 
 QIcon widgetIcon(const QString &iconName)
 {
-    // Pictures of controls that FluentQtWidgets has no icon for, drawn in its style, one file per theme in
-    // resources/widget_icons. PyQt UI Designer has the same files under the same names.
+    // Pictures of controls that FluentQtWidgets has no icon for, and of the designer's side panels shown or hidden,
+    // drawn in its style, one file per theme in resources/widget_icons. PyQt UI Designer has the same files under
+    // the same names.
     static const QHash<QString, QString> own = {
         {QStringLiteral("button"), QStringLiteral("Button")},
         {QStringLiteral("text_field"), QStringLiteral("TextField")},
@@ -229,6 +230,10 @@ QIcon widgetIcon(const QString &iconName)
         {QStringLiteral("progress_ring"), QStringLiteral("ProgressRing")},
         {QStringLiteral("table"), QStringLiteral("Table")},
         {QStringLiteral("serial_port"), QStringLiteral("SerialPort")},
+        {QStringLiteral("panel_left"), QStringLiteral("PanelLeft")},
+        {QStringLiteral("panel_left_on"), QStringLiteral("PanelLeftOn")},
+        {QStringLiteral("panel_right"), QStringLiteral("PanelRight")},
+        {QStringLiteral("panel_right_on"), QStringLiteral("PanelRightOn")},
     };
     const auto file = own.constFind(iconName);
     if (file != own.constEnd()) {
