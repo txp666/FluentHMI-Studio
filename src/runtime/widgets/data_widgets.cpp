@@ -1,32 +1,42 @@
 #include "runtime/widgets/data_widgets.h"
 
+#include "core/chart_file.h"
 #include "core/hex_utils.h"
 #include "core/protocol_parser.h"
 #include "runtime/runtime_context.h"
 #include "runtime/widgets/display_widgets.h"
 
-#include <FluentQtWidgets/Views/ItemViews.h>
 #include <FluentQtWidgets/FluentIcon.h>
+#include <FluentQtWidgets/StyleSheet.h>
+#include <FluentQtWidgets/Theme.h>
+#include <FluentQtWidgets/Views/ItemViews.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/LineEdit.h>
 #include <FluentQtWidgets/Widgets/RealtimePlotWidget.h>
-#include <FluentQtWidgets/StyleSheet.h>
 #include <FluentQtWidgets/Widgets/Selection.h>
 #include <FluentQtWidgets/Widgets/SmoothScrollDelegate.h>
 
 #include <QtCore/QDateTime>
 #include <QtCore/QFile>
-#include <QtCore/QTextStream>
+#include <QtCore/QFileInfo>
+#include <QtCore/QSaveFile>
 #include <QtCore/QTimer>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QTextEdit>
 #include <QtWidgets/QVBoxLayout>
+
+#include <charconv>
+#include <cmath>
+#include <iterator>
+#include <limits>
 
 namespace fhmi {
 
@@ -103,30 +113,418 @@ QString terminalEscape(const QString &text)
 // RealtimeChart
 // ---------------------------------------------------------------------------
 
+namespace {
+
+constexpr int kHistoryLimit = 10000; // samples kept in memory, and the most 显示点数 shows
+constexpr int kRefreshMs = 33;
+// The table starts wide enough for these, so typical readings never resize the plot.
+const char *const kSampleReading = "-0000.00";
+const char *const kSampleMode = "游标: x=00000";
+
+// PyQt UI Designer's _CURVE_COLORS and _DARK_CURVE_COLORS.
+const QColor kCurveColors[] = {{0, 120, 212},  {244, 67, 54}, {76, 175, 80}, {255, 152, 0},
+                               {156, 39, 176}, {0, 188, 212}, {121, 85, 72}, {96, 125, 139}};
+const QColor kDarkCurveColors[] = {{74, 163, 223},  {255, 112, 105}, {129, 199, 132}, {255, 183, 77},
+                                   {206, 147, 216}, {77, 208, 225},  {188, 170, 164}, {176, 190, 197}};
+
+// A reading as Python's f"{value:.4g}" writes it (std::to_chars rounds exactly as it does).
+QString reading(double value)
+{
+    char text[32];
+    const auto end = std::to_chars(text, text + sizeof text, value, std::chars_format::general, 4).ptr;
+    return QString::fromLatin1(text, end - text);
+}
+
+QString valueRow(const QString &name, const QColor &color, const QString &value)
+{
+    return QStringLiteral("<b style='color:rgb(%1, %2, %3)'>%4</b>  %5")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(name.toHtmlEscaped(), value);
+}
+
+} // namespace
+
+// The chart's plot: RealtimePlotWidget with what the Python chart's plot has besides, drawn over it: a
+// loaded run as dashed curves, and a vertical cursor that a click places and a drag moves. While the user
+// has not panned or zoomed, the view spans every curve, the dashed ones included.
+class ChartPlot : public FluentQt::RealtimePlotWidget
+{
+  public:
+    explicit ChartPlot(QWidget *parent) : FluentQt::RealtimePlotWidget(parent)
+    {
+        setMinimumSize(1, 1); // the chart may be smaller than the plot's own minimum
+        connect(this, &RealtimePlotWidget::rangeChanged, this, [this]() {
+            if (m_fitting) {
+                return;
+            }
+            if (autoScroll() || autoYRange()) { // the plot's 自动范围, or a double click
+                m_autoView = true;
+                fitView();
+                return;
+            }
+            const qreal view[4] = {xMinimum(), xMaximum(), yMinimum(), yMaximum()};
+            if (!std::equal(std::begin(view), std::end(view), std::begin(m_fitted))) {
+                m_autoView = false; // panned or zoomed
+            } else if (m_autoView) {
+                fitView(); // a curve hidden or shown in the legend
+            }
+        });
+        fitView();
+    }
+
+    // The cursor was placed or dragged to x, or (with a double click) taken away.
+    std::function<void(double x)> cursorMoved;
+    std::function<void()> cursorCleared;
+
+    // Each series' window of samples, and the dashed curves', all starting at x = 0.
+    void showWindows(const QList<QList<double>> &live, const QList<QList<double>> &references,
+                     const QList<QColor> &referenceColors)
+    {
+        m_live = live;
+        m_references = references;
+        m_referenceColors = referenceColors;
+        for (int i = 0; i < seriesCount() && i < live.size(); ++i) {
+            setSamples(i, live.at(i));
+        }
+        fitView();
+    }
+
+    void hideCursor()
+    {
+        m_cursorOn = false;
+        update();
+    }
+
+  protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        RealtimePlotWidget::paintEvent(event);
+        const QRectF plot = plotArea();
+        if (plot.width() <= 2 || plot.height() <= 2) {
+            return;
+        }
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setClipRect(plot.adjusted(1, 1, -1, -1));
+        for (int i = 0; i < m_references.size(); ++i) {
+            painter.setPen(QPen(m_referenceColors.value(i), 2, Qt::DashLine));
+            painter.drawPolyline(polyline(m_references.at(i), plot));
+        }
+        if (m_cursorOn) {
+            const qreal x = toPixelX(m_cursorX, plot);
+            painter.setPen(QPen(QColor(255, 0, 0, 180), 1, Qt::DashLine));
+            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        }
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        const QPointF position = event->position();
+        if (event->button() == Qt::LeftButton && onCursor(position)) {
+            m_draggingCursor = true;
+            event->accept();
+            return;
+        }
+        const QList<bool> shown = visibility();
+        RealtimePlotWidget::mousePressEvent(event);
+        // A click on a legend entry hides or shows a curve; anywhere else in the plot it may place the cursor.
+        m_clickPending = event->button() == Qt::LeftButton && plotArea().contains(position) && visibility() == shown;
+        m_pressPosition = position;
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        const QPointF position = event->position();
+        if (m_draggingCursor) {
+            placeCursor(position.x());
+            event->accept();
+            return;
+        }
+        if (m_clickPending) {
+            // Not a drag yet: a click must not pan the plot by the pixel a hand shakes.
+            if ((position - m_pressPosition).manhattanLength() < QApplication::startDragDistance()) {
+                event->accept();
+                return;
+            }
+            m_clickPending = false;
+        }
+        if (event->buttons() == Qt::NoButton) {
+            if (onCursor(position)) {
+                setCursor(Qt::SizeHorCursor);
+            } else {
+                unsetCursor();
+            }
+        }
+        RealtimePlotWidget::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (m_draggingCursor && event->button() == Qt::LeftButton) {
+            m_draggingCursor = false;
+            event->accept();
+            return;
+        }
+        const bool click = m_clickPending && event->button() == Qt::LeftButton;
+        m_clickPending = false;
+        RealtimePlotWidget::mouseReleaseEvent(event);
+        if (click) {
+            placeCursor(event->position().x());
+        }
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && plotArea().contains(event->position())) {
+            m_clickPending = false;
+            hideCursor();
+            if (cursorCleared) {
+                cursorCleared();
+            }
+        }
+        RealtimePlotWidget::mouseDoubleClickEvent(event); // and the view follows the data again
+    }
+
+  private:
+    // RealtimePlotWidget's plotRect(), which is private.
+    QRectF plotArea() const { return QRectF(rect()).adjusted(58, 18, -58, -42); }
+
+    // The view is always an explicit range here (fitView sets one), so the getters are what is shown.
+    qreal toPixelX(qreal x, const QRectF &plot) const
+    {
+        return plot.left() + (x - xMinimum()) / std::max(1e-6, xMaximum() - xMinimum()) * plot.width();
+    }
+
+    qreal toPixelY(qreal y, const QRectF &plot) const
+    {
+        return plot.bottom() - (y - yMinimum()) / std::max(1e-6, yMaximum() - yMinimum()) * plot.height();
+    }
+
+    bool onCursor(const QPointF &position) const
+    {
+        const QRectF plot = plotArea();
+        return m_cursorOn && plot.contains(position) && std::abs(position.x() - toPixelX(m_cursorX, plot)) <= 4;
+    }
+
+    void placeCursor(qreal pixelX)
+    {
+        const QRectF plot = plotArea();
+        const qreal x = std::clamp(pixelX, plot.left(), plot.right());
+        m_cursorOn = true;
+        m_cursorX = xMinimum() + (x - plot.left()) / std::max<qreal>(1, plot.width()) * (xMaximum() - xMinimum());
+        update();
+        if (cursorMoved) {
+            cursorMoved(m_cursorX);
+        }
+    }
+
+    QList<bool> visibility() const
+    {
+        QList<bool> shown;
+        for (int i = 0; i < seriesCount(); ++i) {
+            shown.append(isSeriesVisible(i));
+        }
+        return shown;
+    }
+
+    // The visible stretch of a dashed curve; where a pixel column holds many samples, their lowest and
+    // highest are enough.
+    QPolygonF polyline(const QList<double> &values, const QRectF &plot) const
+    {
+        QPolygonF line;
+        if (values.isEmpty()) {
+            return line;
+        }
+        const qsizetype last = values.size() - 1;
+        const qsizetype from = std::clamp<qsizetype>(qsizetype(std::floor(xMinimum())) - 1, 0, last);
+        const qsizetype to = std::clamp<qsizetype>(qsizetype(std::ceil(xMaximum())) + 1, 0, last);
+        if (to - from + 1 <= 2 * plot.width()) {
+            for (qsizetype i = from; i <= to; ++i) {
+                line << QPointF(toPixelX(i, plot), toPixelY(values.at(i), plot));
+            }
+            return line;
+        }
+        int column = -1;
+        double low = 0, high = 0;
+        const auto flush = [&]() {
+            if (column >= 0) {
+                line << QPointF(column, toPixelY(low, plot)) << QPointF(column, toPixelY(high, plot));
+            }
+        };
+        for (qsizetype i = from; i <= to; ++i) {
+            const int at = int(toPixelX(i, plot));
+            const double value = values.at(i);
+            if (at != column) {
+                flush();
+                column = at;
+                low = high = value;
+            } else {
+                low = std::min(low, value);
+                high = std::max(high, value);
+            }
+        }
+        flush();
+        return line;
+    }
+
+    // Spans every sample of the shown curves, dashed ones included, with the plot's own vertical margin.
+    void fitView()
+    {
+        if (!m_autoView) {
+            update();
+            return;
+        }
+        qsizetype count = 0;
+        double low = std::numeric_limits<double>::max();
+        double high = std::numeric_limits<double>::lowest();
+        const auto take = [&](const QList<double> &values) {
+            count = std::max(count, values.size());
+            for (const double value : values) {
+                low = std::min(low, value);
+                high = std::max(high, value);
+            }
+        };
+        for (int i = 0; i < m_live.size(); ++i) {
+            if (isSeriesVisible(i)) {
+                take(m_live.at(i));
+            }
+        }
+        for (const QList<double> &values : std::as_const(m_references)) {
+            take(values);
+        }
+        qreal yLow = -1, yHigh = 1; // the plot's range while it has no data
+        if (low <= high) {
+            const qreal padding = std::max(0.2, std::max(1e-6, high - low) * 0.12);
+            yLow = low - padding;
+            yHigh = high + padding;
+        }
+        m_fitting = true;
+        setXRange(0, qreal(std::max<qsizetype>(1, count - 1)));
+        setYRange(yLow, yHigh);
+        m_fitting = false;
+        m_fitted[0] = xMinimum();
+        m_fitted[1] = xMaximum();
+        m_fitted[2] = yMinimum();
+        m_fitted[3] = yMaximum();
+        update();
+    }
+
+    QList<QList<double>> m_live;
+    QList<QList<double>> m_references;
+    QList<QColor> m_referenceColors;
+    bool m_cursorOn = false;
+    qreal m_cursorX = 0;
+    bool m_draggingCursor = false;
+    bool m_clickPending = false;
+    QPointF m_pressPosition;
+    bool m_autoView = true;
+    bool m_fitting = false;
+    qreal m_fitted[4] = {};
+};
+
 RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(4);
-    auto *header = new QHBoxLayout;
-    m_title = new FluentQt::StrongBodyLabel(this);
-    auto *clear = new FluentQt::TransparentPushButton(this);
-    clear->setText(tr("清空"));
-    auto *save = new FluentQt::TransparentPushButton(this);
-    save->setText(tr("导出 CSV"));
-    header->addWidget(m_title);
-    header->addStretch();
-    header->addWidget(clear);
-    header->addWidget(save);
-    m_plot = new FluentQt::RealtimePlotWidget(this);
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(2);
+
+    // The plot with its title (left), the value table (right).
+    auto *main = new QHBoxLayout;
+    main->setSpacing(4);
+    auto *plotColumn = new QVBoxLayout;
+    plotColumn->setSpacing(0);
+    m_title = new QLabel(this);
+    m_title->setAlignment(Qt::AlignCenter);
+    m_plot = new ChartPlot(this);
     m_plot->setLegendVisible(true);
-    m_plot->setAutoYRange(true);
-    m_plot->setCapacity(10000);
-    layout->addLayout(header);
-    layout->addWidget(m_plot, 1);
-    connect(clear, &QPushButton::clicked, m_plot, &FluentQt::RealtimePlotWidget::clear);
-    connect(save, &QPushButton::clicked, this, &RealtimeChartWidget::exportCsv);
+    plotColumn->addWidget(m_title);
+    plotColumn->addWidget(m_plot, 1);
+    main->addLayout(plotColumn, 1);
+    m_table = new QWidget(this);
+    auto *table = new QVBoxLayout(m_table);
+    table->setContentsMargins(2, 0, 2, 0);
+    table->setSpacing(0);
+    m_mode = new QLabel(tr("实时"), m_table);
+    m_mode->setAlignment(Qt::AlignCenter);
+    table->addWidget(m_mode);
+    m_rows = new QVBoxLayout;
+    m_rows->setContentsMargins(0, 0, 0, 0);
+    m_rows->setSpacing(0);
+    table->addLayout(m_rows);
+    table->addStretch();
+    main->addWidget(m_table);
+    root->addLayout(main, 1);
+
+    auto *toolbar = new QHBoxLayout;
+    toolbar->setContentsMargins(4, 2, 4, 0);
+    toolbar->setSpacing(6);
+    toolbar->addWidget(new FluentQt::BodyLabel(tr("显示点数"), this));
+    m_displayEdit = new FluentQt::LineEdit(this);
+    m_displayEdit->setFixedWidth(80);
+    toolbar->addWidget(m_displayEdit);
+    toolbar->addStretch();
+    auto *save = new FluentQt::PushButton(this);
+    save->setText(tr("保存"));
+    save->setFixedWidth(64);
+    auto *load = new FluentQt::PushButton(this);
+    load->setText(tr("加载"));
+    load->setFixedWidth(64);
+    m_clearReference = new FluentQt::PushButton(this);
+    m_clearReference->setText(tr("清除对比"));
+    m_clearReference->hide();
+    toolbar->addWidget(save);
+    toolbar->addWidget(load);
+    toolbar->addWidget(m_clearReference);
+    root->addLayout(toolbar);
+
+    m_refreshTimer = new QTimer(this);
+    m_refreshTimer->setInterval(kRefreshMs);
+    m_refreshTimer->setSingleShot(true);
+    connect(m_refreshTimer, &QTimer::timeout, this, &RealtimeChartWidget::refresh);
+
+    connect(m_displayEdit, &QLineEdit::editingFinished, this, [this]() {
+        bool ok = false;
+        const int typed = m_displayEdit->text().trimmed().toInt(&ok);
+        m_displayPoints = std::clamp(ok ? typed : m_displayPoints, 10, kHistoryLimit);
+        m_displayEdit->setText(QString::number(m_displayPoints));
+        m_plot->setCapacity(m_displayPoints);
+        refresh();
+    });
+    connect(save, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getSaveFileName(this, tr("保存完整曲线数据"), QString(),
+                                                          tr("CSV文件 (*.csv);;JSON文件 (*.json)"));
+        if (!path.isEmpty()) {
+            saveHistory(path);
+        }
+    });
+    connect(load, &QPushButton::clicked, this, [this]() {
+        const QString path =
+            QFileDialog::getOpenFileName(this, tr("加载对比曲线"), QString(), tr("CSV文件 (*.csv);;JSON文件 (*.json)"));
+        if (!path.isEmpty()) {
+            loadReference(path);
+        }
+    });
+    connect(m_clearReference, &QPushButton::clicked, this, [this]() {
+        clearReference();
+        refresh();
+    });
+    m_plot->cursorMoved = [this](double x) {
+        m_cursorMode = true;
+        m_cursorX = x;
+        showCursorValues();
+    };
+    m_plot->cursorCleared = [this]() {
+        m_cursorMode = false;
+        m_mode->setText(tr("实时"));
+        showLiveValues();
+    };
+    connect(FluentQt::ThemeManager::instance(), &FluentQt::ThemeManager::effectiveThemeChanged, this,
+            [this]() { applyTheme(); });
 }
+
+RealtimeChartWidget::~RealtimeChartWidget() = default;
 
 std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromProperties(const QJsonObject &props)
 {
@@ -166,15 +564,227 @@ std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromPropertie
 void RealtimeChartWidget::apply()
 {
     m_title->setText(text("title"));
-    m_plot->setMaximumVisiblePoints(std::max(10, integer("displayPoints")));
+    m_title->setVisible(!text("title").isEmpty());
+    m_displayPoints = std::clamp(integer("displayPoints"), 10, kHistoryLimit);
+    m_displayEdit->setText(QString::number(m_displayPoints));
+    m_plot->setCapacity(m_displayPoints);
     m_curves = curvesFromProperties(properties());
-    m_plot->clearSeries();
-    static const QList<QColor> palette = {QColor(0x00, 0x9F, 0xAA), QColor(0xE8, 0x48, 0x3F), QColor(0x29, 0x8D, 0xF2),
-                                          QColor(0xF7, 0xB9, 0x00), QColor(0x8E, 0x5C, 0xD9), QColor(0x3C, 0xC0, 0x6A),
-                                          QColor(0xFF, 0x8C, 0x00), QColor(0x60, 0x7D, 0x8B)};
-    for (size_t i = 0; i < m_curves.size(); ++i) {
-        m_plot->addSeries(m_curves[i].name, palette.at(int(i) % palette.size()));
+    rebuildCurves();
+}
+
+void RealtimeChartWidget::rebuildCurves()
+{
+    clearReference(); // its rows are part of the table rebuilt here
+    // A curve keeps its samples while the curves are reconfigured; only removed curves lose theirs.
+    while (m_histories.size() > m_curves.size()) {
+        m_histories.pop_back();
     }
+    while (m_histories.size() < m_curves.size()) {
+        m_histories.push_back(std::make_unique<ChartHistory>(kHistoryLimit));
+    }
+    m_plot->clearSeries();
+    qDeleteAll(m_valueLabels);
+    m_valueLabels.clear();
+    for (size_t i = 0; i < m_curves.size(); ++i) {
+        m_plot->addSeries(m_curves[i].name, curveColor(int(i)));
+        // Sized for a typical reading up front; applyTheme then shows the real values.
+        auto *label =
+            new QLabel(valueRow(m_curves[i].name, curveColor(int(i)), QLatin1String(kSampleReading)), m_table);
+        m_rows->addWidget(label);
+        m_valueLabels.append(label);
+    }
+    m_cursorMode = false;
+    m_plot->hideCursor();
+    m_mode->setText(tr("实时"));
+    m_table->setMinimumWidth(0);
+    holdTableWidth();
+    applyTheme();
+}
+
+void RealtimeChartWidget::applyTheme()
+{
+    const bool dark = isDarkTheme();
+    const QString foreground = dark ? QStringLiteral("#e5e5e5") : QStringLiteral("#202020");
+    const QString accent = dark ? QStringLiteral("#4aa3df") : QStringLiteral("#0078d4");
+    m_title->setStyleSheet(QStringLiteral("font-size: 10pt; color: %1;").arg(foreground));
+    m_mode->setStyleSheet(QStringLiteral("font-size: 10px; color: %1; padding: 1px 0;").arg(accent));
+    for (QLabel *label : m_valueLabels + m_referenceLabels) {
+        label->setStyleSheet(QStringLiteral("font-size: 11px; padding: 1px 2px; color: %1;").arg(foreground));
+    }
+    for (int i = 0; i < m_plot->seriesCount(); ++i) {
+        m_plot->setSeriesColor(i, curveColor(i));
+    }
+    refresh();
+}
+
+QColor RealtimeChartWidget::curveColor(int index) const
+{
+    const QColor *colors = isDarkTheme() ? kDarkCurveColors : kCurveColors;
+    return colors[index % int(std::size(kCurveColors))];
+}
+
+void RealtimeChartWidget::appendSample(int curve, double value)
+{
+    if (curve < 0 || curve >= int(m_histories.size())) {
+        return;
+    }
+    QString error;
+    if (!m_histories[size_t(curve)]->append(value, &error)) {
+        if (!error.isEmpty()) {
+            m_mode->setText(tr("记录失败: %1").arg(error));
+        }
+        return;
+    }
+    if (!m_refreshTimer->isActive()) {
+        m_refreshTimer->start();
+    }
+}
+
+qint64 RealtimeChartWidget::windowStart() const
+{
+    qint64 count = 0;
+    for (const auto &history : m_histories) {
+        count = std::max(count, history->count());
+    }
+    return std::max<qint64>(0, count - m_displayPoints);
+}
+
+void RealtimeChartWidget::refresh()
+{
+    m_refreshTimer->stop();
+    QList<QList<double>> live;
+    for (const auto &history : m_histories) {
+        live.append(history->tail(m_displayPoints));
+    }
+    // A loaded run lines up sample for sample with the live window.
+    const qint64 start = windowStart();
+    QList<QList<double>> references;
+    QList<QColor> colors;
+    for (int i = 0; i < m_references.size(); ++i) {
+        references.append(m_references.at(i).values.mid(start, m_displayPoints));
+        colors.append(curveColor(int(m_curves.size()) + i));
+    }
+    m_plot->showWindows(live, references, colors);
+    if (m_cursorMode) {
+        showCursorValues();
+    } else {
+        showLiveValues();
+    }
+}
+
+void RealtimeChartWidget::showLiveValues()
+{
+    qint64 count = 0;
+    for (int i = 0; i < m_valueLabels.size() && size_t(i) < m_curves.size(); ++i) {
+        const std::optional<double> last = m_histories[size_t(i)]->last();
+        m_valueLabels[i]->setText(
+            valueRow(m_curves[size_t(i)].name, curveColor(i), last ? reading(*last) : QStringLiteral("--")));
+        count = std::max(count, m_histories[size_t(i)]->count());
+    }
+    showReferenceValues(count - 1); // the loaded run where the live one has got to
+    holdTableWidth();
+}
+
+void RealtimeChartWidget::showCursorValues()
+{
+    // Python's round(): halves go to the even neighbour.
+    const qint64 index = qint64(std::nearbyint(m_cursorX));
+    m_mode->setText(tr("游标: x=%1").arg(index));
+    for (int i = 0; i < m_valueLabels.size() && size_t(i) < m_curves.size(); ++i) {
+        const QList<double> shown = m_histories[size_t(i)]->tail(m_displayPoints);
+        const QString value = index >= 0 && index < shown.size() ? reading(shown.at(index)) : QStringLiteral("--");
+        m_valueLabels[i]->setText(valueRow(m_curves[size_t(i)].name, curveColor(i), value));
+    }
+    showReferenceValues(windowStart() + index);
+    holdTableWidth();
+}
+
+void RealtimeChartWidget::showReferenceValues(qint64 sample)
+{
+    for (int i = 0; i < m_referenceLabels.size(); ++i) {
+        const QList<double> &values = m_references.at(i).values;
+        const QString value = sample >= 0 && sample < values.size() ? reading(values.at(sample)) : QStringLiteral("--");
+        m_referenceLabels[i]->setText(valueRow(m_references.at(i).name, curveColor(int(m_curves.size()) + i), value));
+    }
+}
+
+void RealtimeChartWidget::holdTableWidth()
+{
+    int need = 0;
+    m_mode->ensurePolished();
+    need = m_mode->fontMetrics().horizontalAdvance(QString::fromUtf8(kSampleMode));
+    for (QLabel *label : m_valueLabels + m_referenceLabels) {
+        label->ensurePolished();
+        need = std::max(need, label->sizeHint().width());
+    }
+    const QMargins margins = m_table->layout()->contentsMargins();
+    need += margins.left() + margins.right();
+    if (need > m_table->minimumWidth()) {
+        m_table->setMinimumWidth(need);
+    }
+}
+
+void RealtimeChartWidget::saveHistory(const QString &path)
+{
+    QStringList names;
+    for (const Curve &curve : m_curves) {
+        names.append(curve.name);
+    }
+    bool unreadable = false;
+    QList<ChartSamples> samples;
+    for (const auto &history : m_histories) {
+        samples.append(history->samples(&unreadable));
+    }
+    QSaveFile file(path);
+    QString error;
+    if (!file.open(QIODevice::WriteOnly)) {
+        error = file.errorString();
+    } else if (!writeChartFile(&file, chartFileFormat(path), names, samples, &error)) {
+        file.cancelWriting();
+    } else if (unreadable) {
+        error = tr("无法读取曲线历史");
+        file.cancelWriting();
+    } else if (!file.commit()) {
+        error = file.errorString();
+    }
+    if (!error.isEmpty()) {
+        m_mode->setText(tr("保存失败: %1").arg(error));
+    }
+}
+
+void RealtimeChartWidget::loadReference(const QString &path)
+{
+    QFile file(path);
+    QStringList names;
+    QList<QList<double>> values;
+    QString error;
+    if (!file.open(QIODevice::ReadOnly)) {
+        error = file.errorString();
+    } else if (!readChartFile(file.readAll(), chartFileFormat(path), &names, &values, &error) && error.isEmpty()) {
+        error = tr("无法读取");
+    }
+    if (!error.isEmpty()) {
+        m_mode->setText(tr("加载失败: %1").arg(error));
+        return;
+    }
+    clearReference();
+    const QString stem = QFileInfo(path).completeBaseName();
+    for (int i = 0; i < names.size(); ++i) {
+        m_references.append({QStringLiteral("%1（%2）").arg(names.at(i), stem), values.value(i)});
+        auto *label = new QLabel(m_table);
+        m_rows->addWidget(label);
+        m_referenceLabels.append(label);
+    }
+    m_clearReference->show();
+    applyTheme();
+}
+
+void RealtimeChartWidget::clearReference()
+{
+    qDeleteAll(m_referenceLabels);
+    m_referenceLabels.clear();
+    m_references.clear();
+    m_clearReference->hide();
 }
 
 void RealtimeChartWidget::onAttached()
@@ -199,7 +809,7 @@ void RealtimeChartWidget::onAttached()
             }
             // A malformed sample skips this curve only; the frame's other curves still update.
             if (const auto y = bindingFloat(binding.evaluate(binding.extractFromParsed(message)))) {
-                m_plot->appendSample(int(i), *y);
+                appendSample(int(i), *y);
             }
         }
     }));
@@ -214,7 +824,7 @@ void RealtimeChartWidget::onAttached()
             }
             for (const QVariant &value : binding.extractAllFromRaw(bytes)) {
                 if (const auto y = bindingFloat(value)) {
-                    m_plot->appendSample(int(i), *y);
+                    appendSample(int(i), *y);
                 }
             }
         }
@@ -229,43 +839,10 @@ void RealtimeChartWidget::onAttached()
 void RealtimeChartWidget::onDetached()
 {
     context()->setCurveNeeds(this, {});
-    m_plot->clear();
-}
-
-void RealtimeChartWidget::exportCsv()
-{
-    const QString path = QFileDialog::getSaveFileName(this, tr("导出曲线"), text("title") + QStringLiteral(".csv"),
-                                                      tr("CSV 文件 (*.csv)"));
-    if (path.isEmpty()) {
-        return;
+    for (const auto &history : m_histories) {
+        history->clear();
     }
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        if (context()) {
-            context()->notify(tr("导出失败"), file.errorString(), NotifyType::Error);
-        }
-        return;
-    }
-    QTextStream out(&file);
-    QList<QVector<QPointF>> series;
-    int rows = 0;
-    out << "index";
-    for (int i = 0; i < m_plot->seriesCount(); ++i) {
-        out << ',' << m_plot->seriesName(i);
-        series.append(m_plot->points(i));
-        rows = std::max(rows, int(series.last().size()));
-    }
-    out << '\n';
-    for (int row = 0; row < rows; ++row) {
-        out << row;
-        for (const QVector<QPointF> &points : series) {
-            out << ',';
-            if (row < points.size()) {
-                out << QString::number(points.at(row).y(), 'g', 10);
-            }
-        }
-        out << '\n';
-    }
+    refresh();
 }
 
 // ---------------------------------------------------------------------------

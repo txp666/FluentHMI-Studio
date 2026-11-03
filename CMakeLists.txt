@@ -60,6 +60,8 @@ add_library(fhmi_core STATIC
     src/core/binding.cpp
     src/core/binding.h
     src/core/builtin_widgets.cpp
+    src/core/chart_file.cpp
+    src/core/chart_file.h
     src/core/command_encoder.cpp
     src/core/command_encoder.h
     src/core/expression.cpp
@@ -246,7 +248,7 @@ file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/FluentHMIStudio-version.txt" CONTENT "
 if(FHMI_BUILD_TESTS)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
-    foreach(test_name IN ITEMS protocol_parser binding command_encoder project)
+    foreach(test_name IN ITEMS protocol_parser binding command_encoder project chart_file)
         add_executable(tst_${test_name} tests/tst_${test_name}.cpp)
         target_link_libraries(tst_${test_name} PRIVATE fhmi_core Qt6::Test)
         target_compile_definitions(tst_${test_name} PRIVATE
