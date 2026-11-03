@@ -43,7 +43,6 @@ enum class WidgetCategory
     Display,
     Chart,
     Comm,
-    Composite,
 };
 
 QString categoryTitle(WidgetCategory category);
@@ -53,7 +52,7 @@ struct WidgetMeta
     QString typeName;
     QString displayName;
     WidgetCategory category = WidgetCategory::Basic;
-    QString icon; // FluentIcon name, e.g. "Send"
+    QString icon; // a FluentIcon name or one of the palette's own, see widgetIcon(): "send", "button"
     int defaultWidth = 120;
     int defaultHeight = 40;
     QList<PropDef> properties;

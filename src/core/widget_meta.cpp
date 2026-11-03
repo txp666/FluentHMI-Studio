@@ -19,8 +19,6 @@ QString categoryTitle(WidgetCategory category)
         return QStringLiteral("图表控件");
     case WidgetCategory::Comm:
         return QStringLiteral("通信控件");
-    case WidgetCategory::Composite:
-        return QStringLiteral("复合卡片");
     }
     return QString();
 }

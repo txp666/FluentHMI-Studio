@@ -74,7 +74,7 @@ class HmiWidget : public QWidget
 HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QWidget *parent = nullptr,
                            const QString &assetBaseDir = QString());
 
-// The FluentIcon a widget's metadata names, for palettes and placeholders.
+// The icon a widget's metadata names, one of the palette's own or a FluentIcon; it follows the theme.
 QIcon widgetIcon(const QString &iconName);
 
 // Tab names of a TabWidget's "tabNames" text; never empty.

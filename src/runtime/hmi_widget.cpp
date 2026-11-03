@@ -209,6 +209,32 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
 
 QIcon widgetIcon(const QString &iconName)
 {
+    // Pictures of controls that FluentQtWidgets has no icon for, drawn in its style, one file per theme in
+    // resources/widget_icons. PyQt UI Designer has the same files under the same names.
+    static const QHash<QString, QString> own = {
+        {QStringLiteral("button"), QStringLiteral("Button")},
+        {QStringLiteral("text_field"), QStringLiteral("TextField")},
+        {QStringLiteral("dropdown"), QStringLiteral("Dropdown")},
+        {QStringLiteral("toggle"), QStringLiteral("Toggle")},
+        {QStringLiteral("slider"), QStringLiteral("Slider")},
+        {QStringLiteral("spin_box"), QStringLiteral("SpinBox")},
+        {QStringLiteral("columns"), QStringLiteral("Columns")},
+        {QStringLiteral("rows"), QStringLiteral("Rows")},
+        {QStringLiteral("group_box"), QStringLiteral("GroupBox")},
+        {QStringLiteral("tabs"), QStringLiteral("Tabs")},
+        {QStringLiteral("card"), QStringLiteral("Card")},
+        {QStringLiteral("led"), QStringLiteral("Led")},
+        {QStringLiteral("seven_segment"), QStringLiteral("SevenSegment")},
+        {QStringLiteral("progress_bar"), QStringLiteral("ProgressBar")},
+        {QStringLiteral("progress_ring"), QStringLiteral("ProgressRing")},
+        {QStringLiteral("table"), QStringLiteral("Table")},
+        {QStringLiteral("serial_port"), QStringLiteral("SerialPort")},
+    };
+    const auto file = own.constFind(iconName);
+    if (file != own.constEnd()) {
+        const QString path = QStringLiteral(":/fluenthmi/widget_icons/%1_%2.svg");
+        return FluentQt::themedIcon(path.arg(*file, QStringLiteral("black")), path.arg(*file, QStringLiteral("white")));
+    }
     static const QHash<QString, FluentQt::FluentIcon> icons = [] {
         QHash<QString, FluentQt::FluentIcon> table;
         for (int i = 0; i <= int(FluentQt::FluentIcon::ExpressiveInputEntry); ++i) {

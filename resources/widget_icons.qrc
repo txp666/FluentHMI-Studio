@@ -1,0 +1,38 @@
+<RCC>
+    <qresource prefix="/fluenthmi">
+        <file>widget_icons/Button_black.svg</file>
+        <file>widget_icons/Button_white.svg</file>
+        <file>widget_icons/Card_black.svg</file>
+        <file>widget_icons/Card_white.svg</file>
+        <file>widget_icons/Columns_black.svg</file>
+        <file>widget_icons/Columns_white.svg</file>
+        <file>widget_icons/Dropdown_black.svg</file>
+        <file>widget_icons/Dropdown_white.svg</file>
+        <file>widget_icons/GroupBox_black.svg</file>
+        <file>widget_icons/GroupBox_white.svg</file>
+        <file>widget_icons/Led_black.svg</file>
+        <file>widget_icons/Led_white.svg</file>
+        <file>widget_icons/ProgressBar_black.svg</file>
+        <file>widget_icons/ProgressBar_white.svg</file>
+        <file>widget_icons/ProgressRing_black.svg</file>
+        <file>widget_icons/ProgressRing_white.svg</file>
+        <file>widget_icons/Rows_black.svg</file>
+        <file>widget_icons/Rows_white.svg</file>
+        <file>widget_icons/SerialPort_black.svg</file>
+        <file>widget_icons/SerialPort_white.svg</file>
+        <file>widget_icons/SevenSegment_black.svg</file>
+        <file>widget_icons/SevenSegment_white.svg</file>
+        <file>widget_icons/Slider_black.svg</file>
+        <file>widget_icons/Slider_white.svg</file>
+        <file>widget_icons/SpinBox_black.svg</file>
+        <file>widget_icons/SpinBox_white.svg</file>
+        <file>widget_icons/Table_black.svg</file>
+        <file>widget_icons/Table_white.svg</file>
+        <file>widget_icons/Tabs_black.svg</file>
+        <file>widget_icons/Tabs_white.svg</file>
+        <file>widget_icons/TextField_black.svg</file>
+        <file>widget_icons/TextField_white.svg</file>
+        <file>widget_icons/Toggle_black.svg</file>
+        <file>widget_icons/Toggle_white.svg</file>
+    </qresource>
+</RCC>

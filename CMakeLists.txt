@@ -171,6 +171,7 @@ set_target_properties(FluentHMIRuntime PROPERTIES
 # ---------------------------------------------------------------------------
 add_executable(FluentHMIStudio
     resources/app.qrc
+    resources/widget_icons.qrc
     src/studio/designer_page.cpp
     src/studio/designer_page.h
     src/studio/export_service.cpp
