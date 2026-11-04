@@ -63,13 +63,19 @@ int main(int argc, char *argv[])
     FluentQt::ThemeManager::instance()->setTheme(FluentQt::FluentConfig::instance()->themeMode());
 
     // A project named on the command line comes first; otherwise this is an exported application,
-    // which starts with the theme mode and colour of the studio that exported it.
+    // which starts with the theme mode and colour and the language setting of the studio that exported it.
     QString path = projectArgument(app.arguments());
-    if (path.isEmpty()) {
-        path = bundledProject();
-        if (!path.isEmpty()) {
-            fhmi::applyAppearance(QFileInfo(path).absolutePath());
-        }
+    const QString bundled = path.isEmpty() ? bundledProject() : QString();
+    // The language goes first, before any widget exists: the exported one, else the studio's setting, else Auto
+    // (FluentConfig's default when there is no fluent.json).
+    QString language = bundled.isEmpty() ? QString() : fhmi::appearanceLanguage(QFileInfo(bundled).absolutePath());
+    if (language.isEmpty()) {
+        language = FluentQt::FluentConfig::instance()->localeName();
+    }
+    fhmi::installLanguage(&app, language);
+    if (!bundled.isEmpty()) {
+        path = bundled;
+        fhmi::applyAppearance(QFileInfo(path).absolutePath());
     }
 
     // Developer options: --theme light|dark overrides the saved theme, and
@@ -94,8 +100,8 @@ int main(int argc, char *argv[])
         return 1;
     }
     if (path.isEmpty()) {
-        path = QFileDialog::getOpenFileName(nullptr, QObject::tr("打开工程"), QString(),
-                                            QObject::tr("FluentHMI 工程 (*.uidp)"));
+        path = QFileDialog::getOpenFileName(nullptr, QCoreApplication::translate("fhmi", "打开工程"), QString(),
+                                            QCoreApplication::translate("fhmi", "FluentHMI 工程 (*.uidp)"));
         if (path.isEmpty()) {
             return 0;
         }
@@ -107,7 +113,7 @@ int main(int argc, char *argv[])
             QTextStream(stderr) << error << '\n';
             return 1;
         }
-        FluentQt::MessageBox box(QObject::tr("无法加载工程"), error, nullptr);
+        FluentQt::MessageBox box(QCoreApplication::translate("fhmi", "无法加载工程"), error, nullptr);
         box.hideCancelButton();
         box.exec();
         return 1;

@@ -54,65 +54,85 @@ PropDef described(PropDef def, const QString &description)
 // A link card's own frame format: the keys of the project's serial.parserConfig.
 PropDef parserConfig()
 {
-    return PropDef{QStringLiteral("parserConfig"), QStringLiteral("帧格式"), PropType::Object, QJsonObject(), {},
-                   std::nullopt, std::nullopt, false,
-                   QStringLiteral("帧格式设置，键同工程的 serial.parserConfig；默认解析模式不是「项目设置」时生效，"
-                                  "空对象表示沿用工程设置（模式相同时）或默认值")};
+    return PropDef{
+        QStringLiteral("parserConfig"),
+        QT_TR_NOOP("帧格式"),
+        PropType::Object,
+        QJsonObject(),
+        {},
+        std::nullopt,
+        std::nullopt,
+        false,
+        // Descriptions are for the widget reference (docs/uidp-widgets.md) only, which is Chinese.
+        QStringLiteral(
+            "帧格式设置，键同工程的 serial.parserConfig；默认解析模式不是「项目设置」时生效，" // i18n: ignore
+            "空对象表示沿用工程设置（模式相同时）或默认值")};                                  // i18n: ignore
 }
 
-const QStringList kCommandModes = {QStringLiteral("文本"), QStringLiteral("HEX"), QStringLiteral("Modbus")};
-const QStringList kHexTypes = {QStringLiteral("HEX字符串"), QStringLiteral("uint8"),  QStringLiteral("int8"),
-                               QStringLiteral("uint16"),    QStringLiteral("int16"),  QStringLiteral("uint32"),
-                               QStringLiteral("int32"),     QStringLiteral("float32")};
+const QStringList kCommandModes = {QStringLiteral("文本"), // i18n: value
+                                   QStringLiteral("HEX"), QStringLiteral("Modbus")};
+const QStringList kHexTypes = {
+    QStringLiteral("HEX字符串"), QStringLiteral("uint8"),  QStringLiteral("int8"), // i18n: value
+    QStringLiteral("uint16"),    QStringLiteral("int16"),  QStringLiteral("uint32"),
+    QStringLiteral("int32"),     QStringLiteral("float32")};
 const QStringList kNumericTypes = {QStringLiteral("uint8"),  QStringLiteral("int8"),  QStringLiteral("uint16"),
                                    QStringLiteral("int16"),  QStringLiteral("uint32"), QStringLiteral("int32"),
                                    QStringLiteral("float32")};
-const QStringList kByteOrders = {QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")};
-const QStringList kNewlines = {QStringLiteral("无"), QStringLiteral("\\r\\n"), QStringLiteral("\\n"),
+const QStringList kByteOrders = {QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")};             // i18n: value
+const QStringList kNewlines = {QStringLiteral("无"), QStringLiteral("\\r\\n"), QStringLiteral("\\n"), // i18n: value
                                QStringLiteral("\\r")};
 const QStringList kAllFunctions = CommandEncoder::functionOptions();
 const QStringList kInputFunctions = CommandEncoder::functionOptions({0x03, 0x04, 0x05, 0x06, 0x10});
 const QStringList kWriteFunctions = CommandEncoder::functionOptions({0x05, 0x06, 0x10});
-const QStringList kNotifyTypes = {QStringLiteral("成功"), QStringLiteral("信息"), QStringLiteral("警告"),
-                                  QStringLiteral("错误")};
-const QStringList kDisplayFormats = {QStringLiteral("自动"), QStringLiteral("十进制"),
-                                     QStringLiteral("十六进制(HEX)"), QStringLiteral("二进制(BIN)")};
-const QStringList kDecimals = {QStringLiteral("自动"), QStringLiteral("0"), QStringLiteral("1"),
+const QStringList kNotifyTypes = {QStringLiteral("成功"), QStringLiteral("信息"), QStringLiteral("警告"), // i18n: value
+                                  QStringLiteral("错误")};                                                // i18n: value
+const QStringList kDisplayFormats = {QStringLiteral("自动"), QStringLiteral("十进制"),                    // i18n: value
+                                     QStringLiteral("十六进制(HEX)"), QStringLiteral("二进制(BIN)")};     // i18n: value
+const QStringList kDecimals = {QStringLiteral("自动"), QStringLiteral("0"), QStringLiteral("1"),          // i18n: value
                                QStringLiteral("2"),    QStringLiteral("3"), QStringLiteral("4")};
-const QStringList kLinkParsers = {QStringLiteral("项目设置"), QStringLiteral("line"), QStringLiteral("hex"),
-                                  QStringLiteral("modbus"), QStringLiteral("modbus_tcp"),
-                                  QStringLiteral("modbus_ascii")};
+const QStringList kLinkParsers = {
+    QStringLiteral("项目设置"), QStringLiteral("line"),       QStringLiteral("hex"), // i18n: value
+    QStringLiteral("modbus"),   QStringLiteral("modbus_tcp"), QStringLiteral("modbus_ascii")};
 
 // A link card's parser: its mode; what it hands the Modbus poller while its link is connected and parses
 // Modbus (the property editor shows these only for a Modbus mode of the card's own); its frame format. A serial
 // or TCP card can also be a Modbus slave (`slave`): its role, how it answers and its data table.
 QList<PropDef> linkParsing(bool slave)
 {
-    QList<PropDef> props{choice(QStringLiteral("defaultParser"), QStringLiteral("默认解析模式"),
-                                QStringLiteral("项目设置"), kLinkParsers)};
+    QList<PropDef> props{choice(QStringLiteral("defaultParser"), QT_TR_NOOP("默认解析模式"),
+                                QStringLiteral("项目设置"), // i18n: value
+                                kLinkParsers)};
     if (slave) {
-        props.append(described(choice(QStringLiteral("modbusRole"), QStringLiteral("Modbus 角色"),
-                                      QStringLiteral("主站"), {QStringLiteral("主站"), QStringLiteral("从站")}),
-                               QStringLiteral("从站：解析模式为 modbus 或 modbus_tcp 时应答外部主站")));
+        props.append(described(choice(QStringLiteral("modbusRole"), QT_TR_NOOP("Modbus 角色"),
+                                      QStringLiteral("主站"),                                            // i18n: value
+                                      {QStringLiteral("主站"), QStringLiteral("从站")}),                 // i18n: value
+                               QStringLiteral("从站：解析模式为 modbus 或 modbus_tcp 时应答外部主站"))); // i18n: ignore
     }
-    props += {integer(QStringLiteral("modbusPeriod"), QStringLiteral("默认轮询(ms)"), 500, 10, 60000),
-              integer(QStringLiteral("modbusTimeout"), QStringLiteral("响应超时(ms)"), 1000, 10, 60000),
-              integer(QStringLiteral("modbusSlave"), QStringLiteral("默认从站"), 1, 1, 247)};
+    props += {integer(QStringLiteral("modbusPeriod"), QT_TR_NOOP("默认轮询(ms)"), 500, 10, 60000),
+              integer(QStringLiteral("modbusTimeout"), QT_TR_NOOP("响应超时(ms)"), 1000, 10, 60000),
+              integer(QStringLiteral("modbusSlave"), QT_TR_NOOP("默认从站"), 1, 1, 247)};
     if (slave) {
-        props += {integer(QStringLiteral("modbusDelay"), QStringLiteral("响应延时(ms)"), 0, 0, 5000),
-                  described(boolean(QStringLiteral("modbusExceptions"), QStringLiteral("异常响应"), true),
-                            QStringLiteral("关掉后出错的请求不应答"))};
-        const QList<QPair<QString, QString>> tables = {{QStringLiteral("Co"), QStringLiteral("线圈")},
-                                                       {QStringLiteral("Di"), QStringLiteral("离散输入")},
-                                                       {QStringLiteral("Hr"), QStringLiteral("保持寄存器")},
-                                                       {QStringLiteral("Ir"), QStringLiteral("输入寄存器")}};
-        for (const auto &[name, label] : tables) {
-            props += {integer(QStringLiteral("slave%1Start").arg(name), label + QStringLiteral("起始"), 0, 0, 65535),
-                      integer(QStringLiteral("slave%1Count").arg(name), label + QStringLiteral("数量"), 100, 0, 10000)};
+        props += {integer(QStringLiteral("modbusDelay"), QT_TR_NOOP("响应延时(ms)"), 0, 0, 5000),
+                  described(boolean(QStringLiteral("modbusExceptions"), QT_TR_NOOP("异常响应"), true),
+                            QStringLiteral("关掉后出错的请求不应答"))}; // i18n: ignore
+        struct Table
+        {
+            const char *name;
+            const char *start;
+            const char *count;
+        };
+        static constexpr Table tables[] = {{"Co", QT_TR_NOOP("线圈起始"), QT_TR_NOOP("线圈数量")},
+                                           {"Di", QT_TR_NOOP("离散输入起始"), QT_TR_NOOP("离散输入数量")},
+                                           {"Hr", QT_TR_NOOP("保持寄存器起始"), QT_TR_NOOP("保持寄存器数量")},
+                                           {"Ir", QT_TR_NOOP("输入寄存器起始"), QT_TR_NOOP("输入寄存器数量")}};
+        for (const Table &table : tables) {
+            const QString name = QLatin1String(table.name);
+            props += {integer(QStringLiteral("slave%1Start").arg(name), QString::fromUtf8(table.start), 0, 0, 65535),
+                      integer(QStringLiteral("slave%1Count").arg(name), QString::fromUtf8(table.count), 100, 0, 10000)};
         }
-        props.append(described(text(QStringLiteral("slaveInit"), QStringLiteral("初始值"), QString()),
-                               QStringLiteral("每行一条 `区地址=值`，如 `hr100=1234`、`co3=1`；"
-                                              "寄存器 −32768–65535，线圈、离散输入 0 或 1")));
+        props.append(described(text(QStringLiteral("slaveInit"), QT_TR_NOOP("初始值"), QString()),
+                               QStringLiteral("每行一条 `区地址=值`，如 `hr100=1234`、`co3=1`；" // i18n: ignore
+                                              "寄存器 −32768–65535，线圈、离散输入 0 或 1")));   // i18n: ignore
     }
     props.append(parserConfig());
     return props;
@@ -121,15 +141,17 @@ QList<PropDef> linkParsing(bool slave)
 // The framing fields every command-sending widget shares, between the mode and Modbus.
 QList<PropDef> hexFraming(const QStringList &dataTypes, const QString &dataTypeDefault, bool newlineFirst)
 {
-    QList<PropDef> out{str(QStringLiteral("frameHeader"), QStringLiteral("帧头(HEX)"), QString()),
-                       str(QStringLiteral("frameTail"), QStringLiteral("帧尾(HEX)"), QString())};
-    const PropDef newline = choice(QStringLiteral("commandNewline"), QStringLiteral("换行符"),
-                                   QStringLiteral("\\r\\n"), kNewlines);
+    QList<PropDef> out{str(QStringLiteral("frameHeader"), QT_TR_NOOP("帧头(HEX)"), QString()),
+                       str(QStringLiteral("frameTail"), QT_TR_NOOP("帧尾(HEX)"), QString())};
+    const PropDef newline =
+        choice(QStringLiteral("commandNewline"), QT_TR_NOOP("换行符"), QStringLiteral("\\r\\n"), kNewlines);
     if (newlineFirst) {
         out.append(newline);
     }
-    out.append(choice(QStringLiteral("dataType"), QStringLiteral("数据类型"), dataTypeDefault, dataTypes));
-    out.append(choice(QStringLiteral("byteOrder"), QStringLiteral("字节序"), QStringLiteral("大端(BE)"), kByteOrders));
+    out.append(choice(QStringLiteral("dataType"), QT_TR_NOOP("数据类型"), dataTypeDefault, dataTypes));
+    out.append(choice(QStringLiteral("byteOrder"), QT_TR_NOOP("字节序"),
+                      QStringLiteral("大端(BE)"), // i18n: value
+                      kByteOrders));
     if (!newlineFirst) {
         out.append(newline);
     }
@@ -139,10 +161,10 @@ QList<PropDef> hexFraming(const QStringList &dataTypes, const QString &dataTypeD
 QList<PropDef> notification(const QString &event, const QString &content, const QString &type)
 {
     return {boolean(QStringLiteral("notify"), event, false),
-            str(QStringLiteral("notifyTitle"), QStringLiteral("通知标题"), QStringLiteral("提示")),
-            str(QStringLiteral("notifyContent"), QStringLiteral("通知内容"), content),
-            choice(QStringLiteral("notifyType"), QStringLiteral("通知类型"), type, kNotifyTypes),
-            integer(QStringLiteral("notifyDuration"), QStringLiteral("通知时长(ms)"), 3000, 500, 30000)};
+            str(QStringLiteral("notifyTitle"), QT_TR_NOOP("通知标题"), QT_TR_NOOP("提示")),
+            str(QStringLiteral("notifyContent"), QT_TR_NOOP("通知内容"), content),
+            choice(QStringLiteral("notifyType"), QT_TR_NOOP("通知类型"), type, kNotifyTypes),
+            integer(QStringLiteral("notifyDuration"), QT_TR_NOOP("通知时长(ms)"), 3000, 500, 30000)};
 }
 
 WidgetMeta meta(const QString &type, const QString &display, WidgetCategory category, const QString &icon, int w,
@@ -164,145 +186,149 @@ WidgetMeta meta(const QString &type, const QString &display, WidgetCategory cate
 
 QList<WidgetMeta> basicWidgets()
 {
-    const PropDef mode = choice(QStringLiteral("commandMode"), QStringLiteral("发送模式"), QStringLiteral("文本"),
-                                kCommandModes);
-    const PropDef tpl = str(QStringLiteral("commandTemplate"), QStringLiteral("发送模板"), QStringLiteral("{value}"));
-    const PropDef slave = integer(QStringLiteral("mbSlave"), QStringLiteral("从站地址"), 1, 1, 247);
-    const PropDef address = integer(QStringLiteral("mbAddress"), QStringLiteral("寄存器地址"), 0, 0, 65535);
+    const PropDef mode =
+        choice(QStringLiteral("commandMode"), QT_TR_NOOP("发送模式"), QStringLiteral("文本"), // i18n: value
+               kCommandModes);
+    const PropDef tpl = str(QStringLiteral("commandTemplate"), QT_TR_NOOP("发送模板"), QStringLiteral("{value}"));
+    const PropDef slave = integer(QStringLiteral("mbSlave"), QT_TR_NOOP("从站地址"), 1, 1, 247);
+    const PropDef address = integer(QStringLiteral("mbAddress"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535);
     // A count for reads, a whole number to write (negative for int16 / int32) otherwise.
-    const PropDef mbValue = integer(QStringLiteral("mbValue"), QStringLiteral("值/数量"), 1, -2147483648.0, 2147483647.0);
+    const PropDef mbValue = integer(QStringLiteral("mbValue"), QT_TR_NOOP("值/数量"), 1, -2147483648.0, 2147483647.0);
     // How a written value fills registers: FC 06 takes a 16-bit type, FC 16 any of them.
-    const PropDef dataType = choice(QStringLiteral("mbDataType"), QStringLiteral("数据类型"), QStringLiteral("uint16"),
+    const PropDef dataType = choice(QStringLiteral("mbDataType"), QT_TR_NOOP("数据类型"), QStringLiteral("uint16"),
                                     CommandEncoder::dataTypes());
-    const PropDef regOrder = choice(QStringLiteral("mbRegOrder"), QStringLiteral("寄存器序"),
+    const PropDef regOrder = choice(QStringLiteral("mbRegOrder"), QT_TR_NOOP("寄存器序"),
                                     CommandEncoder::registerOrders().first(), CommandEncoder::registerOrders());
 
-    QList<PropDef> button{str(QStringLiteral("text"), QStringLiteral("文本"), QStringLiteral("按钮")),
-                          boolean(QStringLiteral("enabled"), QStringLiteral("启用"), true),
-                          mode,
-                          command(QStringLiteral("command"), QStringLiteral("发送内容")),
-                          tpl};
-    button += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false);
+    QList<PropDef> button{str(QStringLiteral("text"), QT_TR_NOOP("文本"), QT_TR_NOOP("按钮")),
+                          boolean(QStringLiteral("enabled"), QT_TR_NOOP("启用"), true), mode,
+                          command(QStringLiteral("command"), QT_TR_NOOP("发送内容")), tpl};
+    button += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     button += {slave,
-               choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("03 读保持寄存器"),
+               choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("03 读保持寄存器"), // i18n: value
                       kAllFunctions),
-               address, dataType, regOrder, mbValue};
-    button += notification(QStringLiteral("按下通知"), QStringLiteral("按钮已按下"), QStringLiteral("成功"));
+               address,
+               dataType,
+               regOrder,
+               mbValue};
+    button += notification(QT_TR_NOOP("按下通知"), QT_TR_NOOP("按钮已按下"), QStringLiteral("成功")); // i18n: value
 
-    QList<PropDef> label{str(QStringLiteral("text"), QStringLiteral("文本"), QStringLiteral("标签"), true),
-                         integer(QStringLiteral("fontSize"), QStringLiteral("字号"), 14, 8, 72),
-                         boolean(QStringLiteral("bold"), QStringLiteral("加粗"), false),
-                         choice(QStringLiteral("alignment"), QStringLiteral("对齐"), QStringLiteral("Left"),
-                                {QStringLiteral("Left"), QStringLiteral("Center"), QStringLiteral("Right")}),
-                         choice(QStringLiteral("displayFormat"), QStringLiteral("显示格式"), QStringLiteral("自动"),
-                                kDisplayFormats),
-                         choice(QStringLiteral("decimals"), QStringLiteral("小数位数"), QStringLiteral("自动"),
-                                kDecimals)};
+    QList<PropDef> label{
+        str(QStringLiteral("text"), QT_TR_NOOP("文本"), QT_TR_NOOP("标签"), true),
+        integer(QStringLiteral("fontSize"), QT_TR_NOOP("字号"), 14, 8, 72),
+        boolean(QStringLiteral("bold"), QT_TR_NOOP("加粗"), false),
+        choice(QStringLiteral("alignment"), QT_TR_NOOP("对齐"), QStringLiteral("Left"),
+               {QStringLiteral("Left"), QStringLiteral("Center"), QStringLiteral("Right")}),
+        choice(QStringLiteral("displayFormat"), QT_TR_NOOP("显示格式"), QStringLiteral("自动"), // i18n: value
+               kDisplayFormats),
+        choice(QStringLiteral("decimals"), QT_TR_NOOP("小数位数"), QStringLiteral("自动"), // i18n: value
+               kDecimals)};
 
-    QList<PropDef> lineEdit{str(QStringLiteral("placeholderText"), QStringLiteral("占位文本"),
-                                QStringLiteral("请输入...")),
-                            str(QStringLiteral("text"), QStringLiteral("默认值"), QString()),
-                            boolean(QStringLiteral("readOnly"), QStringLiteral("只读"), false),
-                            boolean(QStringLiteral("sendOnEnter"), QStringLiteral("回车发送"), false),
+    QList<PropDef> lineEdit{str(QStringLiteral("placeholderText"), QT_TR_NOOP("占位文本"), QT_TR_NOOP("请输入...")),
+                            str(QStringLiteral("text"), QT_TR_NOOP("默认值"), QString()),
+                            boolean(QStringLiteral("readOnly"), QT_TR_NOOP("只读"), false),
+                            boolean(QStringLiteral("sendOnEnter"), QT_TR_NOOP("回车发送"), false),
                             mode,
                             tpl};
-    lineEdit += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false);
+    lineEdit += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     lineEdit += {slave,
-                 choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("06 写单寄存器"),
+                 choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value
                         kInputFunctions),
                  address, dataType, regOrder};
 
-    QList<PropDef> combo{text(QStringLiteral("items"), QStringLiteral("选项"), QStringLiteral("选项1\n选项2\n选项3")),
-                         integer(QStringLiteral("currentIndex"), QStringLiteral("默认选项"), 0, 0, 99),
-                         boolean(QStringLiteral("sendOnSelect"), QStringLiteral("选中发送"), false),
-                         text(QStringLiteral("commands"), QStringLiteral("发送命令表"), QString()),
+    QList<PropDef> combo{text(QStringLiteral("items"), QT_TR_NOOP("选项"), QT_TR_NOOP("选项1\n选项2\n选项3")),
+                         integer(QStringLiteral("currentIndex"), QT_TR_NOOP("默认选项"), 0, 0, 99),
+                         boolean(QStringLiteral("sendOnSelect"), QT_TR_NOOP("选中发送"), false),
+                         text(QStringLiteral("commands"), QT_TR_NOOP("发送命令表"), QString()),
                          mode,
                          tpl};
-    combo += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false);
+    combo += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     combo += {slave,
-              choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("06 写单寄存器"),
+              choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value
                      kInputFunctions),
-              address, dataType, regOrder, mbValue};
+              address,
+              dataType,
+              regOrder,
+              mbValue};
 
-    QList<PropDef> toggle{str(QStringLiteral("label"), QStringLiteral("标签"), QStringLiteral("开关")),
-                          boolean(QStringLiteral("checked"), QStringLiteral("默认开启"), false),
+    QList<PropDef> toggle{str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("开关")),
+                          boolean(QStringLiteral("checked"), QT_TR_NOOP("默认开启"), false),
                           mode,
-                          command(QStringLiteral("onCommand"), QStringLiteral("开启命令")),
-                          command(QStringLiteral("offCommand"), QStringLiteral("关闭命令")),
+                          command(QStringLiteral("onCommand"), QT_TR_NOOP("开启命令")),
+                          command(QStringLiteral("offCommand"), QT_TR_NOOP("关闭命令")),
                           tpl};
-    toggle += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false);
-    toggle += {slave, integer(QStringLiteral("mbAddress"), QStringLiteral("线圈地址"), 0, 0, 65535)};
-    toggle += notification(QStringLiteral("切换通知"), QStringLiteral("开关已切换"), QStringLiteral("信息"));
+    toggle += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
+    toggle += {slave, integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈地址"), 0, 0, 65535)};
+    toggle += notification(QT_TR_NOOP("切换通知"), QT_TR_NOOP("开关已切换"), QStringLiteral("信息")); // i18n: value
 
     const auto ranged = [&](int value, bool suffix) {
-        QList<PropDef> props{integer(QStringLiteral("minimum"), QStringLiteral("最小值"), 0, -99999, 99999),
-                             integer(QStringLiteral("maximum"), QStringLiteral("最大值"), 100, -99999, 99999),
-                             integer(QStringLiteral("value"), QStringLiteral("默认值"), value, -99999, 99999)};
+        QList<PropDef> props{integer(QStringLiteral("minimum"), QT_TR_NOOP("最小值"), 0, -99999, 99999),
+                             integer(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100, -99999, 99999),
+                             integer(QStringLiteral("value"), QT_TR_NOOP("默认值"), value, -99999, 99999)};
         if (suffix) {
-            props.append(str(QStringLiteral("suffix"), QStringLiteral("后缀"), QString()));
+            props.append(str(QStringLiteral("suffix"), QT_TR_NOOP("后缀"), QString()));
         }
-        props += {boolean(QStringLiteral("sendOnChange"), QStringLiteral("变化发送"), false), mode, tpl};
+        props += {boolean(QStringLiteral("sendOnChange"), QT_TR_NOOP("变化发送"), false), mode, tpl};
         props += hexFraming(kNumericTypes, QStringLiteral("uint16"), true);
         props += {slave,
-                  choice(QStringLiteral("mbFunc"), QStringLiteral("功能码"), QStringLiteral("06 写单寄存器"),
+                  choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value
                          kWriteFunctions),
                   address, dataType, regOrder};
         return props;
     };
 
-    return {meta(QStringLiteral("PushButton"), QStringLiteral("按钮"), WidgetCategory::Basic, QStringLiteral("button"),
-                 120, 36, button),
-            meta(QStringLiteral("Label"), QStringLiteral("标签"), WidgetCategory::Basic, QStringLiteral("font"), 120,
-                 30, label),
-            meta(QStringLiteral("LineEdit"), QStringLiteral("输入框"), WidgetCategory::Basic,
-                 QStringLiteral("text_field"), 200, 36, lineEdit),
-            meta(QStringLiteral("ComboBox"), QStringLiteral("下拉框"), WidgetCategory::Basic,
-                 QStringLiteral("dropdown"), 160, 36, combo),
-            meta(QStringLiteral("ToggleSwitch"), QStringLiteral("开关"), WidgetCategory::Basic,
-                 QStringLiteral("toggle"), 140, 30, toggle),
-            meta(QStringLiteral("Slider"), QStringLiteral("滑块"), WidgetCategory::Basic, QStringLiteral("slider"), 200,
-                 30, ranged(50, false)),
-            meta(QStringLiteral("SpinBox"), QStringLiteral("数值框"), WidgetCategory::Basic, QStringLiteral("spin_box"),
+    return {meta(QStringLiteral("PushButton"), QT_TR_NOOP("按钮"), WidgetCategory::Basic, QStringLiteral("button"), 120,
+                 36, button),
+            meta(QStringLiteral("Label"), QT_TR_NOOP("标签"), WidgetCategory::Basic, QStringLiteral("font"), 120, 30,
+                 label),
+            meta(QStringLiteral("LineEdit"), QT_TR_NOOP("输入框"), WidgetCategory::Basic, QStringLiteral("text_field"),
+                 200, 36, lineEdit),
+            meta(QStringLiteral("ComboBox"), QT_TR_NOOP("下拉框"), WidgetCategory::Basic, QStringLiteral("dropdown"),
+                 160, 36, combo),
+            meta(QStringLiteral("ToggleSwitch"), QT_TR_NOOP("开关"), WidgetCategory::Basic, QStringLiteral("toggle"),
+                 140, 30, toggle),
+            meta(QStringLiteral("Slider"), QT_TR_NOOP("滑块"), WidgetCategory::Basic, QStringLiteral("slider"), 200, 30,
+                 ranged(50, false)),
+            meta(QStringLiteral("SpinBox"), QT_TR_NOOP("数值框"), WidgetCategory::Basic, QStringLiteral("spin_box"),
                  140, 36, ranged(0, true))};
 }
 
 QList<WidgetMeta> layoutWidgets()
 {
-    const PropDef spacing = integer(QStringLiteral("spacing"), QStringLiteral("间距"), 8, 0, 100);
+    const PropDef spacing = integer(QStringLiteral("spacing"), QT_TR_NOOP("间距"), 8, 0, 100);
     return {
-        meta(QStringLiteral("HBoxLayout"), QStringLiteral("水平布局"), WidgetCategory::Layout,
-             QStringLiteral("columns"), 300, 80,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("水平布局")), spacing}, 60, 40, true),
-        meta(QStringLiteral("VBoxLayout"), QStringLiteral("垂直布局"), WidgetCategory::Layout,
-             QStringLiteral("rows"), 200, 200,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("垂直布局")), spacing}, 60, 40, true),
-        meta(QStringLiteral("FlexLayout"), QStringLiteral("弹性布局"), WidgetCategory::Layout, QStringLiteral("layout"),
+        meta(QStringLiteral("HBoxLayout"), QT_TR_NOOP("水平布局"), WidgetCategory::Layout, QStringLiteral("columns"),
+             300, 80, {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("水平布局")), spacing}, 60, 40,
+             true),
+        meta(QStringLiteral("VBoxLayout"), QT_TR_NOOP("垂直布局"), WidgetCategory::Layout, QStringLiteral("rows"), 200,
+             200, {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("垂直布局")), spacing}, 60, 40, true),
+        meta(QStringLiteral("FlexLayout"), QT_TR_NOOP("弹性布局"), WidgetCategory::Layout, QStringLiteral("layout"),
              400, 200,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("弹性布局")),
-              choice(QStringLiteral("direction"), QStringLiteral("方向"), QStringLiteral("row"),
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("弹性布局")),
+              choice(QStringLiteral("direction"), QT_TR_NOOP("方向"), QStringLiteral("row"),
                      {QStringLiteral("row"), QStringLiteral("column")}),
               spacing},
              100, 60, true),
-        meta(QStringLiteral("GroupBox"), QStringLiteral("分组框"), WidgetCategory::Layout, QStringLiteral("group_box"),
-             280, 180, {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("分组"))}, 80, 60, true),
-        meta(QStringLiteral("TabWidget"), QStringLiteral("选项卡"), WidgetCategory::Layout, QStringLiteral("tabs"), 350,
+        meta(QStringLiteral("GroupBox"), QT_TR_NOOP("分组框"), WidgetCategory::Layout, QStringLiteral("group_box"), 280,
+             180, {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("分组"))}, 80, 60, true),
+        meta(QStringLiteral("TabWidget"), QT_TR_NOOP("选项卡"), WidgetCategory::Layout, QStringLiteral("tabs"), 350,
              250,
-             {text(QStringLiteral("tabNames"), QStringLiteral("标签名称"), QStringLiteral("标签1\n标签2\n标签3")),
-              integer(QStringLiteral("currentTab"), QStringLiteral("当前标签页"), 0, 0, 9999),
-              choice(QStringLiteral("tabLayout"), QStringLiteral("当前页布局"), QStringLiteral("自由"),
-                     {QStringLiteral("自由"), QStringLiteral("垂直"), QStringLiteral("水平"),
-                      QStringLiteral("弹性(Flex)")})},
+             {text(QStringLiteral("tabNames"), QT_TR_NOOP("标签名称"), QT_TR_NOOP("标签1\n标签2\n标签3")),
+              integer(QStringLiteral("currentTab"), QT_TR_NOOP("当前标签页"), 0, 0, 9999),
+              choice(QStringLiteral("tabLayout"), QT_TR_NOOP("当前页布局"), QStringLiteral("自由"), // i18n: value
+                     {QStringLiteral("自由"), QStringLiteral("垂直"), QStringLiteral("水平"),       // i18n: value
+                      QStringLiteral("弹性(Flex)")})},                                              // i18n: value
              150, 80, true),
-        meta(QStringLiteral("Separator"), QStringLiteral("分割线"), WidgetCategory::Layout, QStringLiteral("remove"),
-             200, 2,
-             {choice(QStringLiteral("orientation"), QStringLiteral("方向"), QStringLiteral("horizontal"),
+        meta(QStringLiteral("Separator"), QT_TR_NOOP("分割线"), WidgetCategory::Layout, QStringLiteral("remove"), 200,
+             2,
+             {choice(QStringLiteral("orientation"), QT_TR_NOOP("方向"), QStringLiteral("horizontal"),
                      {QStringLiteral("horizontal"), QStringLiteral("vertical")})},
              20, 2),
-        meta(QStringLiteral("CardContainer"), QStringLiteral("卡片容器"), WidgetCategory::Layout,
-             QStringLiteral("card"), 300, 200,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QString()),
-              choice(QStringLiteral("layout"), QStringLiteral("布局"), QStringLiteral("自由"),
-                     {QStringLiteral("自由"), QStringLiteral("垂直"), QStringLiteral("水平")}),
+        meta(QStringLiteral("CardContainer"), QT_TR_NOOP("卡片容器"), WidgetCategory::Layout, QStringLiteral("card"),
+             300, 200,
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QString()),
+              choice(QStringLiteral("layout"), QT_TR_NOOP("布局"), QStringLiteral("自由"),      // i18n: value
+                     {QStringLiteral("自由"), QStringLiteral("垂直"), QStringLiteral("水平")}), // i18n: value
               spacing},
              80, 60, true),
     };
@@ -311,91 +337,95 @@ QList<WidgetMeta> layoutWidgets()
 QList<WidgetMeta> displayWidgets()
 {
     return {
-        meta(QStringLiteral("LEDIndicator"), QStringLiteral("LED指示灯"), WidgetCategory::Display,
-             QStringLiteral("led"), 140, 30,
-             {str(QStringLiteral("label"), QStringLiteral("标签"), QStringLiteral("状态")),
-              choice(QStringLiteral("color"), QStringLiteral("颜色"), QStringLiteral("green"),
+        meta(QStringLiteral("LEDIndicator"), QT_TR_NOOP("LED指示灯"), WidgetCategory::Display, QStringLiteral("led"),
+             140, 30,
+             {str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("状态")),
+              choice(QStringLiteral("color"), QT_TR_NOOP("颜色"), QStringLiteral("green"),
                      {QStringLiteral("green"), QStringLiteral("red"), QStringLiteral("yellow"), QStringLiteral("blue"),
                       QStringLiteral("gray")}),
-              boolean(QStringLiteral("on"), QStringLiteral("点亮"), true, true),
-              str(QStringLiteral("onValue"), QStringLiteral("亮值"), QStringLiteral("1")),
-              str(QStringLiteral("offValue"), QStringLiteral("灭值"), QStringLiteral("0"))}),
-        meta(QStringLiteral("NumericDisplay"), QStringLiteral("数值显示"), WidgetCategory::Display,
+              boolean(QStringLiteral("on"), QT_TR_NOOP("点亮"), true, true),
+              str(QStringLiteral("onValue"), QT_TR_NOOP("亮值"), QStringLiteral("1")),
+              str(QStringLiteral("offValue"), QT_TR_NOOP("灭值"), QStringLiteral("0"))}),
+        meta(QStringLiteral("NumericDisplay"), QT_TR_NOOP("数值显示"), WidgetCategory::Display,
              QStringLiteral("seven_segment"), 160, 90,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("温度")),
-              str(QStringLiteral("value"), QStringLiteral("数值"), QStringLiteral("0.00"), true),
-              str(QStringLiteral("unit"), QStringLiteral("单位"), QStringLiteral("°C")),
-              integer(QStringLiteral("fontSize"), QStringLiteral("字号"), 28, 12, 72),
-              choice(QStringLiteral("displayFormat"), QStringLiteral("显示格式"), QStringLiteral("自动"),
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("温度")),
+              str(QStringLiteral("value"), QT_TR_NOOP("数值"), QStringLiteral("0.00"), true),
+              str(QStringLiteral("unit"), QT_TR_NOOP("单位"), QStringLiteral("°C")),
+              integer(QStringLiteral("fontSize"), QT_TR_NOOP("字号"), 28, 12, 72),
+              choice(QStringLiteral("displayFormat"), QT_TR_NOOP("显示格式"), QStringLiteral("自动"), // i18n: value
                      kDisplayFormats),
-              choice(QStringLiteral("decimals"), QStringLiteral("小数位数"), QStringLiteral("自动"), kDecimals)}),
-        meta(QStringLiteral("ProgressBar"), QStringLiteral("进度条"), WidgetCategory::Display,
+              choice(QStringLiteral("decimals"), QT_TR_NOOP("小数位数"),
+                     QStringLiteral("自动"), // i18n: value
+                     kDecimals)}),
+        meta(QStringLiteral("ProgressBar"), QT_TR_NOOP("进度条"), WidgetCategory::Display,
              QStringLiteral("progress_bar"), 250, 20,
-             {integer(QStringLiteral("value"), QStringLiteral("当前值"), 50, 0, 100, true),
-              integer(QStringLiteral("maximum"), QStringLiteral("最大值"), 100, 1, 99999)},
+             {integer(QStringLiteral("value"), QT_TR_NOOP("当前值"), 50, 0, 100, true),
+              integer(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100, 1, 99999)},
              30, 10),
-        meta(QStringLiteral("ProgressRingDisplay"), QStringLiteral("进度环"), WidgetCategory::Display,
+        meta(QStringLiteral("ProgressRingDisplay"), QT_TR_NOOP("进度环"), WidgetCategory::Display,
              QStringLiteral("progress_ring"), 120, 130,
-             {str(QStringLiteral("label"), QStringLiteral("标签"), QStringLiteral("进度")),
-              integer(QStringLiteral("value"), QStringLiteral("当前值"), 0, 0, 100, true),
-              integer(QStringLiteral("maximum"), QStringLiteral("最大值"), 100, 1, 99999)},
+             {str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("进度")),
+              integer(QStringLiteral("value"), QT_TR_NOOP("当前值"), 0, 0, 100, true),
+              integer(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100, 1, 99999)},
              80, 80),
-        meta(QStringLiteral("ImageDisplay"), QStringLiteral("图片显示"), WidgetCategory::Display,
-             QStringLiteral("photo"), 200, 150, {str(QStringLiteral("imagePath"), QStringLiteral("图片路径"), QString())}),
+        meta(QStringLiteral("ImageDisplay"), QT_TR_NOOP("图片显示"), WidgetCategory::Display, QStringLiteral("photo"),
+             200, 150, {str(QStringLiteral("imagePath"), QT_TR_NOOP("图片路径"), QString())}),
     };
 }
 
 QList<WidgetMeta> chartWidgets()
 {
-    const QStringList parseModes = {QStringLiteral("键值匹配"), QStringLiteral("JSON路径"),
-                                    QStringLiteral("HEX字节提取"), QStringLiteral("Modbus")};
+    const QStringList parseModes = {QStringLiteral("键值匹配"), QStringLiteral("JSON路径"),   // i18n: value
+                                    QStringLiteral("HEX字节提取"), QStringLiteral("Modbus")}; // i18n: value
     const QStringList mbTypes = {QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"),
                                  QStringLiteral("int32"), QStringLiteral("float32")};
     return {
-        meta(QStringLiteral("RealtimeChart"), QStringLiteral("实时曲线"), WidgetCategory::Chart,
-             QStringLiteral("market"), 400, 280,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("实时曲线")),
-              integer(QStringLiteral("displayPoints"), QStringLiteral("显示点数"), 200, 10, 10000),
-              integer(QStringLiteral("curveCount"), QStringLiteral("曲线数量"), 1, 1, 8),
-              integer(QStringLiteral("currentCurve"), QStringLiteral("当前编辑曲线"), 0, 0, 7),
-              // Per-curve virtual properties, stored as _curve_{i}_{field}.
-              str(QStringLiteral("curveName"), QStringLiteral("曲线名称"), QStringLiteral("曲线1")),
-              choice(QStringLiteral("curveParseMode"), QStringLiteral("解析模式"), QStringLiteral("键值匹配"),
-                     parseModes),
-              str(QStringLiteral("curveKey"), QStringLiteral("匹配键"), QString()),
-              str(QStringLiteral("curveJsonPath"), QStringLiteral("JSON路径"), QString()),
-              integer(QStringLiteral("curveByteOffset"), QStringLiteral("字节偏移"), 0, 0, 9999),
-              choice(QStringLiteral("curveDataType"), QStringLiteral("数据类型(HEX)"), QStringLiteral("float32"),
-                     kNumericTypes),
-              choice(QStringLiteral("curveByteOrder"), QStringLiteral("字节序(HEX)"), QStringLiteral("大端(BE)"),
-                     kByteOrders),
-              str(QStringLiteral("curveFrameHeader"), QStringLiteral("帧头(HEX)"), QString()),
-              str(QStringLiteral("curveFrameTail"), QStringLiteral("帧尾(HEX)"), QString()),
-              choice(QStringLiteral("curveMbArea"), QStringLiteral("寄存器区"), ModbusArea::HoldingRegisters,
-                     ModbusArea::options()),
-              integer(QStringLiteral("curveRegIndex"), QStringLiteral("寄存器地址"), 0, 0, 65535),
-              choice(QStringLiteral("curveMbDataType"), QStringLiteral("数据类型(MB)"), QStringLiteral("uint16"),
-                     mbTypes),
-              choice(QStringLiteral("curveMbRegOrder"), QStringLiteral("寄存器序(MB)"), QStringLiteral("大端(AB CD)"),
-                     {QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")}),
-              integer(QStringLiteral("curveMbFcFilter"), QStringLiteral("功能码过滤"), -1, -1, 255),
-              integer(QStringLiteral("curveMbSlaveFilter"), QStringLiteral("从站过滤"), -1, -1, 255)},
-             200, 150),
-        meta(QStringLiteral("GaugeMeter"), QStringLiteral("仪表盘"), WidgetCategory::Chart,
-             QStringLiteral("speed_high"), 180, 180,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("仪表")),
-              str(QStringLiteral("unit"), QStringLiteral("单位"), QString()),
-              real(QStringLiteral("value"), QStringLiteral("当前值"), 0.0, -99999, 99999, true),
-              real(QStringLiteral("minimum"), QStringLiteral("最小值"), 0.0, -99999, 99999),
-              real(QStringLiteral("maximum"), QStringLiteral("最大值"), 100.0, -99999, 99999)},
+        meta(
+            QStringLiteral("RealtimeChart"), QT_TR_NOOP("实时曲线"), WidgetCategory::Chart, QStringLiteral("market"),
+            400, 280,
+            {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("实时曲线")),
+             integer(QStringLiteral("displayPoints"), QT_TR_NOOP("显示点数"), 200, 10, 10000),
+             integer(QStringLiteral("curveCount"), QT_TR_NOOP("曲线数量"), 1, 1, 8),
+             integer(QStringLiteral("currentCurve"), QT_TR_NOOP("当前编辑曲线"), 0, 0, 7),
+             // Per-curve virtual properties, stored as _curve_{i}_{field}.
+             str(QStringLiteral("curveName"), QT_TR_NOOP("曲线名称"), QT_TR_NOOP("曲线1")),
+             choice(QStringLiteral("curveParseMode"), QT_TR_NOOP("解析模式"), QStringLiteral("键值匹配"), // i18n: value
+                    parseModes),
+             str(QStringLiteral("curveKey"), QT_TR_NOOP("匹配键"), QString()),
+             str(QStringLiteral("curveJsonPath"), QT_TR_NOOP("JSON路径"), QString()),
+             integer(QStringLiteral("curveByteOffset"), QT_TR_NOOP("字节偏移"), 0, 0, 9999),
+             choice(QStringLiteral("curveDataType"), QT_TR_NOOP("数据类型(HEX)"), QStringLiteral("float32"),
+                    kNumericTypes),
+             choice(QStringLiteral("curveByteOrder"), QT_TR_NOOP("字节序(HEX)"),
+                    QStringLiteral("大端(BE)"), // i18n: value
+                    kByteOrders),
+             str(QStringLiteral("curveFrameHeader"), QT_TR_NOOP("帧头(HEX)"), QString()),
+             str(QStringLiteral("curveFrameTail"), QT_TR_NOOP("帧尾(HEX)"), QString()),
+             choice(QStringLiteral("curveMbArea"), QT_TR_NOOP("寄存器区"), ModbusArea::HoldingRegisters,
+                    ModbusArea::options()),
+             integer(QStringLiteral("curveRegIndex"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535),
+             choice(QStringLiteral("curveMbDataType"), QT_TR_NOOP("数据类型(MB)"), QStringLiteral("uint16"), mbTypes),
+             choice(QStringLiteral("curveMbRegOrder"), QT_TR_NOOP("寄存器序(MB)"),
+                    QStringLiteral("大端(AB CD)"),                                   // i18n: value
+                    {QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")}), // i18n: value
+             integer(QStringLiteral("curveMbFcFilter"), QT_TR_NOOP("功能码过滤"), -1, -1, 255),
+             integer(QStringLiteral("curveMbSlaveFilter"), QT_TR_NOOP("从站过滤"), -1, -1, 255)},
+            200, 150),
+        meta(QStringLiteral("GaugeMeter"), QT_TR_NOOP("仪表盘"), WidgetCategory::Chart, QStringLiteral("speed_high"),
+             180, 180,
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("仪表")),
+              str(QStringLiteral("unit"), QT_TR_NOOP("单位"), QString()),
+              real(QStringLiteral("value"), QT_TR_NOOP("当前值"), 0.0, -99999, 99999, true),
+              real(QStringLiteral("minimum"), QT_TR_NOOP("最小值"), 0.0, -99999, 99999),
+              real(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100.0, -99999, 99999)},
              80, 80),
         // The Python designer files the data table under charts as well.
-        meta(QStringLiteral("DataTable"), QStringLiteral("数据表格"), WidgetCategory::Chart, QStringLiteral("table"),
-             350, 250,
-             {text(QStringLiteral("columns"), QStringLiteral("列名"), QStringLiteral("字段\n值")),
-              choice(QStringLiteral("recordMode"), QStringLiteral("记录方式"), QStringLiteral("最新值"),
-                     {QStringLiteral("最新值"), QStringLiteral("逐行记录")}),
-              integer(QStringLiteral("maxRows"), QStringLiteral("最大行数"), 500, 10, 50000)},
+        meta(QStringLiteral("DataTable"), QT_TR_NOOP("数据表格"), WidgetCategory::Chart, QStringLiteral("table"), 350,
+             250,
+             {text(QStringLiteral("columns"), QT_TR_NOOP("列名"), QT_TR_NOOP("字段\n值")),
+              choice(QStringLiteral("recordMode"), QT_TR_NOOP("记录方式"), QStringLiteral("最新值"), // i18n: value
+                     {QStringLiteral("最新值"), QStringLiteral("逐行记录")}),                        // i18n: value
+              integer(QStringLiteral("maxRows"), QT_TR_NOOP("最大行数"), 500, 10, 50000)},
              200, 100),
     };
 }
@@ -403,77 +433,81 @@ QList<WidgetMeta> chartWidgets()
 QList<WidgetMeta> commWidgets()
 {
     return {
-        meta(QStringLiteral("SerialConfigCard"), QStringLiteral("串口配置卡片"), WidgetCategory::Comm,
-             QStringLiteral("serial_port"), 360, 320,
-             QList<PropDef>{str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("串口配置")),
-                            choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
-                                   {QStringLiteral("完整"), QStringLiteral("简洁"), QStringLiteral("单行")})} +
-                 linkParsing(true) +
-                 QList<PropDef>{
-                     choice(QStringLiteral("defaultBaud"), QStringLiteral("默认波特率"), QStringLiteral("115200"),
-                            {QStringLiteral("9600"), QStringLiteral("19200"), QStringLiteral("38400"),
-                             QStringLiteral("57600"), QStringLiteral("115200"), QStringLiteral("230400"),
-                             QStringLiteral("460800"), QStringLiteral("921600")}),
-                     choice(QStringLiteral("defaultDatabits"), QStringLiteral("默认数据位"), QStringLiteral("8"),
-                            {QStringLiteral("5"), QStringLiteral("6"), QStringLiteral("7"), QStringLiteral("8")}),
-                     choice(QStringLiteral("defaultParity"), QStringLiteral("默认校验位"), QStringLiteral("None"),
-                            {QStringLiteral("None"), QStringLiteral("Even"), QStringLiteral("Odd"),
-                             QStringLiteral("Mark"), QStringLiteral("Space")}),
-                     choice(QStringLiteral("defaultStopbits"), QStringLiteral("默认停止位"), QStringLiteral("1"),
-                            {QStringLiteral("1"), QStringLiteral("1.5"), QStringLiteral("2")}),
-                     choice(QStringLiteral("defaultFlow"), QStringLiteral("默认流控制"), QStringLiteral("无"),
-                            {QStringLiteral("无"), QStringLiteral("RTS/CTS"), QStringLiteral("XON/XOFF"),
-                             QStringLiteral("DTR/DSR")})},
-             200, 50),
-        meta(QStringLiteral("TcpConfigCard"), QStringLiteral("TCP 配置卡片"), WidgetCategory::Comm,
-             QStringLiteral("globe"), 360, 250,
-             QList<PropDef>{str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("TCP 配置")),
-                            choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
-                                   {QStringLiteral("完整"), QStringLiteral("简洁")}),
-                            choice(QStringLiteral("defaultMode"), QStringLiteral("默认模式"), QStringLiteral("客户端"),
-                                   {QStringLiteral("客户端"), QStringLiteral("服务端")}),
-                            str(QStringLiteral("defaultHost"), QStringLiteral("默认地址"), QStringLiteral("127.0.0.1")),
-                            integer(QStringLiteral("defaultPort"), QStringLiteral("默认端口"), 8080, 1, 65535)} +
+        meta(
+            QStringLiteral("SerialConfigCard"), QT_TR_NOOP("串口配置卡片"), WidgetCategory::Comm,
+            QStringLiteral("serial_port"), 360, 320,
+            QList<PropDef>{
+                str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("串口配置")),
+                choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"), // i18n: value
+                       {QStringLiteral("完整"), QStringLiteral("简洁"), QStringLiteral("单行")})} +   // i18n: value
+                linkParsing(true) +
+                QList<PropDef>{
+                    choice(QStringLiteral("defaultBaud"), QT_TR_NOOP("默认波特率"), QStringLiteral("115200"),
+                           {QStringLiteral("9600"), QStringLiteral("19200"), QStringLiteral("38400"),
+                            QStringLiteral("57600"), QStringLiteral("115200"), QStringLiteral("230400"),
+                            QStringLiteral("460800"), QStringLiteral("921600")}),
+                    choice(QStringLiteral("defaultDatabits"), QT_TR_NOOP("默认数据位"), QStringLiteral("8"),
+                           {QStringLiteral("5"), QStringLiteral("6"), QStringLiteral("7"), QStringLiteral("8")}),
+                    choice(QStringLiteral("defaultParity"), QT_TR_NOOP("默认校验位"), QStringLiteral("None"),
+                           {QStringLiteral("None"), QStringLiteral("Even"), QStringLiteral("Odd"),
+                            QStringLiteral("Mark"), QStringLiteral("Space")}),
+                    choice(QStringLiteral("defaultStopbits"), QT_TR_NOOP("默认停止位"), QStringLiteral("1"),
+                           {QStringLiteral("1"), QStringLiteral("1.5"), QStringLiteral("2")}),
+                    choice(QStringLiteral("defaultFlow"), QT_TR_NOOP("默认流控制"), QStringLiteral("无"), // i18n: value
+                           {QStringLiteral("无"), QStringLiteral("RTS/CTS"), QStringLiteral("XON/XOFF"),  // i18n: value
+                            QStringLiteral("DTR/DSR")})},
+            200, 50),
+        meta(QStringLiteral("TcpConfigCard"), QT_TR_NOOP("TCP 配置卡片"), WidgetCategory::Comm, QStringLiteral("globe"),
+             360, 250,
+             QList<PropDef>{
+                 str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("TCP 配置")),
+                 choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"),   // i18n: value
+                        {QStringLiteral("完整"), QStringLiteral("简洁")}),                               // i18n: value
+                 choice(QStringLiteral("defaultMode"), QT_TR_NOOP("默认模式"), QStringLiteral("客户端"), // i18n: value
+                        {QStringLiteral("客户端"), QStringLiteral("服务端")}),                           // i18n: value
+                 str(QStringLiteral("defaultHost"), QT_TR_NOOP("默认地址"), QStringLiteral("127.0.0.1")),
+                 integer(QStringLiteral("defaultPort"), QT_TR_NOOP("默认端口"), 8080, 1, 65535)} +
                  linkParsing(true),
              240, 50),
-        meta(QStringLiteral("MqttConfigCard"), QStringLiteral("MQTT 配置卡片"), WidgetCategory::Comm,
+        meta(QStringLiteral("MqttConfigCard"), QT_TR_NOOP("MQTT 配置卡片"), WidgetCategory::Comm,
              QStringLiteral("cloud"), 380, 390,
              QList<PropDef>{
-                 str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("MQTT 配置")),
-                 choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
-                        {QStringLiteral("完整"), QStringLiteral("简洁")}),
-                 str(QStringLiteral("defaultHost"), QStringLiteral("默认服务器"), QStringLiteral("127.0.0.1")),
-                 integer(QStringLiteral("defaultPort"), QStringLiteral("默认端口"), 1883, 1, 65535),
-                 str(QStringLiteral("defaultClientId"), QStringLiteral("默认客户端ID"), QString()),
-                 str(QStringLiteral("defaultUsername"), QStringLiteral("默认用户名"), QString()),
-                 str(QStringLiteral("defaultPassword"), QStringLiteral("默认密码"), QString()),
-                 str(QStringLiteral("defaultSubscribe"), QStringLiteral("默认订阅主题"), QStringLiteral("device/data")),
-                 str(QStringLiteral("defaultPublish"), QStringLiteral("默认发布主题"), QStringLiteral("device/cmd")),
-                 choice(QStringLiteral("defaultQos"), QStringLiteral("默认 QoS"), QStringLiteral("0"),
+                 str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("MQTT 配置")),
+                 choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"), // i18n: value
+                        {QStringLiteral("完整"), QStringLiteral("简洁")}),                             // i18n: value
+                 str(QStringLiteral("defaultHost"), QT_TR_NOOP("默认服务器"), QStringLiteral("127.0.0.1")),
+                 integer(QStringLiteral("defaultPort"), QT_TR_NOOP("默认端口"), 1883, 1, 65535),
+                 str(QStringLiteral("defaultClientId"), QT_TR_NOOP("默认客户端ID"), QString()),
+                 str(QStringLiteral("defaultUsername"), QT_TR_NOOP("默认用户名"), QString()),
+                 str(QStringLiteral("defaultPassword"), QT_TR_NOOP("默认密码"), QString()),
+                 str(QStringLiteral("defaultSubscribe"), QT_TR_NOOP("默认订阅主题"), QStringLiteral("device/data")),
+                 str(QStringLiteral("defaultPublish"), QT_TR_NOOP("默认发布主题"), QStringLiteral("device/cmd")),
+                 choice(QStringLiteral("defaultQos"), QT_TR_NOOP("默认 QoS"), QStringLiteral("0"),
                         {QStringLiteral("0"), QStringLiteral("1"), QStringLiteral("2")}),
-                 boolean(QStringLiteral("defaultTls"), QStringLiteral("默认启用 TLS"), false)} +
+                 boolean(QStringLiteral("defaultTls"), QT_TR_NOOP("默认启用 TLS"), false)} +
                  linkParsing(false),
              260, 50),
-        meta(QStringLiteral("DataSendCard"), QStringLiteral("数据发送卡片"), WidgetCategory::Comm,
-             QStringLiteral("send"), 350, 140,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("数据发送")),
-              str(QStringLiteral("placeholder"), QStringLiteral("提示文字"), QStringLiteral("输入要发送的数据..."))},
+        meta(QStringLiteral("DataSendCard"), QT_TR_NOOP("数据发送卡片"), WidgetCategory::Comm, QStringLiteral("send"),
+             350, 140,
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("数据发送")),
+              str(QStringLiteral("placeholder"), QT_TR_NOOP("提示文字"), QT_TR_NOOP("输入要发送的数据..."))},
              240, 100),
-        meta(QStringLiteral("DataRecvCard"), QStringLiteral("数据接收卡片"), WidgetCategory::Comm,
+        meta(QStringLiteral("DataRecvCard"), QT_TR_NOOP("数据接收卡片"), WidgetCategory::Comm,
              QStringLiteral("download"), 350, 250,
-             {str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("数据接收")),
-              integer(QStringLiteral("maxLines"), QStringLiteral("最大行数"), 1000, 50, 50000)},
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("数据接收")),
+              integer(QStringLiteral("maxLines"), QT_TR_NOOP("最大行数"), 1000, 50, 50000)},
              240, 120),
-        meta(QStringLiteral("LogBox"), QStringLiteral("日志显示框"), WidgetCategory::Comm, QStringLiteral("document"),
-             400, 200, {integer(QStringLiteral("maxLines"), QStringLiteral("最大行数"), 500, 50, 50000)}, 200, 80),
+        meta(QStringLiteral("LogBox"), QT_TR_NOOP("日志显示框"), WidgetCategory::Comm, QStringLiteral("document"), 400,
+             200, {integer(QStringLiteral("maxLines"), QT_TR_NOOP("最大行数"), 500, 50, 50000)}, 200, 80),
         // The data table of the first link card whose modbusRole is 从站, one area of it.
-        meta(QStringLiteral("ModbusSlaveTable"), QStringLiteral("从站寄存器表"), WidgetCategory::Comm,
+        meta(QStringLiteral("ModbusSlaveTable"), QT_TR_NOOP("从站寄存器表"), WidgetCategory::Comm,
              QStringLiteral("table"), 260, 300,
-             {choice(QStringLiteral("mbArea"), QStringLiteral("区"), ModbusArea::HoldingRegisters,
-                     ModbusArea::options()),
-              described(choice(QStringLiteral("displayFormat"), QStringLiteral("显示格式"), QStringLiteral("无符号"),
-                               {QStringLiteral("无符号"), QStringLiteral("有符号"), QStringLiteral("十六进制")}),
-                        QStringLiteral("线圈和离散输入总是显示 0/1"))},
+             {choice(QStringLiteral("mbArea"), QT_TR_NOOP("区"), ModbusArea::HoldingRegisters, ModbusArea::options()),
+              described(choice(QStringLiteral("displayFormat"), QT_TR_NOOP("显示格式"),
+                               QStringLiteral("无符号"),                            // i18n: value
+                               {QStringLiteral("无符号"), QStringLiteral("有符号"), // i18n: value
+                                QStringLiteral("十六进制")}),                       // i18n: value
+                        QStringLiteral("线圈和离散输入总是显示 0/1"))},             // i18n: ignore
              160, 120),
     };
 }

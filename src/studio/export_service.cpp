@@ -50,11 +50,12 @@ bool copyTree(const QString &source, const QString &target, QString *error)
                                ? QDir(info.absolutePath()).relativeFilePath(info.symLinkTarget())
                                : info.symLinkTarget(),
                            target) ||
-               fail(error, QObject::tr("无法创建链接: %1").arg(target));
+               fail(error, QCoreApplication::translate("fhmi", "无法创建链接: %1").arg(target));
     }
     if (info.isDir()) {
         if (!QDir().mkpath(target)) {
-            return fail(error, QObject::tr("无法创建目录: %1").arg(QDir::toNativeSeparators(target)));
+            return fail(error,
+                        QCoreApplication::translate("fhmi", "无法创建目录: %1").arg(QDir::toNativeSeparators(target)));
         }
         const QStringList entries =
             QDir(source).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
@@ -66,7 +67,7 @@ bool copyTree(const QString &source, const QString &target, QString *error)
         return true;
     }
     if (!QFile::copy(source, target)) {
-        return fail(error, QObject::tr("无法复制: %1").arg(QDir::toNativeSeparators(source)));
+        return fail(error, QCoreApplication::translate("fhmi", "无法复制: %1").arg(QDir::toNativeSeparators(source)));
     }
     QFile::setPermissions(target, QFile::permissions(source));
     return true;
@@ -124,11 +125,14 @@ bool bundleImages(QJsonArray &widgets, const QDir &base, const QDir &assets, QSe
         if (widget.value(QStringLiteral("type")).toString() == QLatin1String("ImageDisplay") && !image.isEmpty()) {
             const QString source = QDir::isRelativePath(image) ? base.absoluteFilePath(image) : image;
             if (!QFileInfo(source).isReadable()) {
-                return fail(error, QObject::tr("图片不存在或不可读: %1").arg(QDir::toNativeSeparators(source)));
+                return fail(error, QCoreApplication::translate("fhmi", "图片不存在或不可读: %1")
+                                       .arg(QDir::toNativeSeparators(source)));
             }
             const QString name = assetName(source, used);
             if (!assets.mkpath(QStringLiteral(".")) || !QFile::copy(source, assets.filePath(name))) {
-                return fail(error, QObject::tr("无法复制图片: %1").arg(QDir::toNativeSeparators(source)));
+                return fail(
+                    error,
+                    QCoreApplication::translate("fhmi", "无法复制图片: %1").arg(QDir::toNativeSeparators(source)));
             }
             props.insert(QStringLiteral("imagePath"), QStringLiteral("assets/") + name);
             widget.insert(QStringLiteral("properties"), props);
@@ -156,7 +160,7 @@ bool rebrandInfoPlist(const QString &plistPath, const QString &appName, const QS
 {
     QFile file(plistPath);
     if (!file.open(QIODevice::ReadOnly)) {
-        return fail(error, QObject::tr("无法读取 Info.plist"));
+        return fail(error, QCoreApplication::translate("fhmi", "无法读取 Info.plist"));
     }
     QString plist = QString::fromUtf8(file.readAll());
     file.close();
@@ -182,7 +186,7 @@ bool rebrandInfoPlist(const QString &plistPath, const QString &appName, const QS
         setKey(QStringLiteral("CFBundleIconFile"), iconFile);
     }
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return fail(error, QObject::tr("无法写入 Info.plist"));
+        return fail(error, QCoreApplication::translate("fhmi", "无法写入 Info.plist"));
     }
     file.write(plist.toUtf8());
     return true;
@@ -191,7 +195,7 @@ bool rebrandInfoPlist(const QString &plistPath, const QString &appName, const QS
 // The bundle's icon, made by iconutil (part of every macOS) from an iconset of the image.
 bool writeIcns(const QImage &image, const QString &target, QString *error)
 {
-    const QString cannot = QObject::tr("无法生成应用图标");
+    const QString cannot = QCoreApplication::translate("fhmi", "无法生成应用图标");
     QTemporaryDir dir;
     const QString iconset = dir.filePath(QStringLiteral("icon.iconset"));
     if (!dir.isValid() || !QDir().mkpath(iconset)) {
@@ -315,7 +319,8 @@ BOOL CALLBACK collectLanguage(HMODULE, LPCWSTR, LPCWSTR, WORD language, LONG_PTR
 
 bool replaceProgramIcon(const QString &exe, const QList<IconImage> &images, QString *error)
 {
-    const QString cannot = QObject::tr("无法写入程序图标: %1").arg(QDir::toNativeSeparators(exe));
+    const QString cannot =
+        QCoreApplication::translate("fhmi", "无法写入程序图标: %1").arg(QDir::toNativeSeparators(exe));
     const std::wstring path = QDir::toNativeSeparators(exe).toStdWString();
     QList<IconGroup> groups;
     HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
@@ -425,7 +430,8 @@ QByteArray versionString(const QString &key, const QString &text)
 // version numbers stay the runtime's, and like PyQt UI Designer's exports it names no company or copyright.
 bool renameProgram(const QString &exe, const QString &appName, QString *error)
 {
-    const QString cannot = QObject::tr("无法写入程序信息: %1").arg(QDir::toNativeSeparators(exe));
+    const QString cannot =
+        QCoreApplication::translate("fhmi", "无法写入程序信息: %1").arg(QDir::toNativeSeparators(exe));
     const std::wstring path = QDir::toNativeSeparators(exe).toStdWString();
     HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
     if (!module) {
@@ -536,7 +542,7 @@ QString ExportService::exportApplication(const Project &project, const QString &
 {
     const QString runtime = runtimePath();
     if (runtime.isEmpty()) {
-        fail(error, QObject::tr("找不到 FluentHMI Runtime，请确认它与 Studio 一同安装"));
+        fail(error, QCoreApplication::translate("fhmi", "找不到 FluentHMI Runtime，请确认它与 Studio 一同安装"));
         return QString();
     }
     const QString name = safeName(project.appName);
@@ -545,7 +551,8 @@ QString ExportService::exportApplication(const Project &project, const QString &
     const QString iconSource = project.iconPath();
     const QImage icon = iconSource.isEmpty() ? QImage() : largestImage(iconSource);
     if (!iconSource.isEmpty() && icon.isNull()) {
-        fail(error, QObject::tr("图标不存在或不可读: %1").arg(QDir::toNativeSeparators(iconSource)));
+        fail(error,
+             QCoreApplication::translate("fhmi", "图标不存在或不可读: %1").arg(QDir::toNativeSeparators(iconSource)));
         return QString();
     }
 
@@ -557,7 +564,7 @@ QString ExportService::exportApplication(const Project &project, const QString &
     const QString resources = target;
 #endif
     if (QFileInfo::exists(target)) {
-        fail(error, QObject::tr("目标已存在: %1").arg(QDir::toNativeSeparators(target)));
+        fail(error, QCoreApplication::translate("fhmi", "目标已存在: %1").arg(QDir::toNativeSeparators(target)));
         return QString();
     }
 
@@ -620,7 +627,8 @@ QString ExportService::exportApplication(const Project &project, const QString &
     for (const QString &file : std::as_const(files)) {
         const QString target = QDir(staging).filePath(file);
         if (!QDir().mkpath(QFileInfo(target).absolutePath())) {
-            fail(error, QObject::tr("无法创建目录: %1").arg(QDir::toNativeSeparators(QFileInfo(target).absolutePath())));
+            fail(error, QCoreApplication::translate("fhmi", "无法创建目录: %1")
+                            .arg(QDir::toNativeSeparators(QFileInfo(target).absolutePath())));
             return abort(QString());
         }
         if (!copyTree(runtimeDir.filePath(file), target, error)) {
@@ -631,7 +639,7 @@ QString ExportService::exportApplication(const Project &project, const QString &
     const QString exe = QDir(staging).filePath(runtimeInfo.fileName());
     const QString renamed = QDir(staging).filePath(name + (runtimeInfo.suffix().isEmpty() ? QString() : QStringLiteral(".") + runtimeInfo.suffix()));
     if (exe != renamed && !QFile::rename(exe, renamed)) {
-        fail(error, QObject::tr("无法重命名程序"));
+        fail(error, QCoreApplication::translate("fhmi", "无法重命名程序"));
         return abort(QString());
     }
 #ifdef Q_OS_WIN
@@ -649,7 +657,7 @@ QString ExportService::exportApplication(const Project &project, const QString &
             images = iconImagesOf(icon);
         }
         if (images.isEmpty()) {
-            fail(error, QObject::tr("无法生成应用图标"));
+            fail(error, QCoreApplication::translate("fhmi", "无法生成应用图标"));
             return abort(QString());
         }
         if (!replaceProgramIcon(renamed, images, error)) {
@@ -661,7 +669,8 @@ QString ExportService::exportApplication(const Project &project, const QString &
     Q_UNUSED(resources);
 
     if (!QDir().mkpath(stagedResources)) {
-        fail(error, QObject::tr("无法创建目录: %1").arg(QDir::toNativeSeparators(stagedResources)));
+        fail(error,
+             QCoreApplication::translate("fhmi", "无法创建目录: %1").arg(QDir::toNativeSeparators(stagedResources)));
         return abort(QString());
     }
     QSet<QString> used;
@@ -676,7 +685,8 @@ QString ExportService::exportApplication(const Project &project, const QString &
         const QString copy = assetName(iconSource, used);
         const QDir assets(QDir(stagedResources).filePath(QStringLiteral("assets")));
         if (!assets.mkpath(QStringLiteral(".")) || !QFile::copy(iconSource, assets.filePath(copy))) {
-            fail(error, QObject::tr("无法复制图标: %1").arg(QDir::toNativeSeparators(iconSource)));
+            fail(error,
+                 QCoreApplication::translate("fhmi", "无法复制图标: %1").arg(QDir::toNativeSeparators(iconSource)));
             return abort(QString());
         }
         exported.icon = QStringLiteral("assets/") + copy;
@@ -684,9 +694,10 @@ QString ExportService::exportApplication(const Project &project, const QString &
     if (!exported.save(QDir(stagedResources).filePath(QStringLiteral("project.uidp")), error)) {
         return abort(QString());
     }
-    // The studio's theme mode and colour, as its preview shows them.
+    // The studio's theme mode and colour, as its preview shows them, and its language setting.
     if (!writeAppearance(stagedResources, FluentQt::FluentConfig::instance()->themeMode(),
-                         FluentQt::FluentConfig::instance()->themeColor(), error)) {
+                         FluentQt::FluentConfig::instance()->themeColor(),
+                         FluentQt::FluentConfig::instance()->localeName(), error)) {
         return abort(QString());
     }
 
@@ -701,7 +712,7 @@ QString ExportService::exportApplication(const Project &project, const QString &
     }
 #endif
     if (!QDir().rename(staging, target)) {
-        fail(error, QObject::tr("无法写入 %1").arg(QDir::toNativeSeparators(target)));
+        fail(error, QCoreApplication::translate("fhmi", "无法写入 %1").arg(QDir::toNativeSeparators(target)));
         return abort(QString());
     }
     return target;

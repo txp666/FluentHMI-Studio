@@ -1,5 +1,8 @@
 #include "core/widget_meta.h"
 
+#include "core/i18n.h"
+
+#include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 
 #include <algorithm>
@@ -10,15 +13,15 @@ QString categoryTitle(WidgetCategory category)
 {
     switch (category) {
     case WidgetCategory::Basic:
-        return QStringLiteral("基础控件");
+        return QCoreApplication::translate("fhmi", "基础控件");
     case WidgetCategory::Layout:
-        return QStringLiteral("布局容器");
+        return QCoreApplication::translate("fhmi", "布局容器");
     case WidgetCategory::Display:
-        return QStringLiteral("显示控件");
+        return QCoreApplication::translate("fhmi", "显示控件");
     case WidgetCategory::Chart:
-        return QStringLiteral("图表控件");
+        return QCoreApplication::translate("fhmi", "图表控件");
     case WidgetCategory::Comm:
-        return QStringLiteral("通信控件");
+        return QCoreApplication::translate("fhmi", "通信控件");
     }
     return QString();
 }
@@ -28,6 +31,20 @@ QJsonObject WidgetMeta::defaultProperties() const
     QJsonObject props;
     for (const PropDef &def : properties) {
         props.insert(def.name, def.defaultValue);
+    }
+    return props;
+}
+
+QJsonObject WidgetMeta::newWidgetProperties() const
+{
+    QJsonObject props = defaultProperties();
+    for (const PropDef &def : properties) {
+        if ((def.type == PropType::String || def.type == PropType::Text) && def.defaultValue.isString()) {
+            props.insert(def.name, translated(def.defaultValue.toString()));
+        }
+    }
+    if (typeName == QLatin1String("RealtimeChart")) { // a curve without a name shows 曲线1 whatever the language
+        props.insert(QStringLiteral("_curve_0_name"), QCoreApplication::translate("fhmi", "曲线%1").arg(1));
     }
     return props;
 }

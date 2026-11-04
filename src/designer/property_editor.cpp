@@ -2,6 +2,7 @@
 
 #include "comm/modbus_slave.h"
 #include "core/binding.h"
+#include "core/i18n.h"
 #include "core/protocol_parser.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
@@ -36,7 +37,7 @@ namespace {
 const QHash<QString, QSet<QString>> &modeVisibility()
 {
     static const QHash<QString, QSet<QString>> table = {
-        {QStringLiteral("文本"),
+        {QStringLiteral("文本"), // i18n: value
          {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
           QStringLiteral("commandNewline"), QStringLiteral("commandTemplate")}},
         {QStringLiteral("HEX"),
@@ -137,7 +138,7 @@ QJsonValue numberValue(double value, bool integral)
     return integral ? QJsonValue(qint64(std::llround(value))) : QJsonValue(value);
 }
 
-const QString kProjectParser = QStringLiteral("项目设置");
+const QString kProjectParser = QStringLiteral("项目设置"); // i18n: value
 
 // The rows a "line" parserConfig shows, then those of a "hex" one.
 const char *const kLineFrameKeys[] = {"separator", "terminator", "kvSeparator", "encoding"};
@@ -216,7 +217,8 @@ QJsonArray hexFieldsFromText(const QString &text, int *badLine)
         if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
             continue;
         }
-        QStringList parts = line.replace(QStringLiteral("，"), QStringLiteral(",")).split(QLatin1Char(','));
+        QStringList parts =
+            line.replace(QStringLiteral("，"), QStringLiteral(",")).split(QLatin1Char(',')); // i18n: ignore
         for (QString &part : parts) {
             part = part.trimmed();
         }
@@ -375,11 +377,12 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     }
     case PropType::Enum: {
         auto *combo = new FluentQt::ComboBox(m_content);
-        combo->addItems(def.options);
-        const QString current = value.toVariant().toString();
-        const int index = combo->findText(current);
-        combo->setCurrentIndex(index >= 0 ? index : 0);
-        connect(combo, &FluentQt::ComboBox::currentTextChanged, this, [commit](const QString &t) { commit(t); });
+        addValueItems(combo, def.options);
+        if (!selectValue(combo, value.toVariant().toString())) {
+            combo->setCurrentIndex(0);
+        }
+        connect(combo, &FluentQt::ComboBox::currentIndexChanged, this,
+                [combo, commit]() { commit(selectedValue(combo)); });
         return combo;
     }
     case PropType::Text: {
@@ -387,8 +390,9 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
         edit->setPlainText(value.toString());
         edit->setFixedHeight(84);
         if (def.name == QLatin1String("tabNames")) {
-            fluentToolTip(edit, tr("每行一个标签，离开输入框后应用，按序号保留页面。\n"
-                                   "减少页数时，超出页的控件移至最后一页；名称为空时保留“标签1”。"));
+            // clang-format off
+            fluentToolTip(edit, tr("每行一个标签，离开输入框后应用，按序号保留页面。\n减少页数时，超出页的控件移至最后一页；名称为空时保留“标签1”。"));
+            // clang-format on
             edit->onFinished = [edit, commit]() { commit(edit->toPlainText()); };
         } else {
             connect(edit, &QPlainTextEdit::textChanged, this, [edit, commit]() { commit(edit->toPlainText()); });
@@ -583,7 +587,7 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
     };
     const auto choice = [&](const char *key, const QStringList &options) {
         auto *combo = new FluentQt::ComboBox(m_content);
-        combo->addItems(options);
+        addValueItems(combo, options);
         // Case aside: an encoding is compared in lower case, so "GBK" in a file shows as gbk.
         const QString stored = config.value(QLatin1String(key)).toString();
         for (int i = 0; i < options.size(); ++i) {
@@ -591,8 +595,8 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
                 combo->setCurrentIndex(i);
             }
         }
-        connect(combo, &FluentQt::ComboBox::currentTextChanged, this,
-                [store, key](const QString &t) { store(key, t); });
+        connect(combo, &FluentQt::ComboBox::currentIndexChanged, this,
+                [combo, store, key]() { store(key, selectedValue(combo)); });
         return combo;
     };
 
@@ -703,8 +707,9 @@ QJsonValue PropertyEditor::itemValue(const PropDef &def) const
     if (!stored.isUndefined() && !stored.isNull()) {
         return stored;
     }
-    if (def.name == QLatin1String("curveName")) {
-        return tr("曲线%1").arg(m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0) + 1);
+    if (def.name == QLatin1String("curveName")) { // as the chart names a curve without one
+        const int curve = m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0);
+        return QStringLiteral("曲线%1").arg(curve + 1); // i18n: value
     }
     return def.defaultValue;
 }
@@ -715,6 +720,7 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
         return;
     }
     const QString key = storageKey(name);
+    const int curves = m_item->propertyValue(QStringLiteral("curveCount")).toInt(1);
     m_item->setPropertyValue(key, value);
     emit modified(QStringLiteral("property:%1:%2:%3").arg(m_item->widgetId(), key, detail));
     // These change which per-curve / per-page values, or which fields, the form shows;
@@ -725,6 +731,13 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
     if (structural.contains(name)) {
         if (name == QLatin1String("curveCount")) {
             const int count = m_item->propertyValue(QStringLiteral("curveCount")).toInt(1);
+            // Added curves are named in the interface language, as a new chart's first one is.
+            for (int i = curves; i < count; ++i) {
+                const QString curveName = QStringLiteral("_curve_%1_name").arg(i);
+                if (m_item->properties().value(curveName).isUndefined()) {
+                    m_item->setPropertyValue(curveName, tr("曲线%1").arg(i + 1));
+                }
+            }
             if (m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0) >= count) {
                 m_item->setPropertyValue(QStringLiteral("currentCurve"), count - 1);
             }
@@ -763,7 +776,7 @@ void PropertyEditor::buildItemForm()
     auto *headerLayout = new QFormLayout(header);
     headerLayout->setContentsMargins(12, 10, 12, 10);
     headerLayout->setSpacing(8);
-    headerLayout->addRow(new FluentQt::SubtitleLabel(meta.displayName, header));
+    headerLayout->addRow(new FluentQt::SubtitleLabel(translated(meta.displayName), header));
     auto *id = new FluentQt::LineEdit(header);
     id->setText(m_item->widgetId());
     connect(id, &QLineEdit::editingFinished, this, [this, id]() {
@@ -824,7 +837,7 @@ void PropertyEditor::buildItemForm()
             QWidget *editor = createEditor(def, itemValue(def), [this, name](const QJsonValue &v) {
                 commitProperty(name, v);
             });
-            addRow(props, name, def.label, editor);
+            addRow(props, name, translated(def.label), editor);
         }
     }
     // A link card with a mode of its own frames with its own settings, edited like the project's.
@@ -860,17 +873,19 @@ void PropertyEditor::buildBindingForm()
         addRow(form, QStringLiteral("binding.") + QLatin1String(key), label, editor);
         const QString field = QLatin1String(key);
         if (auto *box = qobject_cast<FluentQt::ComboBox *>(editor)) {
-            connect(box, &FluentQt::ComboBox::currentTextChanged, this, [this, field]() { commitBinding(field); });
+            connect(box, &FluentQt::ComboBox::currentIndexChanged, this, [this, field]() { commitBinding(field); });
         } else if (auto *edit = qobject_cast<QLineEdit *>(editor)) {
             connect(edit, &QLineEdit::textChanged, this, [this, field]() { commitBinding(field); });
         } else if (auto *number = qobject_cast<QSpinBox *>(editor)) {
             connect(number, qOverload<int>(&QSpinBox::valueChanged), this, [this, field]() { commitBinding(field); });
         }
     };
-    const auto combo = [this](const QStringList &items, const QString &current) {
+    const auto combo = [this](const QStringList &values, const QString &current) {
         auto *box = new FluentQt::ComboBox(m_content);
-        box->addItems(items);
-        box->setCurrentIndex(std::max(0, box->findText(current)));
+        addValueItems(box, values);
+        if (!selectValue(box, current)) {
+            box->setCurrentIndex(0);
+        }
         return box;
     };
     const auto line = [this](const QString &text, const QString &placeholder) {
@@ -897,8 +912,8 @@ void PropertyEditor::buildBindingForm()
                QStringLiteral("uint32"), QStringLiteral("int32"), QStringLiteral("float32"), QStringLiteral("ASCII")},
               value("dataType", QStringLiteral("uint16")).toString()));
     add("byteOrder", tr("字节序"),
-        combo({QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")},
-              value("byteOrder", QStringLiteral("大端(BE)")).toString()));
+        combo({QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")},    // i18n: value
+              value("byteOrder", QStringLiteral("大端(BE)")).toString())); // i18n: value
     add("frameHeader", tr("帧头(HEX)"), line(value("frameHeader", QString()).toString(), tr("如 AA 55")));
     add("frameTail", tr("帧尾(HEX)"), line(value("frameTail", QString()).toString(), tr("如 0D 0A")));
     add("mbArea", tr("寄存器区"),
@@ -909,8 +924,8 @@ void PropertyEditor::buildBindingForm()
                QStringLiteral("float32")},
               value("mbDataType", QStringLiteral("uint16")).toString()));
     add("mbRegOrder", tr("寄存器序"),
-        combo({QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")},
-              value("mbRegOrder", QStringLiteral("大端(AB CD)")).toString()));
+        combo({QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")},  // i18n: value
+              value("mbRegOrder", QStringLiteral("大端(AB CD)")).toString())); // i18n: value
     add("mbFcFilter", tr("功能码过滤"), spin(-1, 255, value("mbFcFilter", -1).toInt()));
     add("mbSlaveFilter", tr("从站过滤"), spin(-1, 247, value("mbSlaveFilter", -1).toInt()));
     auto *period = spin(0, 60000, value("mbPeriod", 0).toInt());
@@ -929,7 +944,7 @@ void PropertyEditor::commitBinding(const QString &field)
     const auto textOf = [this](const char *key) {
         QWidget *editor = m_bindingEditors.value(QLatin1String(key));
         if (auto *combo = qobject_cast<FluentQt::ComboBox *>(editor)) {
-            return combo->currentText();
+            return selectedValue(combo);
         }
         if (auto *edit = qobject_cast<QLineEdit *>(editor)) {
             return edit->text().trimmed();
@@ -1041,7 +1056,7 @@ void PropertyEditor::updateVisibility()
     }
     if (!m_bindingEditors.isEmpty()) {
         const auto *combo = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("parseMode")));
-        const QString mode = combo ? combo->currentText() : ParseMode::KeyValue;
+        const QString mode = combo ? selectedValue(combo) : ParseMode::KeyValue;
         setRowVisible(QStringLiteral("binding.key"), mode == ParseMode::KeyValue);
         setRowVisible(QStringLiteral("binding.jsonPath"), mode == ParseMode::JsonPath);
         for (const char *field : {"byteOffset", "dataType", "byteOrder", "frameHeader", "frameTail"}) {

@@ -1,5 +1,6 @@
 #include "studio/update_dialog.h"
 
+#include "core/i18n.h"
 #include "studio/update_installer.h"
 #include "studio/update_service.h"
 
@@ -27,7 +28,8 @@ UpdateDialog::UpdateDialog(const ReleaseInfo &release, UpdateService *service, U
     auto *title = new FluentQt::SubtitleLabel(tr("发现新版本 %1").arg(release.tag), this);
     auto *versions = new FluentQt::BodyLabel(tr("当前版本 v%1").arg(QStringLiteral(FHMI_VERSION)), this);
     auto *notes = new FluentQt::TextBrowser(this);
-    notes->setMarkdown(release.notes.isEmpty() ? tr("（这个版本没有更新说明）") : release.notes);
+    const QString text = UpdateRelease::notesFor(release.notes, language() == kLanguageEnglish);
+    notes->setMarkdown(text.isEmpty() ? tr("（这个版本没有更新说明）") : text);
     notes->setOpenExternalLinks(true);
     notes->setMinimumWidth(460);
     notes->setFixedHeight(220);

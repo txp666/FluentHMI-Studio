@@ -286,7 +286,7 @@ void ModbusPoller::poll()
                      how, [this, next, plan](const ModbusResult &result) { blockDone(next, plan, result); });
     if (!sent) { // no link could write it: the block went without a reply this time
         ModbusResult failed;
-        failed.problem = QStringLiteral("发送失败");
+        failed.problem = tr("发送失败");
         blockDone(next, plan, failed);
     }
 }

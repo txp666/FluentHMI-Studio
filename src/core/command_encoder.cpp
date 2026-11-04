@@ -3,6 +3,7 @@
 #include "core/hex_utils.h"
 #include "core/protocol_parser.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QtEndian>
 
@@ -96,7 +97,7 @@ std::optional<QByteArray> packedPayload(const QString &value, const QString &typ
 
 QString newline(const QString &option)
 {
-    if (option == QStringLiteral("无")) {
+    if (option == QStringLiteral("无")) { // i18n: value
         return QString();
     }
     if (option == QLatin1String("\\n")) {
@@ -108,7 +109,7 @@ QString newline(const QString &option)
     return QStringLiteral("\r\n");
 }
 
-const QString kHexError = QStringLiteral("HEX 格式错误，请检查内容、帧头和帧尾");
+QString hexError() { return QCoreApplication::translate("fhmi", "HEX 格式错误，请检查内容、帧头和帧尾"); }
 
 } // namespace
 
@@ -118,10 +119,10 @@ namespace {
 const QList<QPair<QString, int>> &functionTable()
 {
     static const QList<QPair<QString, int>> table = {
-        {QStringLiteral("01 读线圈"), 0x01},       {QStringLiteral("02 读离散输入"), 0x02},
-        {QStringLiteral("03 读保持寄存器"), 0x03}, {QStringLiteral("04 读输入寄存器"), 0x04},
-        {QStringLiteral("05 写单线圈"), 0x05},     {QStringLiteral("06 写单寄存器"), 0x06},
-        {QStringLiteral("16 写多个寄存器"), 0x10},
+        {QStringLiteral("01 读线圈"), 0x01},       {QStringLiteral("02 读离散输入"), 0x02},   // i18n: value
+        {QStringLiteral("03 读保持寄存器"), 0x03}, {QStringLiteral("04 读输入寄存器"), 0x04}, // i18n: value
+        {QStringLiteral("05 写单线圈"), 0x05},     {QStringLiteral("06 写单寄存器"), 0x06},   // i18n: value
+        {QStringLiteral("16 写多个寄存器"), 0x10},                                            // i18n: value
     };
     return table;
 }
@@ -157,7 +158,7 @@ QStringList dataTypes()
 
 QStringList registerOrders()
 {
-    return {QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")};
+    return {QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")}; // i18n: value
 }
 
 std::optional<QList<quint16>> modbusRegisters(const QString &value, const QString &dataType,
@@ -170,9 +171,9 @@ std::optional<QList<quint16>> modbusRegisters(const QString &value, const QStrin
         return std::nullopt;
     };
     if (!dataTypes().contains(dataType)) {
-        return fail(QStringLiteral("未知的 Modbus 数据类型: %1").arg(dataType));
+        return fail(QCoreApplication::translate("fhmi", "未知的 Modbus 数据类型: %1").arg(dataType));
     }
-    const QString invalid = QStringLiteral("Modbus 值无效或超出 %1 的范围").arg(dataType);
+    const QString invalid = QCoreApplication::translate("fhmi", "Modbus 值无效或超出 %1 的范围").arg(dataType);
     quint32 bits = 0;
     if (dataType == QLatin1String("float32")) {
         bool ok = false;
@@ -229,7 +230,7 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
         return std::nullopt;
     };
     if (slave < 1 || slave > 247 || address < 0 || address > 65535) {
-        return fail(QStringLiteral("Modbus 从站地址或寄存器地址超出范围"));
+        return fail(QCoreApplication::translate("fhmi", "Modbus 从站地址或寄存器地址超出范围"));
     }
     bool valid = false;
     if (func == 1 || func == 2) {
@@ -242,7 +243,7 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
         valid = value >= 0 && value <= 65535;
     }
     if (!valid) {
-        return fail(QStringLiteral("Modbus 值或读取数量超出功能码允许范围"));
+        return fail(QCoreApplication::translate("fhmi", "Modbus 值或读取数量超出功能码允许范围"));
     }
     return ModbusRequest{int(slave), int(func), int(address), int(value), {}};
 }
@@ -259,22 +260,22 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
     if (func != 0x06 && func != 0x10) {
         const auto number = integerText(value);
         if (!number) {
-            return fail(QStringLiteral("Modbus 地址和值必须是整数"));
+            return fail(QCoreApplication::translate("fhmi", "Modbus 地址和值必须是整数"));
         }
         return modbusRequest(slave, func, address, *number, error);
     }
     if (slave < 1 || slave > 247 || address < 0 || address > 65535) {
-        return fail(QStringLiteral("Modbus 从站地址或寄存器地址超出范围"));
+        return fail(QCoreApplication::translate("fhmi", "Modbus 从站地址或寄存器地址超出范围"));
     }
     if (func == 0x06 && dataType != QLatin1String("uint16") && dataType != QLatin1String("int16")) {
-        return fail(QStringLiteral("32 位数据占两个寄存器，请用 16 写多个寄存器"));
+        return fail(QCoreApplication::translate("fhmi", "32 位数据占两个寄存器，请用 16 写多个寄存器"));
     }
     const auto registers = modbusRegisters(value, dataType, regOrder, error);
     if (!registers) {
         return std::nullopt;
     }
     if (address + registers->size() > 65536) {
-        return fail(QStringLiteral("Modbus 从站地址或寄存器地址超出范围"));
+        return fail(QCoreApplication::translate("fhmi", "Modbus 从站地址或寄存器地址超出范围"));
     }
     if (func == 0x06) {
         return ModbusRequest{int(slave), 0x06, int(address), registers->first(), {}};
@@ -312,9 +313,9 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
     const auto address = integerProp(props, "mbAddress", 0);
     const auto amount = integerProp(props, "mbValue", 1);
     if (!slave || !address || (!value && !amount)) {
-        return CommandResult::failure(QStringLiteral("Modbus 地址和值必须是整数"));
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "Modbus 地址和值必须是整数"));
     }
-    const int func = functionCode(prop(props, "mbFunc", QStringLiteral("06 写单寄存器")));
+    const int func = functionCode(prop(props, "mbFunc", QStringLiteral("06 写单寄存器"))); // i18n: value
     QString error;
     const auto request = modbusRequest(*slave, func, *address, value ? *value : QString::number(*amount),
                                        prop(props, "mbDataType", QStringLiteral("uint16")),
@@ -330,7 +331,7 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
 
 CommandResult encode(const QJsonObject &props, const QString &value)
 {
-    const QString mode = prop(props, "commandMode", QStringLiteral("文本"));
+    const QString mode = prop(props, "commandMode", QStringLiteral("文本")); // i18n: value
     const QString templ = prop(props, "commandTemplate", QStringLiteral("{value}"));
     const QString header = prop(props, "frameHeader", QString());
     const QString tail = prop(props, "frameTail", QString());
@@ -341,13 +342,14 @@ CommandResult encode(const QJsonObject &props, const QString &value)
 
     EncodedCommand command;
     if (mode == QLatin1String("HEX")) {
-        const QString type = prop(props, "dataType", QStringLiteral("HEX字符串"));
+        const QString type = prop(props, "dataType", QStringLiteral("HEX字符串")); // i18n: value
         QString hexText;
-        if (type != QStringLiteral("HEX字符串")) {
-            const bool be = prop(props, "byteOrder", QStringLiteral("大端(BE)")) == QStringLiteral("大端(BE)");
+        if (type != QStringLiteral("HEX字符串")) { // i18n: value
+            const bool be =
+                prop(props, "byteOrder", QStringLiteral("大端(BE)")) == QStringLiteral("大端(BE)"); // i18n: value
             const auto payload = packedPayload(value, type, be);
             if (!payload) {
-                return CommandResult::failure(QStringLiteral("数值无效或超出数据类型范围"));
+                return CommandResult::failure(QCoreApplication::translate("fhmi", "数值无效或超出数据类型范围"));
             }
             hexText = templ;
             hexText.replace(QStringLiteral("{value}"), QString::fromLatin1(payload->toHex()));
@@ -357,7 +359,7 @@ CommandResult encode(const QJsonObject &props, const QString &value)
         }
         const auto frame = hexFrame(hexText, header, tail);
         if (!frame) {
-            return CommandResult::failure(kHexError);
+            return CommandResult::failure(hexError());
         }
         command.bytes = *frame;
         return CommandResult::ok(command);

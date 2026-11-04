@@ -3,6 +3,7 @@
 #include "core/gbk_table.h"
 #include "core/hex_utils.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QRegularExpression>
@@ -893,21 +894,22 @@ namespace HexOptions {
 
 const QStringList &checksums()
 {
-    static const QStringList names = {QStringLiteral("无"),           QStringLiteral("和校验"),
-                                      QStringLiteral("异或"),         QStringLiteral("CRC8"),
+    static const QStringList names = {QStringLiteral("无"),           QStringLiteral("和校验"), // i18n: value
+                                      QStringLiteral("异或"),         QStringLiteral("CRC8"),   // i18n: value
                                       QStringLiteral("CRC16-Modbus"), QStringLiteral("CRC16-CCITT")};
     return names;
 }
 
 const QStringList &byteOrders()
 {
-    static const QStringList names = {QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")};
+    static const QStringList names = {QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")}; // i18n: value
     return names;
 }
 
 const QStringList &lengthCovers()
 {
-    static const QStringList names = {QStringLiteral("数据"), QStringLiteral("长度字段之后"), QStringLiteral("整帧")};
+    static const QStringList names = {QStringLiteral("数据"),                                  // i18n: value
+                                      QStringLiteral("长度字段之后"), QStringLiteral("整帧")}; // i18n: value
     return names;
 }
 
@@ -1570,21 +1572,21 @@ std::optional<LineFrameConfig> lineFrameConfig(const QJsonObject &config, QStrin
     LineFrameConfig out;
     out.separator = config.value(QStringLiteral("separator")).toString(out.separator);
     if (out.separator.isEmpty()) {
-        return fail(QStringLiteral("行分隔符不能为空"));
+        return fail(QCoreApplication::translate("fhmi", "行分隔符不能为空"));
     }
     const QJsonValue terminator = config.value(QStringLiteral("terminator"));
     if (!terminator.isUndefined() && (!terminator.isString() || terminator.toString().isEmpty())) {
-        return fail(QStringLiteral("行结束符不能为空"));
+        return fail(QCoreApplication::translate("fhmi", "行结束符不能为空"));
     }
     out.terminator = terminator.toString(out.terminator);
     const QJsonValue kv = config.value(QStringLiteral("kvSeparator"));
     if (!kv.isUndefined() && !LineOptions::kvSeparators().contains(kv.toString())) {
-        return fail(QStringLiteral("键值分隔符只能是 = 或 :"));
+        return fail(QCoreApplication::translate("fhmi", "键值分隔符只能是 = 或 :"));
     }
     out.kvSeparator = kv.toString(out.kvSeparator);
     const QJsonValue encoding = config.value(QStringLiteral("encoding"));
     if (!encoding.isUndefined() && !LineOptions::encodings().contains(encoding.toString().toLower())) {
-        return fail(QStringLiteral("编码只能是 utf-8、gbk 或 ascii"));
+        return fail(QCoreApplication::translate("fhmi", "编码只能是 utf-8、gbk 或 ascii"));
     }
     out.encoding = encoding.toString(out.encoding).toLower();
     return out;
@@ -1608,15 +1610,15 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
     // Something has to end a frame; a setting that is present but invalid is reported below.
     if (footer && footer->isEmpty() && lengthOffset && *lengthOffset < 0 && fixedLength && *fixedLength == 0 &&
         idleTimeout && *idleTimeout == 0) {
-        return fail(QStringLiteral("HEX 帧需要帧尾、长度字段、固定帧长或空闲超时之一来分帧"));
+        return fail(QCoreApplication::translate("fhmi", "HEX 帧需要帧尾、长度字段、固定帧长或空闲超时之一来分帧"));
     }
     if (!header || !footer) {
-        return fail(QStringLiteral("HEX 帧头或帧尾不是十六进制"));
+        return fail(QCoreApplication::translate("fhmi", "HEX 帧头或帧尾不是十六进制"));
     }
     out.header = *header;
     out.footer = *footer;
     if (fixedLength && *fixedLength > 0 && lengthOffset && *lengthOffset >= 0) {
-        return fail(QStringLiteral("固定帧长和长度字段只能选一个"));
+        return fail(QCoreApplication::translate("fhmi", "固定帧长和长度字段只能选一个"));
     }
     const QString lengthEndian =
         config.value(QStringLiteral("lengthEndian")).toString(HexOptions::byteOrders().first());
@@ -1627,19 +1629,19 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
     };
     if (!lengthOffset || *lengthOffset < -1 || !lengthSize || (*lengthSize != 1 && *lengthSize != 2) ||
         !stringIn("lengthEndian", HexOptions::byteOrders()) || !stringIn("lengthCovers", HexOptions::lengthCovers())) {
-        return fail(QStringLiteral("HEX 长度字段设置无效"));
+        return fail(QCoreApplication::translate("fhmi", "HEX 长度字段设置无效"));
     }
     out.lengthOffset = *lengthOffset;
     out.lengthSize = *lengthSize;
     out.lengthLittleEndian = lengthEndian == HexOptions::byteOrders().at(1);
     out.lengthCovers = HexFrameConfig::LengthCovers(HexOptions::lengthCovers().indexOf(covers));
     if (!fixedLength || *fixedLength < 0 || *fixedLength > 65536) {
-        return fail(QStringLiteral("HEX 固定帧长无效"));
+        return fail(QCoreApplication::translate("fhmi", "HEX 固定帧长无效"));
     }
     out.fixedLength = *fixedLength;
     if (!stringIn("checksum", HexOptions::checksums()) || !checksumStart || *checksumStart < 0 ||
         !stringIn("checksumEndian", HexOptions::byteOrders())) {
-        return fail(QStringLiteral("HEX 校验设置无效"));
+        return fail(QCoreApplication::translate("fhmi", "HEX 校验设置无效"));
     }
     out.checksum = HexChecksum(HexOptions::checksums().indexOf(
         config.value(QStringLiteral("checksum")).toString(HexOptions::checksums().first())));
@@ -1647,13 +1649,14 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
     out.checksumLittleEndian =
         config.value(QStringLiteral("checksumEndian")).toString() == HexOptions::byteOrders().at(1);
     if (!idleTimeout || *idleTimeout < 0 || *idleTimeout > 60000) {
-        return fail(QStringLiteral("HEX 空闲超时无效"));
+        return fail(QCoreApplication::translate("fhmi", "HEX 空闲超时无效"));
     }
     out.idleTimeout = *idleTimeout;
 
     const QJsonValue fieldList = config.value(QStringLiteral("fields"));
     if (!fieldList.isUndefined() && !fieldList.isNull() && !fieldList.isArray()) {
-        return fail(QStringLiteral("无效 HEX 字段: ")); // a table that is not a list, as the Python designer reports it
+        // A table that is not a list, as the Python designer reports it.
+        return fail(QCoreApplication::translate("fhmi", "无效 HEX 字段: "));
     }
     for (const QJsonValue &value : fieldList.toArray()) {
         const QJsonArray item = value.toArray();
@@ -1674,7 +1677,7 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
             item.size() == 4 || (item.at(4).isString() && HexOptions::byteOrders().contains(item.at(4).toString()));
         if ((item.size() != 4 && item.size() != 5) || !offset || *offset < 0 || !length || *length <= 0 ||
             !HexOptions::fieldTypes().contains(type) || (size && size != *length) || !endianOk) {
-            return fail(QStringLiteral("无效 HEX 字段: %1").arg(name));
+            return fail(QCoreApplication::translate("fhmi", "无效 HEX 字段: %1").arg(name));
         }
         out.fields.append(HexField{name, *offset, *length, type,
                                    item.size() == 5 && item.at(4).toString() == HexOptions::byteOrders().at(1)});
@@ -1710,7 +1713,7 @@ std::unique_ptr<Parser> createParser(const QString &type, const QJsonObject &con
     if (type == QLatin1String("modbus_ascii")) {
         return std::make_unique<ModbusAsciiParser>(fieldNames(config), std::move(requests));
     }
-    setError(error, QStringLiteral("未知解析模式: %1").arg(type));
+    setError(error, QCoreApplication::translate("fhmi", "未知解析模式: %1").arg(type));
     return nullptr;
 }
 

@@ -1,5 +1,7 @@
 #include "designer/widget_palette.h"
 
+#include "core/i18n.h"
+
 #include "core/widget_meta.h"
 #include "designer/design_scene.h"
 #include "runtime/hmi_widget.h"
@@ -60,7 +62,7 @@ WidgetPalette::WidgetPalette(QWidget *parent) : QWidget(parent)
         auto *group = new QTreeWidgetItem(m_tree, {categoryTitle(category)});
         group->setFlags(Qt::ItemIsEnabled);
         for (const WidgetMeta *meta : registry.byCategory(category)) {
-            auto *item = new QTreeWidgetItem(group, {meta->displayName});
+            auto *item = new QTreeWidgetItem(group, {translated(meta->displayName)});
             item->setIcon(0, widgetIcon(meta->icon));
             item->setData(0, TypeRole, meta->typeName);
             item->setToolTip(0, meta->typeName);

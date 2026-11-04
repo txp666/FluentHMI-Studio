@@ -5,8 +5,8 @@
 namespace fhmi {
 
 // The line in docs/uidp-format.md and docs/uidp-widgets.md after which the generated part starts.
-inline const QString GeneratedMarker =
-    QStringLiteral("<!-- 以下由 uidp_reference（tools/uidp_reference.cpp）从控件注册表生成，不要手改 -->");
+inline const QString GeneratedMarker = QStringLiteral(
+    "<!-- 以下由 uidp_reference（tools/uidp_reference.cpp）从控件注册表生成，不要手改 -->"); // i18n: ignore
 
 // The widget list that ends docs/uidp-format.md as Markdown: one line per category, each widget type with its
 // name and default size.

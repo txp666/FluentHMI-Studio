@@ -1,10 +1,10 @@
+#include "runtime/appearance.h"
 #include "studio/export_service.h"
 #include "studio/main_window.h"
 #include "studio/update_controller.h"
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Theme.h>
-#include <FluentQtWidgets/Translator.h>
 
 #include <QtCore/QCommandLineParser>
 #include <QtCore/QDir>
@@ -18,8 +18,6 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     Q_INIT_RESOURCE(app);
     Q_INIT_RESOURCE(fluentqtwidgets);
-    // The studio's texts are Chinese, so FluentQtWidgets' own (On/Off, the colour dialog) are too.
-    FluentQt::installFluentTranslator(&app, QLocale(QLocale::Chinese, QLocale::China));
     app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("FluentHMI"));
     QCoreApplication::setApplicationName(QStringLiteral("FluentHMI Studio"));
@@ -31,6 +29,9 @@ int main(int argc, char *argv[])
     QDir().mkpath(configDir);
     FluentQt::FluentConfig::instance()->setFileName(QDir(configDir).filePath(QStringLiteral("fluent.json")));
     FluentQt::FluentConfig::instance()->load();
+    // The language setting takes effect here, before the first window exists; FluentQtWidgets' own texts
+    // (On/Off, the colour dialog) follow it.
+    fhmi::installLanguage(&app, FluentQt::FluentConfig::instance()->localeName());
     FluentQt::ThemeManager::instance()->setTheme(FluentQt::FluentConfig::instance()->themeMode());
     FluentQt::ThemeManager::instance()->setAccentColor(FluentQt::FluentConfig::instance()->themeColor());
 

@@ -1,5 +1,9 @@
 #include "runtime/ui_helpers.h"
 
+#include "core/i18n.h"
+
+#include <FluentQtWidgets/Widgets/ComboBox.h>
+
 #include <FluentQtWidgets/StyleSheet.h>
 #include <FluentQtWidgets/Widgets/ToolTip.h>
 
@@ -74,6 +78,27 @@ QIcon iconFromFile(const QString &path)
         }
     }
     return icon;
+}
+
+void addValueItems(FluentQt::ComboBox *combo, const QStringList &values)
+{
+    for (const QString &value : values) {
+        combo->addItem(translated(value), QIcon(), value);
+    }
+}
+
+QString selectedValue(const FluentQt::ComboBox *combo)
+{
+    return combo->currentIndex() < 0 ? QString() : combo->currentData().toString();
+}
+
+bool selectValue(FluentQt::ComboBox *combo, const QString &value)
+{
+    const int index = combo->findData(value);
+    if (index >= 0) {
+        combo->setCurrentIndex(index);
+    }
+    return index >= 0;
 }
 
 } // namespace fhmi

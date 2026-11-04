@@ -1,7 +1,9 @@
 #include "comm/modbus_slave.h"
 
 #include "core/hex_utils.h"
+#include "core/i18n.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
 
 #include <algorithm>
@@ -28,20 +30,25 @@ void putU16(QByteArray &bytes, int value)
     bytes.append(char(value & 0xFF));
 }
 
+// The log lines are made of translated pieces; untranslated they read exactly as the vectors shared with PyQt UI
+// Designer pin them.
 QString functionName(int fc)
 {
-    static const QHash<int, QString> names = {
-        {1, QStringLiteral("读线圈")},       {2, QStringLiteral("读离散输入")},   {3, QStringLiteral("读保持寄存器")},
-        {4, QStringLiteral("读输入寄存器")}, {5, QStringLiteral("写单线圈")},     {6, QStringLiteral("写单寄存器")},
-        {15, QStringLiteral("写多个线圈")},  {16, QStringLiteral("写多个寄存器")}};
-    return names.value(fc);
+    static const QHash<int, const char *> names = {{1, QT_TR_NOOP("读线圈")},       {2, QT_TR_NOOP("读离散输入")},
+                                                   {3, QT_TR_NOOP("读保持寄存器")}, {4, QT_TR_NOOP("读输入寄存器")},
+                                                   {5, QT_TR_NOOP("写单线圈")},     {6, QT_TR_NOOP("写单寄存器")},
+                                                   {15, QT_TR_NOOP("写多个线圈")},  {16, QT_TR_NOOP("写多个寄存器")}};
+    const char *name = names.value(fc);
+    return name ? translated(name) : QString();
 }
 
 QString exceptionText(int code)
 {
-    static const QHash<int, QString> texts = {
-        {1, QStringLiteral("非法功能码")}, {2, QStringLiteral("非法数据地址")}, {3, QStringLiteral("非法数据值")}};
-    return QStringLiteral("异常 %1 %2").arg(code, 2, 16, QLatin1Char('0')).arg(texts.value(code));
+    static const QHash<int, const char *> texts = {
+        {1, QT_TR_NOOP("非法功能码")}, {2, QT_TR_NOOP("非法数据地址")}, {3, QT_TR_NOOP("非法数据值")}};
+    const char *text = texts.value(code);
+    return QCoreApplication::translate("fhmi", "异常 %1 %2")
+        .arg(QStringLiteral("%1").arg(code, 2, 16, QLatin1Char('0')), text ? translated(text) : QString());
 }
 
 // What a request asks for, as its log line names it.
@@ -50,7 +57,8 @@ QString describe(const QByteArray &pdu)
     const int fc = quint8(pdu.at(0));
     const QString name = functionName(fc);
     if (name.isEmpty()) {
-        return QStringLiteral("功能码 %1").arg(fc, 2, 16, QLatin1Char('0')).toUpper();
+        return QCoreApplication::translate("fhmi", "功能码 %1")
+            .arg(QStringLiteral("%1").arg(fc, 2, 16, QLatin1Char('0')).toUpper());
     }
     if (pdu.size() < 5) {
         return name;
@@ -58,14 +66,14 @@ QString describe(const QByteArray &pdu)
     const int address = u16(pdu, 1);
     const int value = u16(pdu, 3);
     if (fc == 5) {
-        return name + QStringLiteral(" 地址 %1 值 %2")
-                          .arg(address)
-                          .arg(QStringLiteral("%1").arg(value, 4, 16, QLatin1Char('0')).toUpper());
+        return name + QLatin1Char(' ') +
+               QCoreApplication::translate("fhmi", "地址 %1 值 %2")
+                   .arg(QString::number(address), QStringLiteral("%1").arg(value, 4, 16, QLatin1Char('0')).toUpper());
     }
     if (fc == 6) {
-        return name + QStringLiteral(" 地址 %1 值 %2").arg(address).arg(value);
+        return name + QLatin1Char(' ') + QCoreApplication::translate("fhmi", "地址 %1 值 %2").arg(address).arg(value);
     }
-    return name + QStringLiteral(" 地址 %1 数量 %2").arg(address).arg(value);
+    return name + QLatin1Char(' ') + QCoreApplication::translate("fhmi", "地址 %1 数量 %2").arg(address).arg(value);
 }
 
 struct Handled
@@ -370,9 +378,13 @@ ModbusSlaveAnswer answerModbusRequest(ModbusSlaveStore &store, ModbusFraming fra
     answer.handled = true;
     const bool broadcast = rtu && unit == 0; // TCP has no broadcast
     const int fc = quint8(pdu.at(0));
-    const QString line = QStringLiteral("收 %1 · %2").arg(toHexString(frame), describe(pdu));
+    const QString line =
+        QStringLiteral("%1 %2 · %3").arg(QCoreApplication::translate("fhmi", "收"), toHexString(frame), describe(pdu));
+    const QString unanswered =
+        QStringLiteral(" · %1 · %2")
+            .arg(QCoreApplication::translate("fhmi", "广播"), QCoreApplication::translate("fhmi", "不应答"));
     if (broadcast && fc >= 1 && fc <= 4) {
-        answer.log.append({line + QStringLiteral(" · 广播 · 不应答"), kInfo});
+        answer.log.append({line + unanswered, kInfo});
         return answer;
     }
     const Handled result = handle(store, pdu);
@@ -385,22 +397,24 @@ ModbusSlaveAnswer answerModbusRequest(ModbusSlaveStore &store, ModbusFraming fra
         answer.failed = true;
         const QString problem = exceptionText(result.exception);
         if (broadcast) {
-            answer.log.append({QStringLiteral("%1 · %2 · 广播 · 不应答").arg(line, problem), kWarn});
+            answer.log.append({line + QStringLiteral(" · ") + problem + unanswered, kWarn});
             return answer;
         }
         if (!exceptions) {
-            answer.log.append({QStringLiteral("%1 · %2 · 不应答").arg(line, problem), kWarn});
+            answer.log.append(
+                {QStringLiteral("%1 · %2 · %3").arg(line, problem, QCoreApplication::translate("fhmi", "不应答")),
+                 kWarn});
             return answer;
         }
         replyPdu = QByteArray(1, char(fc | 0x80)) + char(result.exception);
         tail = problem;
     } else {
         if (broadcast) {
-            answer.log.append({line + QStringLiteral(" · 广播 · 不应答"), kInfo});
+            answer.log.append({line + unanswered, kInfo});
             return answer;
         }
         replyPdu = result.reply;
-        tail = QStringLiteral("正常");
+        tail = QCoreApplication::translate("fhmi", "正常");
     }
     if (rtu) {
         const QByteArray body = QByteArray(1, char(unit)) + replyPdu;
@@ -411,8 +425,9 @@ ModbusSlaveAnswer answerModbusRequest(ModbusSlaveStore &store, ModbusFraming fra
         answer.reply += char(unit) + replyPdu;
     }
     answer.log.append({line, kInfo});
-    answer.replyLog = {QStringLiteral("发 %1 · %2").arg(toHexString(answer.reply), tail),
-                       result.exception ? kWarn : kOk};
+    answer.replyLog = {
+        QStringLiteral("%1 %2 · %3").arg(QCoreApplication::translate("fhmi", "发"), toHexString(answer.reply), tail),
+        result.exception ? kWarn : kOk};
     return answer;
 }
 

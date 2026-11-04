@@ -90,10 +90,15 @@ class MirroredIconEngine : public QIconEngine
     QIcon m_icon;
 };
 
-QString projectFilter()
+// A new project: its app name is in the interface language (a file without one opens as 上位机).
+Project blankProject()
 {
-    return QObject::tr("FluentHMI / PyQt UI Designer 工程 (*.uidp)");
+    Project project;
+    project.appName = DesignerPage::tr("上位机");
+    return project;
 }
+
+QString projectFilter() { return QCoreApplication::translate("fhmi", "FluentHMI / PyQt UI Designer 工程 (*.uidp)"); }
 
 constexpr int kHistoryLimit = 100;
 
@@ -146,7 +151,7 @@ DesignerPage::DesignerPage(QWidget *parent) : QWidget(parent)
 {
     setObjectName(QStringLiteral("designerPage"));
     buildUi();
-    load(Project());
+    load(blankProject());
 }
 
 void DesignerPage::buildUi()
@@ -531,7 +536,7 @@ bool DesignerPage::newProject()
     if (!maybeSave()) {
         return false;
     }
-    load(Project());
+    load(blankProject());
     return true;
 }
 

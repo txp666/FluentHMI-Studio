@@ -23,7 +23,7 @@ class Project
 
     Project();
 
-    QString appName = QStringLiteral("上位机");
+    QString appName = QStringLiteral("上位机"); // i18n: value
     // The exported application's icon (PNG, JPG or ICO), relative to the project's folder or absolute; empty
     // for the default one.
     QString icon;

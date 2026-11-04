@@ -14,7 +14,7 @@ struct SerialSettings
     QString dataBits = QStringLiteral("8");
     QString parity = QStringLiteral("None");  // None, Even, Odd, Mark, Space
     QString stopBits = QStringLiteral("1");   // 1, 1.5, 2
-    QString flowControl = QStringLiteral("无"); // 无, RTS/CTS, XON/XOFF, DTR/DSR
+    QString flowControl = QStringLiteral("无"); // i18n: value; 无, RTS/CTS, XON/XOFF, DTR/DSR
 };
 
 class SerialLink : public Link

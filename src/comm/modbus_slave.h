@@ -14,8 +14,8 @@ namespace fhmi {
 
 // The role a serial or TCP card plays on Modbus (modbusRole).
 namespace ModbusRole {
-inline const QString Master = QStringLiteral("主站");
-inline const QString Slave = QStringLiteral("从站");
+inline const QString Master = QStringLiteral("主站"); // i18n: value
+inline const QString Slave = QStringLiteral("从站");  // i18n: value
 } // namespace ModbusRole
 
 // The data table of a Modbus slave: coils, discrete inputs, holding registers and input registers ("co", "di",

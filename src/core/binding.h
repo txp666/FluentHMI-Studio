@@ -13,15 +13,15 @@ namespace fhmi {
 // The register table a Modbus binding reads, by register address: a reply names its registers that way
 // (hr100) once the request it answers is known.
 namespace ModbusArea {
-inline const QString HoldingRegisters = QStringLiteral("保持寄存器");
+inline const QString HoldingRegisters = QStringLiteral("保持寄存器"); // i18n: value
 QStringList options();               // 保持寄存器 (the default), 输入寄存器, 线圈, 离散输入
 QString prefix(const QString &area); // "hr", "ir", "co", "di"; empty for anything else
 } // namespace ModbusArea
 
 namespace ParseMode {
-inline const QString KeyValue = QStringLiteral("键值匹配");
-inline const QString JsonPath = QStringLiteral("JSON路径");
-inline const QString HexBytes = QStringLiteral("HEX字节提取");
+inline const QString KeyValue = QStringLiteral("键值匹配");    // i18n: value
+inline const QString JsonPath = QStringLiteral("JSON路径");    // i18n: value
+inline const QString HexBytes = QStringLiteral("HEX字节提取"); // i18n: value
 inline const QString Modbus = QStringLiteral("Modbus");
 } // namespace ParseMode
 
@@ -54,19 +54,19 @@ class BindingEntry
     QString jsonPath;
     int byteOffset = 0;
     QString dataType = QStringLiteral("uint16");
-    QString byteOrder = QStringLiteral("大端(BE)");
+    QString byteOrder = QStringLiteral("大端(BE)"); // i18n: value
     QString expression;
     QByteArray frameHeader;
     QByteArray frameTail;
     int mbRegIndex = 0;
     int mbSlaveFilter = -1;
     QString mbDataType = QStringLiteral("uint16");
-    QString mbRegOrder = QStringLiteral("大端(AB CD)");
+    QString mbRegOrder = QStringLiteral("大端(AB CD)"); // i18n: value
     int mbFcFilter = -1;
     QString mbArea = ModbusArea::HoldingRegisters; // mbRegIndex is a register address in this table
     int mbPeriod = 0; // how often automatic polling reads it, in ms; 0: the default period
-    QString displayFormat = QStringLiteral("自动");
-    QString decimals = QStringLiteral("自动");
+    QString displayFormat = QStringLiteral("自动"); // i18n: value
+    QString decimals = QStringLiteral("自动");      // i18n: value
     QString ledOnValue = QStringLiteral("1");
     QString ledOffValue = QStringLiteral("0");
 

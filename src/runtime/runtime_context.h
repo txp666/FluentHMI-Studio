@@ -18,10 +18,10 @@ class HmiWidget;
 class ModbusPoller;
 
 namespace NotifyType {
-inline const QString Success = QStringLiteral("成功");
-inline const QString Info = QStringLiteral("信息");
-inline const QString Warning = QStringLiteral("警告");
-inline const QString Error = QStringLiteral("错误");
+inline const QString Success = QStringLiteral("成功"); // i18n: value
+inline const QString Info = QStringLiteral("信息");    // i18n: value
+inline const QString Warning = QStringLiteral("警告"); // i18n: value
+inline const QString Error = QStringLiteral("错误");   // i18n: value
 } // namespace NotifyType
 
 // The live side of a running surface: the hub with its links, the bindings from

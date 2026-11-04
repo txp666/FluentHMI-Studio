@@ -1,7 +1,9 @@
 #include "comm/modbus_master.h"
 
 #include "comm/link.h"
+#include "core/i18n.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QTimer>
 
@@ -14,7 +16,10 @@ namespace fhmi {
 
 namespace {
 
-QString timeoutText(int timeoutMs) { return QStringLiteral("无响应（%1 ms 超时）").arg(timeoutMs); }
+QString timeoutText(int timeoutMs)
+{
+    return QCoreApplication::translate("fhmi", "无响应（%1 ms 超时）").arg(timeoutMs);
+}
 
 bool isBitTable(const QString &table) { return table == QLatin1String("co") || table == QLatin1String("di"); }
 
@@ -95,15 +100,16 @@ QString modbusException(const Message &message)
     if (!message.contains(QStringLiteral("error"))) {
         return {};
     }
-    static const QHash<int, QString> names = {
-        {1, QStringLiteral("非法功能码")},      {2, QStringLiteral("非法数据地址")},
-        {3, QStringLiteral("非法数据值")},      {4, QStringLiteral("从站设备故障")},
-        {5, QStringLiteral("已确认，处理中")},  {6, QStringLiteral("从站忙")},
-        {10, QStringLiteral("网关路径不可用")}, {11, QStringLiteral("网关目标设备无响应")},
+    static const QHash<int, const char *> names = {
+        {1, QT_TR_NOOP("非法功能码")},      {2, QT_TR_NOOP("非法数据地址")},        {3, QT_TR_NOOP("非法数据值")},
+        {4, QT_TR_NOOP("从站设备故障")},    {5, QT_TR_NOOP("已确认，处理中")},      {6, QT_TR_NOOP("从站忙")},
+        {10, QT_TR_NOOP("网关路径不可用")}, {11, QT_TR_NOOP("网关目标设备无响应")},
     };
     const int code = message.value(QStringLiteral("error")).toInt();
     const QString hex = QStringLiteral("%1").arg(code, 2, 16, QLatin1Char('0')).toUpper();
-    return QStringLiteral("异常 %1 %2").arg(hex, names.value(code)).trimmed();
+    const char *name = names.value(code);
+    const QString text = name ? translated(name) : QString();
+    return QCoreApplication::translate("fhmi", "异常 %1 %2").arg(hex, text).trimmed();
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +198,7 @@ void ModbusMaster::pump()
         const Entry failed = std::move(*m_onLine);
         m_onLine.reset();
         if (failed.done) {
-            failed.done(failure(false, QStringLiteral("发送失败")));
+            failed.done(failure(false, QCoreApplication::translate("fhmi", "发送失败")));
             if (!self) {
                 return;
             }
@@ -225,7 +231,7 @@ void ModbusMaster::onMessage(const Message &message)
     const QString exception = modbusException(message);
     result.ok = exception.isEmpty();
     if (!result.ok) {
-        result.problem = QStringLiteral("设备返回") + exception;
+        result.problem = QCoreApplication::translate("fhmi", "设备返回%1").arg(exception);
     }
     finish(std::move(result));
 }
