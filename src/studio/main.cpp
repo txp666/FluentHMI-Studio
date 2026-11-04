@@ -22,6 +22,11 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("FluentHMI"));
     QCoreApplication::setApplicationName(QStringLiteral("FluentHMI Studio"));
     QCoreApplication::setApplicationVersion(QStringLiteral(FHMI_VERSION));
+#ifdef Q_OS_LINUX
+    // The id of the package's desktop entry (and the macOS bundle): Wayland docks find the entry, and with it the
+    // icon and name, by this id.
+    QGuiApplication::setDesktopFileName(QStringLiteral("io.github.txp666.FluentHMIStudio"));
+#endif
 
     // Exports take their theme mode and colour from here too, also when made with --export.
     const QString configDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +

@@ -433,6 +433,7 @@
  "无法复制图片: %1": "Can't copy image: %1",
  "无法安装更新": "Can't install the update",
  "无法导出图片（控件 %1）: %2；%3": "Can't export image (widget %1): %2; %3",
+ "无法打包应用: %1": "Can't pack the application: %1",
  "无法打开工程": "Can't open project",
  "无法打开输出目录": "Can't open the output folder",
  "无法把图标转换为 %1: %2": "Can't convert the icon to %1: %2",

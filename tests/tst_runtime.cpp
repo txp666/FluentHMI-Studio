@@ -22,6 +22,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QProcess>
 #include <QtCore/QScopeGuard>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QTimer>
@@ -1599,6 +1600,15 @@ class TestRuntime : public QObject
 #ifdef Q_OS_MACOS
         const QDir resources(created + "/Contents/Resources");
         QVERIFY(QFileInfo::exists(created + "/Contents/MacOS/FluentHMIRuntime"));
+#elif defined(Q_OS_LINUX)
+        // A tar.gz of the application's folder, whose program and start.sh stay executable.
+        QVERIFY(created.endsWith(QStringLiteral(".tar.gz")));
+        QProcess tar;
+        tar.start(QStringLiteral("tar"), {QStringLiteral("-xzf"), created, QStringLiteral("-C"), output.path()});
+        QVERIFY(tar.waitForFinished(60000) && tar.exitCode() == 0);
+        const QDir resources(created.chopped(7));
+        QVERIFY(QFileInfo(resources.filePath(resources.dirName())).isExecutable());
+        QVERIFY(QFileInfo(resources.filePath("start.sh")).isExecutable());
 #else
         const QDir resources(created);
 #endif

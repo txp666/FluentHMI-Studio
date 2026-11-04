@@ -102,7 +102,7 @@ QImage largestImage(const QString &path)
     return largest;
 }
 
-#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN) || defined(Q_OS_LINUX)
 // The image scaled into a square of `side` pixels, centred on a transparent background.
 QImage squared(const QImage &image, int side)
 {
@@ -218,6 +218,54 @@ bool writeIcns(const QImage &image, const QString &target, QString *error)
     return true;
 }
 
+#endif
+
+#ifdef Q_OS_LINUX
+// How an exported application starts: from its own folder, wherever it is called from, and on a desktop through X11
+// (XWayland under Wayland) unless QT_QPA_PLATFORM says otherwise, which is where the frameless title bar is proven.
+bool writeStartScript(const QString &folder, const QString &program, QString *error)
+{
+    static const char script[] = R"SH(#!/bin/sh
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+if [ -z "${QT_QPA_PLATFORM:-}" ] && [ -n "${DISPLAY:-}" ]; then
+    QT_QPA_PLATFORM=xcb
+    export QT_QPA_PLATFORM
+fi
+exec './%1' "$@"
+)SH";
+    QString quoted = program;
+    quoted.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+    const QString path = QDir(folder).filePath(QStringLiteral("start.sh"));
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+        file.write(QString::fromUtf8(script).arg(quoted).toUtf8()) < 0) {
+        return fail(error, QCoreApplication::translate("fhmi", "无法写入 %1").arg(path));
+    }
+    file.close();
+    return QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner | QFile::ReadGroup |
+                                           QFile::ExeGroup | QFile::ReadOther | QFile::ExeOther) ||
+           fail(error, QCoreApplication::translate("fhmi", "无法写入 %1").arg(path));
+}
+
+// `folder` inside `parent` as a tar.gz, which keeps the program's executable bit wherever it is copied to. The
+// system's tar makes it; every Linux has one.
+bool packFolder(const QString &parent, const QString &folder, const QString &archive, QString *error)
+{
+    QProcess tar;
+    tar.setProcessChannelMode(QProcess::MergedChannels);
+    tar.start(QStringLiteral("tar"), {QStringLiteral("-czf"), archive, QStringLiteral("-C"), parent,
+                                      QStringLiteral("--"), folder});
+    // Long enough for a slow board to compress the runtime's Qt.
+    const bool finished = tar.waitForFinished(600000);
+    if (!finished || tar.exitStatus() != QProcess::NormalExit || tar.exitCode() != 0) {
+        const QString reason = tar.error() == QProcess::FailedToStart ? tar.errorString()
+                                                                      : QString::fromLocal8Bit(tar.readAll()).trimmed();
+        tar.kill();
+        tar.waitForFinished(5000);
+        return fail(error, QCoreApplication::translate("fhmi", "无法打包应用: %1").arg(reason));
+    }
+    return true;
+}
 #endif
 
 #ifdef Q_OS_WIN
@@ -559,6 +607,10 @@ QString ExportService::exportApplication(const Project &project, const QString &
 #ifdef Q_OS_MACOS
     const QString target = QDir(outputDir).filePath(name + QStringLiteral(".app"));
     const QString resources = QDir(target).filePath(QStringLiteral("Contents/Resources"));
+#elif defined(Q_OS_LINUX)
+    // One file that holds the folder <name>/ and keeps the program executable on a USB stick or a download.
+    const QString target = QDir(outputDir).filePath(name + QStringLiteral(".tar.gz"));
+    const QString resources = target;
 #else
     const QString target = QDir(outputDir).filePath(name);
     const QString resources = target;
@@ -595,6 +647,12 @@ QString ExportService::exportApplication(const Project &project, const QString &
         QFile::remove(QDir(stagedResources).filePath(QStringLiteral("app_icon.icns")));
     }
 #else
+#ifdef Q_OS_LINUX
+    // The folder the archive holds, made inside the staging folder, which also takes the archive until it is done.
+    const QString appDir = QDir(staging).filePath(name);
+#else
+    const QString appDir = staging;
+#endif
     // A packaged runtime shares its folder, and Qt, with the studio; runtime-files.txt beside
     // it names the files that are the runtime's. A build tree holds everything else too, so
     // there only the executable is taken. Any other folder is the runtime's own; take all of it.
@@ -616,16 +674,16 @@ QString ExportService::exportApplication(const Project &project, const QString &
         files << runtimeInfo.fileName();
     }
     if (files.isEmpty()) {
-        if (!copyTree(runtimeDir.absolutePath(), staging, error)) {
+        if (!copyTree(runtimeDir.absolutePath(), appDir, error)) {
             return abort(QString());
         }
         // Drop the studio itself if it shares the folder.
         for (const QString &studio : {QStringLiteral("FluentHMIStudio"), QStringLiteral("FluentHMIStudio.exe")}) {
-            QFile::remove(QDir(staging).filePath(studio));
+            QFile::remove(QDir(appDir).filePath(studio));
         }
     }
     for (const QString &file : std::as_const(files)) {
-        const QString target = QDir(staging).filePath(file);
+        const QString target = QDir(appDir).filePath(file);
         if (!QDir().mkpath(QFileInfo(target).absolutePath())) {
             fail(error, QCoreApplication::translate("fhmi", "无法创建目录: %1")
                             .arg(QDir::toNativeSeparators(QFileInfo(target).absolutePath())));
@@ -635,9 +693,9 @@ QString ExportService::exportApplication(const Project &project, const QString &
             return abort(QString());
         }
     }
-    const QString stagedResources = staging;
-    const QString exe = QDir(staging).filePath(runtimeInfo.fileName());
-    const QString renamed = QDir(staging).filePath(name + (runtimeInfo.suffix().isEmpty() ? QString() : QStringLiteral(".") + runtimeInfo.suffix()));
+    const QString stagedResources = appDir;
+    const QString exe = QDir(appDir).filePath(runtimeInfo.fileName());
+    const QString renamed = QDir(appDir).filePath(name + (runtimeInfo.suffix().isEmpty() ? QString() : QStringLiteral(".") + runtimeInfo.suffix()));
     if (exe != renamed && !QFile::rename(exe, renamed)) {
         fail(error, QCoreApplication::translate("fhmi", "无法重命名程序"));
         return abort(QString());
@@ -663,6 +721,17 @@ QString ExportService::exportApplication(const Project &project, const QString &
         if (!replaceProgramIcon(renamed, images, error)) {
             return abort(QString());
         }
+    }
+#endif
+#ifdef Q_OS_LINUX
+    // A program file carries no icon on Linux; this one is for a desktop entry, through which docks show one. The
+    // project's icon, else the runner's own logo, which the studio's resources hold too (a test program without
+    // them gets none).
+    const QImage desktopIcon = icon.isNull() ? QImage(QStringLiteral(":/fluenthmi/logo.png")) : icon;
+    if (!desktopIcon.isNull() &&
+        !squared(desktopIcon, 256).save(QDir(appDir).filePath(name + QStringLiteral(".png")), "PNG")) {
+        fail(error, QCoreApplication::translate("fhmi", "无法生成应用图标"));
+        return abort(QString());
     }
 #endif
 #endif
@@ -711,10 +780,23 @@ QString ExportService::exportApplication(const Project &project, const QString &
         sign.waitForFinished(60000);
     }
 #endif
+#ifdef Q_OS_LINUX
+    // Only the finished archive leaves the staging folder, so the target is never half written.
+    const QString archive = QDir(staging).filePath(QFileInfo(target).fileName());
+    if (!writeStartScript(appDir, QFileInfo(renamed).fileName(), error) || !packFolder(staging, name, archive, error)) {
+        return abort(QString());
+    }
+    if (!QFile::rename(archive, target)) {
+        fail(error, QCoreApplication::translate("fhmi", "无法写入 %1").arg(QDir::toNativeSeparators(target)));
+        return abort(QString());
+    }
+    QDir(staging).removeRecursively();
+#else
     if (!QDir().rename(staging, target)) {
         fail(error, QCoreApplication::translate("fhmi", "无法写入 %1").arg(QDir::toNativeSeparators(target)));
         return abort(QString());
     }
+#endif
     return target;
 }
 
