@@ -5,9 +5,9 @@
   <p align="center">English · <a href="README_zh.md">简体中文</a> · <a href="https://modusignal.cn/fluenthmi-studio/">Website</a> · <a href="https://modusignal.cn/pyqt-ui-designer/guide/">User guide</a></p>
 </p>
 
-FluentHMI Studio is a C++/Qt 6 rewrite of [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer): drag widgets onto a canvas, set their properties, bind them to serial, TCP or MQTT data, then export the design as a standalone app, with **no compiler needed**. Compared with the Python version, the download is smaller, it starts about twice as fast, exports take under a second, and it can update itself from inside the app (see [Compared with the Python version](#compared-with-the-python-version)).
+FluentHMI Studio is a C++/Qt 6 rewrite of [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer): drag widgets onto a canvas, set their properties, bind them to serial, TCP, MQTT or UDP data, then export the design as a standalone app, with **no compiler needed**. Compared with the Python version, the download is smaller, it starts about twice as fast, exports take under a second, and it can update itself from inside the app (see [Compared with the Python version](#compared-with-the-python-version)).
 
-> **Language**: the interface is in Chinese for now; an English interface is on the [roadmap](#current-status-010).
+> **Language**: the interface is in English or Simplified Chinese (Settings → Language).
 
 ## Screenshots
 
@@ -48,7 +48,7 @@ Both use the same project format, and their widget and protocol rules match:
 - **Compatible project format**: it reads and writes `.uidp` (version 1.0) directly, and its widget types, property names, default values and enum options match PyQt UI Designer one to one. All 11 example projects in `examples/` open, preview, and save back unchanged.
 - **Same parsing and binding rules**: the five parsers (line text with key-value / JSON / CSV; binary HEX frames with header and footer, length field, checksum, fixed length or idle-gap framing; Modbus RTU; Modbus TCP; Modbus ASCII), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the three command encodings (text / HEX / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
 - **Same Modbus features for PLCs**: read requests sent from here are remembered, so the registers in a reply are also named by address (holding register 100 is `hr100`) and a binding picks a register table and an address; pick a Modbus parser on the link card and bind a register address, and it is read automatically: nearby addresses are merged into blocks read at their periods, one request at a time, only for the controls on screen, with writes sent ahead of queued reads; FC16 writes int16, 32-bit integers and float32 values by data type.
-- **Modbus RTU / TCP slave**: a serial or TCP card can act as a slave and answer an external master from its own data table; bindings, controls and write commands read and write that table, and the slave register table widget shows and edits it.
+- **Modbus RTU / TCP slave**: a serial, TCP or UDP card can act as a slave and answer an external master from its own data table; bindings, controls and write commands read and write that table, and the slave register table widget shows and edits it.
 
 The differences are in how they are built and how they export apps:
 
@@ -71,7 +71,7 @@ What the Python version still has and this one doesn't yet: exporting a source p
 
 ```
 src/core      fhmi_core     Project model, widget metadata, protocol parsing, data binding, command encoding (Qt Core only)
-src/comm      fhmi_comm     Link interface + serial / TCP client / TCP server / MQTT; CommHub gathers all links
+src/comm      fhmi_comm     Link interface + serial / TCP client / TCP server / MQTT / UDP; CommHub gathers all links
 src/runtime   fhmi_runtime  Runtime widgets built on FluentQtWidgets, RuntimeSurface, binding engine
 src/designer  fhmi_designer Canvas (QGraphicsScene), widget panel, property editor, alignment and container nesting
 src/studio    FluentHMIStudio   The designer app: design / preview / settings pages, export service
@@ -138,7 +138,7 @@ To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`,
 
 ## Current status (0.3.1)
 
-Done: all 29 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
+Done: all 30 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
 The MQTT link is a built-in MQTT 3.1.1 client (based on QSslSocket, so the Qt MQTT module isn't needed): it supports username and password, QoS 0/1/2, `+`/`#` wildcard subscriptions, and TLS with the system certificate store, and it reconnects automatically if a connection that succeeded drops. As in the Python version, each message is treated as one frame, and a payload that is a single plain number is also given with the topic name as its key.
 
@@ -148,7 +148,6 @@ Roadmap:
 
 - Exporting a C++/CMake source project for people who need to develop it further
 - Developer ID signing and notarization, Windows code signing
-- UDP, Bluetooth; an English interface
 
 ## License
 
