@@ -67,6 +67,10 @@ class DesignScene : public QGraphicsScene
     // container) when they fit. Ids already in use are replaced. The pasted widgets become the selection.
     QList<CanvasItem *> paste(const QJsonArray &widgets, CanvasItem *container, int step);
 
+    // Every ModbusSlaveTable shows the area of the first card in the document whose modbusRole is 从站, with its
+    // slaveInit values. After each design change, and after loading.
+    void refreshSlaveTables();
+
   signals:
     // A design change. Changes with the same non-empty key in a row (a run of arrow-key nudges) are one
     // undo step.

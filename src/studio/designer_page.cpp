@@ -278,7 +278,10 @@ void DesignerPage::buildUi()
         }
     });
     connect(m_scene, &DesignScene::modified, this, [this](const QString &key) { recordChange(key); });
-    connect(m_properties, &PropertyEditor::modified, this, [this](const QString &key) { recordChange(key); });
+    connect(m_properties, &PropertyEditor::modified, this, [this](const QString &key) {
+        m_scene->refreshSlaveTables(); // a slave card's areas and initial values show in the register tables
+        recordChange(key);
+    });
     connect(m_properties, &PropertyEditor::projectSettingsChanged, this, [this](const QString &key) {
         applyProjectSettings();
         recordChange(key.isEmpty() ? key : QStringLiteral("project:") + key);

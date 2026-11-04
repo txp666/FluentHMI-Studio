@@ -36,7 +36,8 @@ class TcpClientLink : public Link
 };
 
 // Listens for devices. Every connected device gets its own parser and idle timer, so frames
-// from different devices never interleave; commands go to every connected device.
+// from different devices never interleave; commands go to every connected device, a slave's reply to the
+// device that asked.
 class TcpServerLink : public Link
 {
     Q_OBJECT
@@ -58,6 +59,7 @@ class TcpServerLink : public Link
 
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
+    qint64 writeReply(Parser *parser, const QByteArray &bytes) override;
 
   private:
     void onNewConnection();

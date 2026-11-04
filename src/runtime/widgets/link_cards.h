@@ -10,6 +10,7 @@ class CaptionLabel;
 class CheckBox;
 class ComboBox;
 class LineEdit;
+class PasswordLineEdit;
 class PrimaryPushButton;
 class SpinBox;
 class StrongBodyLabel;
@@ -19,6 +20,7 @@ class ToolButton;
 namespace fhmi {
 
 class Link;
+class ModbusSlave;
 class MqttLink;
 class SerialLink;
 class TcpClientLink;
@@ -31,6 +33,10 @@ class TcpServerLink;
 // The card also hands the project's Modbus poller its modbusPeriod, modbusTimeout and modbusSlave
 // (ModbusPoller::setLinkCard()). While its link is connected, parses Modbus and can send, the status line
 // reads <connection> · <poller status>, with the poller's blocks as its tooltip.
+//
+// A serial or TCP card whose modbusRole is 从站 keeps a Modbus slave (ModbusSlave) for as long as it is attached;
+// each link it connects answers through it while the link's parser is modbus or modbus_tcp, and the status line
+// then reads <connection> · 从站 S · 应答 N in place of the poller's.
 class LinkCardBase : public HmiWidget
 {
   public:
@@ -75,6 +81,7 @@ class LinkCardBase : public HmiWidget
     // The connection text, followed by the poller's status while the link is connected and parses Modbus.
     void showStatus();
 
+    ModbusSlave *m_slave = nullptr; // modbusRole 从站 only
     QWidget *m_lastField = nullptr;
     int m_lastRow = -1;
     bool m_connected = false;
@@ -156,7 +163,7 @@ class MqttConfigCardWidget : public LinkCardBase
     FluentQt::SpinBox *m_port = nullptr;
     FluentQt::LineEdit *m_clientId = nullptr;
     FluentQt::LineEdit *m_username = nullptr;
-    FluentQt::LineEdit *m_password = nullptr;
+    FluentQt::PasswordLineEdit *m_password = nullptr;
     FluentQt::LineEdit *m_subscribe = nullptr;
     FluentQt::LineEdit *m_publish = nullptr;
     FluentQt::ComboBox *m_qos = nullptr;

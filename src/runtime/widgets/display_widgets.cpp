@@ -10,7 +10,6 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtWidgets/QHBoxLayout>
-#include <QtWidgets/QLabel>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
@@ -133,10 +132,15 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
     layout->setContentsMargins(8, 4, 8, 4);
     layout->setSpacing(0);
     m_title = new FluentQt::CaptionLabel(this);
-    m_value = new QLabel(this);
+    m_value = new FluentQt::BodyLabel(this);
     m_unit = new FluentQt::CaptionLabel(this);
-    for (QLabel *label : {static_cast<QLabel *>(m_title), m_value, static_cast<QLabel *>(m_unit)}) {
+    for (FluentQt::FluentLabelBase *label :
+         {static_cast<FluentQt::FluentLabelBase *>(m_title), static_cast<FluentQt::FluentLabelBase *>(m_value),
+          static_cast<FluentQt::FluentLabelBase *>(m_unit)}) {
         label->setAlignment(Qt::AlignCenter);
+    }
+    for (FluentQt::CaptionLabel *label : {m_title, m_unit}) {
+        label->setTextColor(QColor(QStringLiteral("#606060")), QColor(QStringLiteral("#b3b3b3")));
     }
     layout->addStretch();
     layout->addWidget(m_title);
@@ -156,11 +160,11 @@ void NumericDisplayWidget::apply()
     m_unit->setText(text("unit"));
     m_unit->setMinimumHeight(m_unit->fontMetrics().height());
     m_value->setText(text("value"));
+    m_value->setPixelFontSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
     QFont font = m_value->font();
-    font.setPixelSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
     font.setBold(true);
     m_value->setFont(font);
-    m_value->setStyleSheet(QStringLiteral("color: %1;").arg(accentColor().name()));
+    m_value->setTextColor(accentColor(), accentColor());
 }
 
 void NumericDisplayWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
@@ -241,10 +245,15 @@ ImageWidget::ImageWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(me
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    m_image = new QLabel(this);
-    m_image->setAlignment(Qt::AlignCenter);
-    m_image->setMinimumSize(1, 1);
-    layout->addWidget(m_image);
+    // The image label has a fixed size; it must not become the widget's minimum, so the widget still shrinks.
+    layout->setSizeConstraint(QLayout::SetNoConstraint);
+    m_placeholder = new FluentQt::CaptionLabel(this);
+    m_placeholder->setAlignment(Qt::AlignCenter);
+    m_placeholder->setTextColor(QColor(QStringLiteral("#606060")), QColor(QStringLiteral("#b3b3b3")));
+    m_image = new FluentQt::ImageLabel(this);
+    layout->addWidget(m_placeholder);
+    layout->addWidget(m_image, 0, Qt::AlignCenter);
+    repaintOnThemeChange(this);
 }
 
 void ImageWidget::apply()
@@ -253,15 +262,16 @@ void ImageWidget::apply()
     if (!path.isEmpty() && QFileInfo(path).isRelative()) {
         path = QDir(assetBaseDir().isEmpty() ? QDir::currentPath() : assetBaseDir()).filePath(path);
     }
-    m_pixmap = path.isEmpty() ? QPixmap() : QPixmap(path);
-    if (m_pixmap.isNull()) {
-        m_image->setPixmap(QPixmap());
-        m_image->setText(path.isEmpty() ? tr("未选择图片") : tr("无法加载图片"));
-        m_image->setStyleSheet(QStringLiteral("QLabel { color: #888; border: 1px dashed #999; border-radius: 6px; }"));
+    const QImage image = path.isEmpty() ? QImage() : QImage(path);
+    m_image->setImage(image);
+    m_image->setVisible(!image.isNull());
+    m_placeholder->setVisible(image.isNull());
+    if (image.isNull()) {
+        m_placeholder->setText(path.isEmpty() ? tr("未选择图片") : tr("无法加载图片"));
     } else {
-        m_image->setStyleSheet(QString());
         refresh();
     }
+    update();
 }
 
 void ImageWidget::resizeEvent(QResizeEvent *event)
@@ -270,12 +280,24 @@ void ImageWidget::resizeEvent(QResizeEvent *event)
     refresh();
 }
 
+void ImageWidget::paintEvent(QPaintEvent *)
+{
+    if (!m_image->isNull()) {
+        return;
+    }
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const bool dark = isDarkTheme();
+    painter.setPen(QPen(dark ? QColor(0x60, 0x60, 0x60) : QColor(0xC8, 0xC8, 0xC8), 1, Qt::DashLine));
+    painter.setBrush(dark ? QColor(0x29, 0x29, 0x29) : QColor(0xF5, 0xF5, 0xF5));
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+}
+
 void ImageWidget::refresh()
 {
-    if (!m_pixmap.isNull()) {
-        QPixmap scaled = m_pixmap.scaled(size() * devicePixelRatioF(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        scaled.setDevicePixelRatio(devicePixelRatioF());
-        m_image->setPixmap(scaled);
+    // Aspect-fit in logical pixels; ImageLabel paints the original at the screen's pixel ratio, so it stays sharp.
+    if (!m_image->isNull() && !size().isEmpty()) {
+        m_image->setScaledSize(m_image->image().size().scaled(size(), Qt::KeepAspectRatio).expandedTo(QSize(1, 1)));
     }
 }
 

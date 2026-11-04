@@ -1,5 +1,6 @@
 #include "comm/comm_hub.h"
 
+#include "comm/modbus_slave.h"
 #include "core/protocol_parser.h"
 
 namespace fhmi {
@@ -98,6 +99,9 @@ int CommHub::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, c
     int accepted = 0;
     for (Link *link : connectedLinks()) {
         QByteArray frame;
+        if (link->answersModbus()) {
+            continue; // a slave link puts no Modbus frame on the line
+        }
         if (link->parsesModbus()) {
             // One request on the line at a time: the master sends it once the link is free.
             frame = link->modbusMaster()->enqueue(request, how.timeoutMs, how.priority, how.done, how.owner);
@@ -124,6 +128,46 @@ int CommHub::send(const EncodedCommand &command, QList<QByteArray> *sent)
 {
     return command.kind == EncodedCommand::Kind::Modbus ? sendModbus(command.modbus, sent)
                                                         : send(command.bytes, sent);
+}
+
+void CommHub::addModbusSlave(ModbusSlave *slave)
+{
+    m_slaves.append(slave);
+    connect(slave, &ModbusSlave::changed, this, &CommHub::deliverSlaveData);
+    connect(slave, &ModbusSlave::logged, this, &CommHub::slaveLog);
+    connect(slave, &QObject::destroyed, this, [this]() {
+        m_slaves.removeAll(QPointer<ModbusSlave>());
+        emit slavesChanged();
+    });
+    emit slavesChanged();
+}
+
+QList<ModbusSlave *> CommHub::modbusSlaves() const
+{
+    QList<ModbusSlave *> out;
+    for (const QPointer<ModbusSlave> &slave : m_slaves) {
+        if (slave) {
+            out.append(slave.data());
+        }
+    }
+    return out;
+}
+
+void CommHub::deliverSlaveStart()
+{
+    for (ModbusSlave *slave : modbusSlaves()) {
+        for (const Message &message : slave->startMessages()) {
+            deliverSlaveData(message);
+        }
+    }
+}
+
+void CommHub::deliverSlaveData(const Message &message)
+{
+    const bool outer = m_slaveData;
+    m_slaveData = true;
+    emit messageReceived(message);
+    m_slaveData = outer;
 }
 
 void CommHub::disconnectAll()

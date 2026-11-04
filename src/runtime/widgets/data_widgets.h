@@ -1,11 +1,13 @@
 #pragma once
 
+#include "comm/modbus_slave.h"
 #include "runtime/hmi_widget.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-class QLabel;
+class QTableWidgetItem;
 class QTextEdit;
 class QTimer;
 
@@ -82,7 +84,7 @@ class RealtimeChartWidget : public HmiWidget
 
     ChartHeader *m_header = nullptr;
     ChartPlot *m_plot = nullptr;
-    QLabel *m_mode = nullptr;
+    FluentQt::CaptionLabel *m_mode = nullptr;
     FluentQt::LineEdit *m_displayEdit = nullptr;
     FluentQt::ToolButton *m_clearReference = nullptr;
     QTimer *m_refreshTimer = nullptr;
@@ -109,6 +111,42 @@ class DataTableWidget : public HmiWidget
 
     FluentQt::TableWidget *m_table = nullptr;
     QStringList m_columns;
+};
+
+// One area (mbArea) of the data table of the document's first link card whose modbusRole is 从站: a row per
+// address, its value as displayFormat says (无符号, 有符号, 十六进制; coils and discrete inputs as 0/1). Running, a
+// double click edits a value, which goes into that table; writes from anywhere show at once, row by row. On the
+// design canvas it shows that card's addresses with their slaveInit values (showDesign()). Without such a card
+// it holds one line: 没有从站链路卡片.
+class ModbusSlaveTableWidget : public HmiWidget
+{
+  public:
+    ModbusSlaveTableWidget(const WidgetMeta &meta, QWidget *parent);
+
+    // The design canvas: the properties of the first slave card (defaults filled in), or nullptr without one.
+    void showDesign(const QJsonObject *cardProperties);
+
+  protected:
+    void apply() override;
+    void onAttached() override;
+    void onDetached() override;
+
+  private:
+    QString table() const;
+    const ModbusSlaveStore *store() const;
+    void bindSlave();
+    void rebuild();
+    QString display(quint16 value) const;
+    // A value typed in the current format; nullopt for anything it cannot be.
+    std::optional<quint16> parse(const QString &text) const;
+    void showChange(const Message &message);
+    void edited(QTableWidgetItem *item);
+
+    FluentQt::TableWidget *m_table = nullptr;
+    std::optional<ModbusSlaveStore> m_design;
+    QPointer<ModbusSlave> m_slave;
+    QMetaObject::Connection m_slaveConnection;
+    bool m_filling = false;
 };
 
 // Time-stamped log of every parsed frame and every link event.

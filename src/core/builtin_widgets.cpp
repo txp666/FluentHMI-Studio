@@ -45,6 +45,12 @@ PropDef choice(const QString &name, const QString &label, const QString &def, co
     return PropDef{name, label, PropType::Enum, def, options, std::nullopt, std::nullopt, false, {}};
 }
 
+PropDef described(PropDef def, const QString &description)
+{
+    def.description = description;
+    return def;
+}
+
 // A link card's own frame format: the keys of the project's serial.parserConfig.
 PropDef parserConfig()
 {
@@ -78,14 +84,38 @@ const QStringList kLinkParsers = {QStringLiteral("项目设置"), QStringLiteral
                                   QStringLiteral("modbus_ascii")};
 
 // A link card's parser: its mode; what it hands the Modbus poller while its link is connected and parses
-// Modbus (the property editor shows these only for a Modbus mode of the card's own); its frame format.
-QList<PropDef> linkParsing()
+// Modbus (the property editor shows these only for a Modbus mode of the card's own); its frame format. A serial
+// or TCP card can also be a Modbus slave (`slave`): its role, how it answers and its data table.
+QList<PropDef> linkParsing(bool slave)
 {
-    return {choice(QStringLiteral("defaultParser"), QStringLiteral("默认解析模式"), QStringLiteral("项目设置"),
-                   kLinkParsers),
-            integer(QStringLiteral("modbusPeriod"), QStringLiteral("默认轮询(ms)"), 500, 10, 60000),
-            integer(QStringLiteral("modbusTimeout"), QStringLiteral("响应超时(ms)"), 1000, 10, 60000),
-            integer(QStringLiteral("modbusSlave"), QStringLiteral("默认从站"), 1, 1, 247), parserConfig()};
+    QList<PropDef> props{choice(QStringLiteral("defaultParser"), QStringLiteral("默认解析模式"),
+                                QStringLiteral("项目设置"), kLinkParsers)};
+    if (slave) {
+        props.append(described(choice(QStringLiteral("modbusRole"), QStringLiteral("Modbus 角色"),
+                                      QStringLiteral("主站"), {QStringLiteral("主站"), QStringLiteral("从站")}),
+                               QStringLiteral("从站：解析模式为 modbus 或 modbus_tcp 时应答外部主站")));
+    }
+    props += {integer(QStringLiteral("modbusPeriod"), QStringLiteral("默认轮询(ms)"), 500, 10, 60000),
+              integer(QStringLiteral("modbusTimeout"), QStringLiteral("响应超时(ms)"), 1000, 10, 60000),
+              integer(QStringLiteral("modbusSlave"), QStringLiteral("默认从站"), 1, 1, 247)};
+    if (slave) {
+        props += {integer(QStringLiteral("modbusDelay"), QStringLiteral("响应延时(ms)"), 0, 0, 5000),
+                  described(boolean(QStringLiteral("modbusExceptions"), QStringLiteral("异常响应"), true),
+                            QStringLiteral("关掉后出错的请求不应答"))};
+        const QList<QPair<QString, QString>> tables = {{QStringLiteral("Co"), QStringLiteral("线圈")},
+                                                       {QStringLiteral("Di"), QStringLiteral("离散输入")},
+                                                       {QStringLiteral("Hr"), QStringLiteral("保持寄存器")},
+                                                       {QStringLiteral("Ir"), QStringLiteral("输入寄存器")}};
+        for (const auto &[name, label] : tables) {
+            props += {integer(QStringLiteral("slave%1Start").arg(name), label + QStringLiteral("起始"), 0, 0, 65535),
+                      integer(QStringLiteral("slave%1Count").arg(name), label + QStringLiteral("数量"), 100, 0, 10000)};
+        }
+        props.append(described(text(QStringLiteral("slaveInit"), QStringLiteral("初始值"), QString()),
+                               QStringLiteral("每行一条 `区地址=值`，如 `hr100=1234`、`co3=1`；"
+                                              "寄存器 −32768–65535，线圈、离散输入 0 或 1")));
+    }
+    props.append(parserConfig());
+    return props;
 }
 
 // The framing fields every command-sending widget shares, between the mode and Modbus.
@@ -378,7 +408,7 @@ QList<WidgetMeta> commWidgets()
              QList<PropDef>{str(QStringLiteral("title"), QStringLiteral("标题"), QStringLiteral("串口配置")),
                             choice(QStringLiteral("displayMode"), QStringLiteral("显示模式"), QStringLiteral("完整"),
                                    {QStringLiteral("完整"), QStringLiteral("简洁"), QStringLiteral("单行")})} +
-                 linkParsing() +
+                 linkParsing(true) +
                  QList<PropDef>{
                      choice(QStringLiteral("defaultBaud"), QStringLiteral("默认波特率"), QStringLiteral("115200"),
                             {QStringLiteral("9600"), QStringLiteral("19200"), QStringLiteral("38400"),
@@ -404,7 +434,7 @@ QList<WidgetMeta> commWidgets()
                                    {QStringLiteral("客户端"), QStringLiteral("服务端")}),
                             str(QStringLiteral("defaultHost"), QStringLiteral("默认地址"), QStringLiteral("127.0.0.1")),
                             integer(QStringLiteral("defaultPort"), QStringLiteral("默认端口"), 8080, 1, 65535)} +
-                 linkParsing(),
+                 linkParsing(true),
              240, 50),
         meta(QStringLiteral("MqttConfigCard"), QStringLiteral("MQTT 配置卡片"), WidgetCategory::Comm,
              QStringLiteral("cloud"), 380, 390,
@@ -422,7 +452,7 @@ QList<WidgetMeta> commWidgets()
                  choice(QStringLiteral("defaultQos"), QStringLiteral("默认 QoS"), QStringLiteral("0"),
                         {QStringLiteral("0"), QStringLiteral("1"), QStringLiteral("2")}),
                  boolean(QStringLiteral("defaultTls"), QStringLiteral("默认启用 TLS"), false)} +
-                 linkParsing(),
+                 linkParsing(false),
              260, 50),
         meta(QStringLiteral("DataSendCard"), QStringLiteral("数据发送卡片"), WidgetCategory::Comm,
              QStringLiteral("send"), 350, 140,
@@ -436,6 +466,15 @@ QList<WidgetMeta> commWidgets()
              240, 120),
         meta(QStringLiteral("LogBox"), QStringLiteral("日志显示框"), WidgetCategory::Comm, QStringLiteral("document"),
              400, 200, {integer(QStringLiteral("maxLines"), QStringLiteral("最大行数"), 500, 50, 50000)}, 200, 80),
+        // The data table of the first link card whose modbusRole is 从站, one area of it.
+        meta(QStringLiteral("ModbusSlaveTable"), QStringLiteral("从站寄存器表"), WidgetCategory::Comm,
+             QStringLiteral("table"), 260, 300,
+             {choice(QStringLiteral("mbArea"), QStringLiteral("区"), ModbusArea::HoldingRegisters,
+                     ModbusArea::options()),
+              described(choice(QStringLiteral("displayFormat"), QStringLiteral("显示格式"), QStringLiteral("无符号"),
+                               {QStringLiteral("无符号"), QStringLiteral("有符号"), QStringLiteral("十六进制")}),
+                        QStringLiteral("线圈和离散输入总是显示 0/1"))},
+             160, 120),
     };
 }
 

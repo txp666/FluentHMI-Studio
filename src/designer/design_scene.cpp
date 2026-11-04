@@ -1,6 +1,8 @@
 #include "designer/design_scene.h"
 
+#include "comm/modbus_slave.h"
 #include "designer/canvas_item.h"
+#include "runtime/widgets/data_widgets.h"
 #include "runtime/widgets/display_widgets.h"
 
 #include <QtCore/QDir>
@@ -85,6 +87,7 @@ QJsonObject withFreeIds(QJsonObject widget, const QSet<QString> &taken, QSet<QSt
 DesignScene::DesignScene(QObject *parent) : QGraphicsScene(parent)
 {
     setCanvasSize(m_canvasSize);
+    connect(this, &DesignScene::modified, this, &DesignScene::refreshSlaveTables);
 }
 
 void DesignScene::setCanvasSize(const QSize &size)
@@ -177,7 +180,32 @@ bool DesignScene::loadWidgets(const QJsonArray &widgets, QString *error)
         addItem(item);
         adopt(item);
     }
+    refreshSlaveTables();
     return true;
+}
+
+void DesignScene::refreshSlaveTables()
+{
+    const QList<CanvasItem *> items = allItems();
+    std::optional<QJsonObject> card;
+    for (const CanvasItem *item : items) {
+        const bool linkCard =
+            item->typeName() == QLatin1String("SerialConfigCard") || item->typeName() == QLatin1String("TcpConfigCard");
+        if (linkCard && item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave) {
+            QJsonObject props = item->meta().defaultProperties();
+            const QJsonObject own = item->properties();
+            for (auto it = own.begin(); it != own.end(); ++it) {
+                props.insert(it.key(), it.value());
+            }
+            card = props;
+            break;
+        }
+    }
+    for (CanvasItem *item : items) {
+        if (item->typeName() == QLatin1String("ModbusSlaveTable")) {
+            static_cast<ModbusSlaveTableWidget *>(item->widget())->showDesign(card ? &*card : nullptr);
+        }
+    }
 }
 
 QJsonArray DesignScene::widgetsJson() const

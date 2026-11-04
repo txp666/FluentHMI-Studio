@@ -16,7 +16,7 @@ class TestProject : public QObject
   private slots:
     void registryHasEveryDesignerWidget()
     {
-        QCOMPARE(WidgetRegistry::instance().all().size(), 28); // as PyQt UI Designer, without the Modbus card
+        QCOMPARE(WidgetRegistry::instance().all().size(), 29); // as PyQt UI Designer, without the Modbus card
         const WidgetMeta *button = WidgetRegistry::instance().find("PushButton");
         QVERIFY(button);
         QCOMPARE(button->defaultProperties().value("text").toString(), QStringLiteral("按钮"));
@@ -178,7 +178,8 @@ class TestProject : public QObject
     }
 
     // Each link card carries the Modbus poller's settings right after its parser mode and before its frame
-    // format, as PyQt UI Designer does: key, label, default and range.
+    // format, as PyQt UI Designer does: key, label, default and range. A serial or TCP card has its Modbus role
+    // first and its slave settings after them.
     void linkCardsCarryPollingSettings_data()
     {
         QTest::addColumn<QString>("type");
@@ -198,8 +199,14 @@ class TestProject : public QObject
         }
         const qsizetype parser = names.indexOf(QStringLiteral("defaultParser"));
         QVERIFY(parser >= 0);
-        QCOMPARE(names.mid(parser, 5),
-                 (QStringList{"defaultParser", "modbusPeriod", "modbusTimeout", "modbusSlave", "parserConfig"}));
+        const QStringList modbus =
+            type == QLatin1String("MqttConfigCard")
+                ? QStringList{"defaultParser", "modbusPeriod", "modbusTimeout", "modbusSlave", "parserConfig"}
+                : QStringList{"defaultParser", "modbusRole",       "modbusPeriod", "modbusTimeout", "modbusSlave",
+                              "modbusDelay",   "modbusExceptions", "slaveCoStart", "slaveCoCount",  "slaveDiStart",
+                              "slaveDiCount",  "slaveHrStart",     "slaveHrCount", "slaveIrStart",  "slaveIrCount",
+                              "slaveInit",     "parserConfig"};
+        QCOMPARE(names.mid(parser, modbus.size()), modbus);
         const struct
         {
             const char *name;

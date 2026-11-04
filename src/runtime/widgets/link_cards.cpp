@@ -1,5 +1,6 @@
 #include "runtime/widgets/link_cards.h"
 
+#include "comm/modbus_slave.h"
 #include "comm/mqtt_link.h"
 #include "comm/serial_link.h"
 #include "comm/tcp_link.h"
@@ -64,6 +65,7 @@ LinkCardBase::LinkCardBase(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
     auto *header = new QHBoxLayout;
     m_title = new FluentQt::StrongBodyLabel(this);
     m_status = new FluentQt::CaptionLabel(this);
+    fluentToolTip(m_status);
     // A long status (a link that parses Modbus adds the poller's) takes only the room the title leaves.
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -72,6 +74,7 @@ LinkCardBase::LinkCardBase(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
     // A single-row strip has no header: this one sits at its right end, after the button, and says the same.
     // Left-aligned, so a status too long for the strip loses the end of the poller's part, never the start.
     m_stripStatus = new FluentQt::CaptionLabel(this);
+    fluentToolTip(m_stripStatus);
     m_stripStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_stripStatus->hide();
     m_grid = new QGridLayout;
@@ -105,6 +108,13 @@ void LinkCardBase::paintEvent(QPaintEvent *)
 
 void LinkCardBase::onAttached()
 {
+    if (text("modbusRole") == ModbusRole::Slave) {
+        // The table lives while the project runs, through every connection.
+        m_slave = new ModbusSlave(ModbusSlave::settingsFromProperties(properties()),
+                                  ModbusSlaveStore::fromProperties(properties()), this);
+        context()->hub()->addModbusSlave(m_slave);
+        connect(m_slave, &ModbusSlave::statusChanged, this, [this]() { showStatus(); });
+    }
     live(connect(context()->modbusPoller(), &ModbusPoller::statusChanged, this, [this]() { showStatus(); }));
     updatePolling();
 }
@@ -112,6 +122,8 @@ void LinkCardBase::onAttached()
 void LinkCardBase::onDetached()
 {
     context()->modbusPoller()->removeLinkCard(this);
+    delete m_slave; // its links are gone already
+    m_slave = nullptr;
     setConnectedUi(false, tr("未连接"));
 }
 
@@ -148,6 +160,11 @@ bool LinkCardBase::configureParser(Link *link)
     } else if (type == hub->defaultParserType()) {
         config = hub->defaultParserConfig();
     }
+    // A slave's counts start again with each connection.
+    link->setModbusSlave(m_slave);
+    if (m_slave) {
+        m_slave->resetCounts();
+    }
     QString error;
     if (!link->setParser(type, config, &error)) {
         context()->notify(tr("解析模式无效"), error, NotifyType::Error, 3000);
@@ -179,8 +196,11 @@ void LinkCardBase::showStatus()
     if (isLive() && m_connected) {
         const Link *link = currentLink();
         const ModbusPoller *poller = context()->modbusPoller();
-        if (link && link->isConnected() && link->parsesModbus() && link->canSend() && !poller->status().isEmpty() &&
-            !poller->isWaiting()) {
+        if (link && link->isConnected() && link->answersModbus() && link->modbusSlave()) {
+            text += QStringLiteral(" · ") + link->modbusSlave()->status();
+            polling = true;
+        } else if (link && link->isConnected() && link->parsesModbus() && link->canSend() &&
+                   !poller->status().isEmpty() && !poller->isWaiting()) {
             text += QStringLiteral(" · ") + poller->status();
             toolTip = poller->blocks().isEmpty() ? text : poller->toolTip();
             polling = true;
@@ -275,6 +295,7 @@ SerialConfigCardWidget::SerialConfigCardWidget(const WidgetMeta &meta, QWidget *
     m_port->setPlaceholderText(tr("选择串口"));
     m_refresh = new FluentQt::ToolButton(m_portRow);
     m_refresh->setIcon(FluentQt::icon(FluentQt::FluentIcon::Sync));
+    fluentToolTip(m_refresh, tr("搜索串口"));
     keepSquareBeside(m_refresh, m_port);
     portLayout->addWidget(m_port, 1);
     portLayout->addWidget(m_refresh);
@@ -576,9 +597,8 @@ MqttConfigCardWidget::MqttConfigCardWidget(const WidgetMeta &meta, QWidget *pare
     m_clientId->setPlaceholderText(tr("留空自动生成"));
     m_username = new FluentQt::LineEdit(this);
     m_username->setPlaceholderText(tr("可选"));
-    m_password = new FluentQt::LineEdit(this);
+    m_password = new FluentQt::PasswordLineEdit(this);
     m_password->setPlaceholderText(tr("可选"));
-    m_password->setEchoMode(QLineEdit::Password);
     m_subscribe = new FluentQt::LineEdit(this);
     m_subscribe->setPlaceholderText(tr("多个主题用逗号分隔，支持 + 和 #"));
     m_publish = new FluentQt::LineEdit(this);

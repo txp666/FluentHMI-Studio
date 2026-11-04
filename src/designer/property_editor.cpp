@@ -1,5 +1,6 @@
 #include "designer/property_editor.h"
 
+#include "comm/modbus_slave.h"
 #include "core/binding.h"
 #include "core/protocol_parser.h"
 #include "designer/canvas_item.h"
@@ -386,6 +387,8 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
         edit->setPlainText(value.toString());
         edit->setFixedHeight(84);
         if (def.name == QLatin1String("tabNames")) {
+            fluentToolTip(edit, tr("每行一个标签，离开输入框后应用，按序号保留页面。\n"
+                                   "减少页数时，超出页的控件移至最后一页；名称为空时保留“标签1”。"));
             edit->onFinished = [edit, commit]() { commit(edit->toPlainText()); };
         } else {
             connect(edit, &QPlainTextEdit::textChanged, this, [edit, commit]() { commit(edit->toPlainText()); });
@@ -503,7 +506,7 @@ QWidget *PropertyEditor::createIconButton(QWidget *nameField)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
     auto *button = new FluentQt::ToolButton(row);
-    button->setToolTip(tr("应用图标"));
+    fluentToolTip(button, tr("应用图标"));
     button->setIconSize(QSize(20, 20));
     // The studio's own logo stands for the default icon, which is what an exported application gets.
     const QIcon icon = iconFromFile(m_project->iconPath());
@@ -559,6 +562,9 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
     };
     const auto row = [&](const char *key, const QString &label, QWidget *editor) {
         addRow(form, prefix + QLatin1String(key), label, editor);
+        if (!editor->toolTip().isEmpty()) { // the label explains the row too, as in PyQt UI Designer
+            fluentToolTip(m_rows.value(prefix + QLatin1String(key)).first, editor->toolTip());
+        }
     };
     const auto text = [&](const char *key, const QString &fallback) {
         auto *edit = new FluentQt::LineEdit(m_content);
@@ -571,7 +577,7 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
         box->setRange(lo, hi);
         box->setValue(config.value(QLatin1String(key)).toInt(fallback));
         box->setKeyboardTracking(false);
-        box->setToolTip(tip);
+        fluentToolTip(box, tip);
         connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [store, key](int v) { store(key, v); });
         return box;
     };
@@ -598,7 +604,7 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
         {QStringLiteral("\\n"), QStringLiteral("\\r\\n"), QStringLiteral("\\r"), QStringLiteral(";")});
     terminator->setCurrentText(
         escapedTerminator(config.value(QStringLiteral("terminator")).toString(QStringLiteral("\n"))));
-    terminator->setToolTip(tr("可输入任意文本，\\n \\r \\t \\\\ 按转义解释"));
+    fluentToolTip(terminator, tr("一条记录的结尾；\\n 换行，\\r 回车，\\t 制表符，\\\\ 反斜杠"));
     connect(terminator, &FluentQt::EditableComboBox::currentTextChanged, this, [store](const QString &t) {
         const QString value = unescapedTerminator(t);
         if (!value.isEmpty()) {
@@ -910,8 +916,8 @@ void PropertyEditor::buildBindingForm()
     auto *period = spin(0, 60000, value("mbPeriod", 0).toInt());
     add("mbPeriod", tr("采集周期(ms)"), period);
     const QString periodTip = tr("0 = 用默认周期（链路卡片的「默认轮询(ms)」，默认 500）");
-    period->setToolTip(periodTip);
-    m_rows.value(QStringLiteral("binding.mbPeriod")).first->setToolTip(periodTip);
+    fluentToolTip(period, periodTip);
+    fluentToolTip(m_rows.value(QStringLiteral("binding.mbPeriod")).first, periodTip);
     add("expression", tr("转换表达式"), line(value("expression", QString()).toString(), tr("如 value * 0.1")));
 }
 
@@ -982,10 +988,20 @@ void PropertyEditor::updateVisibility()
     if (meta.prop(QStringLiteral("parserConfig"))) {
         const QString parser = m_item->propertyValue(QStringLiteral("defaultParser")).toString();
         setFrameRowsVisible(QStringLiteral("parserConfig."), parser);
-        // A link card's Modbus polling settings, for a Modbus mode of its own. On 项目设置 they stay hidden,
-        // and still apply when the project's mode is a Modbus one.
-        for (const char *field : {"modbusPeriod", "modbusTimeout", "modbusSlave"}) {
-            setRowVisible(QLatin1String(field), isModbusParser(parser));
+        // A link card's Modbus settings, for a Modbus mode of its own. On 项目设置 they stay hidden, and still
+        // apply when the project's mode is a Modbus one. Polling is a master's, answering a slave's.
+        const bool modbus = isModbusParser(parser);
+        const bool slave = m_item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave;
+        for (const char *field : {"modbusRole", "modbusSlave"}) {
+            setRowVisible(QLatin1String(field), modbus);
+        }
+        for (const char *field : {"modbusPeriod", "modbusTimeout"}) {
+            setRowVisible(QLatin1String(field), modbus && !slave);
+        }
+        for (const char *field :
+             {"modbusDelay", "modbusExceptions", "slaveCoStart", "slaveCoCount", "slaveDiStart", "slaveDiCount",
+              "slaveHrStart", "slaveHrCount", "slaveIrStart", "slaveIrCount", "slaveInit"}) {
+            setRowVisible(QLatin1String(field), modbus && slave);
         }
     }
     if (meta.prop(QStringLiteral("commandMode"))) {
