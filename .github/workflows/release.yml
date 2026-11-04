@@ -1,12 +1,19 @@
 name: Release
 
-# Push a tag vX.Y.Z matching project(VERSION) in CMakeLists.txt. Both platforms build,
-# test and package; the release is published only when every package passed its check.
+# Push a tag vX.Y.Z matching project(VERSION) in CMakeLists.txt. Every platform builds,
+# tests and packages; the release is published only when every package passed its check.
 # A tag with a suffix (v0.2.0-rc.1) builds the same way but is published as a pre-release,
-# which the in-app update check does not offer.
+# which the in-app update check does not offer. Run by hand, or by a pull request that
+# changes the packaging, it packages and checks without publishing.
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/package.py
+      - .github/workflows/release.yml
+      - resources/linux/**
 
 permissions:
   contents: write
@@ -31,6 +38,22 @@ jobs:
           - name: macOS universal
             os: macos-15
             configure: -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          # Built on Ubuntu 24.04, whose glibc 2.39 Qt's arm64 libraries need anyway: the packages install on
+          # Ubuntu 24.04 and later and on Debian 13.
+          - name: Linux x64
+            os: ubuntu-24.04
+            configure: -G Ninja -DCMAKE_BUILD_TYPE=Release
+            qt_host: linux
+            uname: x86_64
+            architecture: x64
+            deb_architecture: amd64
+          - name: Linux arm64
+            os: ubuntu-24.04-arm
+            configure: -G Ninja -DCMAKE_BUILD_TYPE=Release
+            qt_host: linux_arm64
+            uname: aarch64
+            architecture: arm64
+            deb_architecture: arm64
 
     steps:
       - name: Check out sources and submodules
@@ -38,11 +61,22 @@ jobs:
         with:
           submodules: recursive
 
+      # Qt's CMake packages want the GL headers. The xcb libraries named here go into the package; patchelf
+      # and xvfb serve scripts/package.py.
+      - name: Install Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-util1 patchelf xvfb xauth
+
+      # host is empty, so picked by the action, except on Linux.
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
           aqtsource: ${{ env.AQT_SOURCE }}
+          host: ${{ matrix.qt_host }}
           modules: "qtserialport"
           cache: true
 
@@ -68,6 +102,7 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure --no-tests=error
 
       - name: Check the tag matches the project version
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           version="$(tr -d '[:space:]' < build/FluentHMIStudio-version.txt)"
@@ -76,19 +111,69 @@ jobs:
             exit 1
           fi
 
+      - name: Check the runner's architecture
+        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/')
+        run: test "$(uname -m)" = "${{ matrix.uname }}"
+
       - name: Package
+        if: runner.os != 'Linux'
         run: python scripts/package.py --build-dir build --output-dir dist --config Release
+
+      # The self-check starts the packaged programs, which needs a display.
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python scripts/package.py --build-dir build --output-dir dist --config Release
+
+      - name: Check the .deb
+        if: runner.os == 'Linux'
+        run: |
+          version="$(tr -d '[:space:]' < build/FluentHMIStudio-version.txt)"
+          deb="dist/FluentHMI-Studio-v$version-linux-${{ matrix.architecture }}.deb"
+          test "$(dpkg-deb --field "$deb" Package)" = fluenthmi-studio
+          test "$(dpkg-deb --field "$deb" Version)" = "$version"
+          test "$(dpkg-deb --field "$deb" Architecture)" = "${{ matrix.deb_architecture }}"
+          dpkg-deb --field "$deb" Depends | grep -E '(^|, )apt(,|$)'
+          dpkg-deb --field "$deb" Depends | grep -E '(^|, )pkexec(,|$)'
+          dpkg-deb --field "$deb" Depends | grep -F libxcb-cursor0
+          sudo apt-get --simulate install "$PWD/$deb"
+
+      # As a user would: installed, and started through its launcher, without the build's Qt on the paths that
+      # install-qt-action set.
+      - name: Install the .deb and export the demo
+        if: runner.os == 'Linux'
+        run: |
+          version="$(tr -d '[:space:]' < build/FluentHMIStudio-version.txt)"
+          sudo apt-get install -y "$PWD/dist/FluentHMI-Studio-v$version-linux-${{ matrix.architecture }}.deb"
+          env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH \
+            xvfb-run -a fluenthmi-studio --export "$RUNNER_TEMP/export" examples/demo.uidp
+
+      # A fresh system with the system libraries the README lists and none of the studio's other dependencies:
+      # the exported application must bring everything else, as on a board without apt.
+      - name: Run the export on a clean system
+        if: runner.os == 'Linux'
+        run: |
+          packages="$(python -c 'import runpy; print(*runpy.run_path("scripts/package.py")["LINUX_SYSTEM_PACKAGES"])')"
+          docker run --rm -e PACKAGES="$packages" -v "$RUNNER_TEMP/export:/export:ro" ubuntu:24.04 sh -euxc '
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $PACKAGES xvfb xauth
+            mkdir /tmp/app
+            for archive in /export/*.tar.gz; do tar -xzf "$archive" -C /tmp/app; done
+            for app in /tmp/app/*/; do xvfb-run -a "${app}start.sh" --check; done
+          '
 
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: package-${{ runner.os }}
-          path: dist/*.zip*
+          name: package-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/*.zip*
+            dist/*.deb*
           if-no-files-found: error
 
   publish:
     name: Publish release
     needs: package
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
