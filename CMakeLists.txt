@@ -88,7 +88,7 @@ target_include_directories(fhmi_core PUBLIC src)
 target_link_libraries(fhmi_core PUBLIC Qt6::Core)
 
 # ---------------------------------------------------------------------------
-# fhmi_comm: transport links (serial, TCP) behind one hub.
+# fhmi_comm: transport links (serial, TCP, MQTT, UDP) behind one hub.
 # ---------------------------------------------------------------------------
 add_library(fhmi_comm STATIC
     src/comm/comm_hub.cpp
@@ -105,6 +105,8 @@ add_library(fhmi_comm STATIC
     src/comm/serial_link.h
     src/comm/tcp_link.cpp
     src/comm/tcp_link.h
+    src/comm/udp_link.cpp
+    src/comm/udp_link.h
 )
 target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort)
 

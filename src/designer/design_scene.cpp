@@ -189,8 +189,9 @@ void DesignScene::refreshSlaveTables()
     const QList<CanvasItem *> items = allItems();
     std::optional<QJsonObject> card;
     for (const CanvasItem *item : items) {
-        const bool linkCard =
-            item->typeName() == QLatin1String("SerialConfigCard") || item->typeName() == QLatin1String("TcpConfigCard");
+        const bool linkCard = item->typeName() == QLatin1String("SerialConfigCard") ||
+                              item->typeName() == QLatin1String("TcpConfigCard") ||
+                              item->typeName() == QLatin1String("UdpConfigCard");
         if (linkCard && item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave) {
             QJsonObject props = item->meta().defaultProperties();
             const QJsonObject own = item->properties();

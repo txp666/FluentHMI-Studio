@@ -4,6 +4,7 @@
 #include "comm/mqtt_link.h"
 #include "comm/serial_link.h"
 #include "comm/tcp_link.h"
+#include "comm/udp_link.h"
 #include "runtime/runtime_context.h"
 #include "runtime/ui_helpers.h"
 #include "runtime/widgets/display_widgets.h"
@@ -737,6 +738,112 @@ void MqttConfigCardWidget::refreshState()
     } else {
         setConnectedUi(false, tr("未连接"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// UdpConfigCard
+// ---------------------------------------------------------------------------
+
+UdpConfigCardWidget::UdpConfigCardWidget(const WidgetMeta &meta, QWidget *parent) : LinkCardBase(meta, parent)
+{
+    m_localPort = new FluentQt::SpinBox(this);
+    m_localPort->setRange(0, 65535);
+    m_localPort->setSpecialValueText(tr("自动"));
+    m_localPort->hide();
+    m_host = new FluentQt::LineEdit(this);
+    m_host->setPlaceholderText(tr("留空则回复最后发送方"));
+    m_port = new FluentQt::SpinBox(this);
+    m_port->setRange(1, 65535);
+    // Host and port share a row, as the MQTT card's server.
+    m_remoteRow = new QWidget(this);
+    auto *remoteLayout = new QHBoxLayout(m_remoteRow);
+    remoteLayout->setContentsMargins(0, 0, 0, 0);
+    remoteLayout->setSpacing(6);
+    m_host->setParent(m_remoteRow);
+    m_port->setParent(m_remoteRow);
+    remoteLayout->addWidget(m_host, 3);
+    remoteLayout->addWidget(m_port, 1);
+    m_remoteRow->hide();
+}
+
+UdpConfigCardWidget::~UdpConfigCardWidget()
+{
+    detach();
+}
+
+void UdpConfigCardWidget::apply()
+{
+    m_title->setText(text("title"));
+    m_localPort->setValue(integer("defaultLocalPort"));
+    m_host->setText(text("defaultHost"));
+    m_port->setValue(integer("defaultPort"));
+    selectValue(m_parser, text("defaultParser"));
+    updatePolling();
+    clearFields();
+    m_parser->hide();
+    addField(tr("本地端口"), m_localPort);
+    addField(tr("远程"), m_remoteRow);
+    if (text("displayMode") != QStringLiteral("简洁")) { // i18n: value
+        addField(tr("解析模式"), m_parser);
+    }
+    finishFields();
+}
+
+void UdpConfigCardWidget::onAttached()
+{
+    m_link = new UdpLink(this);
+    context()->hub()->addLink(m_link);
+    live(connect(m_connect, &QPushButton::clicked, this, &UdpConfigCardWidget::toggleConnection));
+    live(connect(m_link, &Link::connectedChanged, this, &UdpConfigCardWidget::refreshState));
+    // The first datagram of a link without a remote gives it someone to send to: the poller may start.
+    live(connect(m_link, &Link::canSendChanged, this, &UdpConfigCardWidget::refreshState));
+    live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
+        context()->notify(QStringLiteral("UDP"), message, NotifyType::Error, 3000);
+    }));
+    LinkCardBase::onAttached();
+}
+
+Link *UdpConfigCardWidget::currentLink() const
+{
+    return m_link;
+}
+
+void UdpConfigCardWidget::onDetached()
+{
+    if (m_link) {
+        m_link->close();
+        context()->hub()->removeLink(m_link);
+        delete m_link;
+        m_link = nullptr;
+    }
+    LinkCardBase::onDetached();
+    refreshState();
+}
+
+void UdpConfigCardWidget::toggleConnection()
+{
+    if (m_link->isConnected()) {
+        m_link->close();
+        return;
+    }
+    if (!configureParser(m_link)) {
+        return;
+    }
+    QString error;
+    if (!m_link->open(quint16(m_localPort->value()), m_host->text(), m_port->value(), &error)) {
+        context()->notify(QStringLiteral("UDP"), error, NotifyType::Error, 3000);
+    }
+}
+
+void UdpConfigCardWidget::refreshState()
+{
+    const bool open = m_link && m_link->isConnected();
+    for (QWidget *w : {static_cast<QWidget *>(m_localPort), static_cast<QWidget *>(m_host),
+                       static_cast<QWidget *>(m_port), static_cast<QWidget *>(m_parser)}) {
+        w->setEnabled(!open);
+    }
+    // Like the other cards here, the status is the link's description.
+    setConnectedUi(open, open ? m_link->description() : tr("未连接"));
 }
 
 } // namespace fhmi

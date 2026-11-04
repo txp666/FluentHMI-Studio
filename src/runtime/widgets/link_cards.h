@@ -25,6 +25,7 @@ class MqttLink;
 class SerialLink;
 class TcpClientLink;
 class TcpServerLink;
+class UdpLink;
 
 // Common frame of the cards that own a link: title, a status line, the parser choice
 // and one button that reads 连接, 断开 or 取消. While attached, the card owns its link and
@@ -34,7 +35,7 @@ class TcpServerLink;
 // (ModbusPoller::setLinkCard()). While its link is connected, parses Modbus and can send, the status line
 // reads <connection> · <poller status>, with the poller's blocks as its tooltip.
 //
-// A serial or TCP card whose modbusRole is 从站 keeps a Modbus slave (ModbusSlave) for as long as it is attached;
+// A serial, TCP or UDP card whose modbusRole is 从站 keeps a Modbus slave (ModbusSlave) for as long as it is attached;
 // each link it connects answers through it while the link's parser is modbus or modbus_tcp, and the status line
 // then reads <connection> · 从站 S · 应答 N in place of the poller's.
 class LinkCardBase : public HmiWidget
@@ -172,6 +173,29 @@ class MqttConfigCardWidget : public LinkCardBase
     QWidget *m_loginRow = nullptr;
     QWidget *m_qosRow = nullptr;
     MqttLink *m_link = nullptr;
+};
+
+class UdpConfigCardWidget : public LinkCardBase
+{
+  public:
+    UdpConfigCardWidget(const WidgetMeta &meta, QWidget *parent);
+    ~UdpConfigCardWidget() override;
+
+  protected:
+    void apply() override;
+    void onAttached() override;
+    void onDetached() override;
+    Link *currentLink() const override;
+
+  private:
+    void toggleConnection();
+    void refreshState();
+
+    FluentQt::SpinBox *m_localPort = nullptr;
+    FluentQt::LineEdit *m_host = nullptr;
+    FluentQt::SpinBox *m_port = nullptr;
+    QWidget *m_remoteRow = nullptr;
+    UdpLink *m_link = nullptr;
 };
 
 } // namespace fhmi

@@ -40,7 +40,7 @@ bool isStrictInt(const QJsonValue &value)
 bool validateCardParser(const QJsonObject &item, const QString &projectParser, QString *error)
 {
     static const QSet<QString> cards = {QStringLiteral("SerialConfigCard"), QStringLiteral("TcpConfigCard"),
-                                        QStringLiteral("MqttConfigCard")};
+                                        QStringLiteral("MqttConfigCard"), QStringLiteral("UdpConfigCard")};
     const QJsonObject props = item.value(QStringLiteral("properties")).toObject();
     const QJsonValue config = props.value(QStringLiteral("parserConfig"));
     if (!cards.contains(item.value(QStringLiteral("type")).toString()) || config.isUndefined()) {

@@ -179,7 +179,7 @@ void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
 bool CanvasItem::isLinkCard() const
 {
     return typeName() == QLatin1String("SerialConfigCard") || typeName() == QLatin1String("TcpConfigCard") ||
-           typeName() == QLatin1String("MqttConfigCard");
+           typeName() == QLatin1String("MqttConfigCard") || typeName() == QLatin1String("UdpConfigCard");
 }
 
 qreal CanvasItem::rowsHeight() const

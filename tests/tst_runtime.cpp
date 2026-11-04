@@ -948,7 +948,7 @@ class TestRuntime : public QObject
         for (const char *mode : {"完整", "简洁", "单行"}) {
             QTest::addRow("serial %s", mode) << QStringLiteral("SerialConfigCard") << QString::fromUtf8(mode);
         }
-        for (const char *type : {"TcpConfigCard", "MqttConfigCard"}) {
+        for (const char *type : {"TcpConfigCard", "MqttConfigCard", "UdpConfigCard"}) {
             for (const char *mode : {"完整", "简洁"}) {
                 QTest::addRow("%s %s", type, mode) << QString::fromLatin1(type) << QString::fromUtf8(mode);
             }
