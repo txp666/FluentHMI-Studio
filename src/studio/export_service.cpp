@@ -384,6 +384,103 @@ bool replaceProgramIcon(const QString &exe, const QList<IconImage> &images, QStr
     const bool written = EndUpdateResourceW(update, ok ? FALSE : TRUE) && ok;
     return written || fail(error, cannot);
 }
+
+const LPCWSTR kVersionType = MAKEINTRESOURCEW(16); // RT_VERSION
+
+void align4(QByteArray &data)
+{
+    while (data.size() % 4) {
+        data.append('\0');
+    }
+}
+
+// One node of a VS_VERSIONINFO tree: header, key, then its value and children, each on a 32-bit boundary.
+// Its length leaves out any padding after it, as the format asks.
+QByteArray versionNode(const QString &key, quint16 type, const QByteArray &value, quint16 valueLength,
+                       const QList<QByteArray> &children = {})
+{
+    QByteArray node(6, '\0');
+    node.append(reinterpret_cast<const char *>(key.utf16()), (key.size() + 1) * 2);
+    if (!value.isEmpty()) {
+        align4(node);
+        node.append(value);
+    }
+    for (const QByteArray &child : children) {
+        align4(node);
+        node.append(child);
+    }
+    qToLittleEndian<quint16>(quint16(node.size()), node.data());
+    qToLittleEndian<quint16>(valueLength, node.data() + 2);
+    qToLittleEndian<quint16>(type, node.data() + 4);
+    return node;
+}
+
+QByteArray versionString(const QString &key, const QString &text)
+{
+    const QByteArray value(reinterpret_cast<const char *>(text.utf16()), (text.size() + 1) * 2);
+    return versionNode(key, 1, value, quint16(text.size() + 1));
+}
+
+// The exported program's version information names the app; the runtime's names FluentHMI Studio. The
+// version numbers stay the runtime's, and like PyQt UI Designer's exports it names no company or copyright.
+bool renameProgram(const QString &exe, const QString &appName, QString *error)
+{
+    const QString cannot = QObject::tr("无法写入程序信息: %1").arg(QDir::toNativeSeparators(exe));
+    const std::wstring path = QDir::toNativeSeparators(exe).toStdWString();
+    HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if (!module) {
+        return fail(error, cannot);
+    }
+    QList<WORD> languages;
+    EnumResourceLanguagesW(module, kVersionType, MAKEINTRESOURCEW(1), collectLanguage,
+                           reinterpret_cast<LONG_PTR>(&languages));
+    QByteArray fixed;
+    if (!languages.isEmpty()) {
+        HRSRC found = FindResourceExW(module, kVersionType, MAKEINTRESOURCEW(1), languages.first());
+        HGLOBAL loaded = found ? LoadResource(module, found) : nullptr;
+        const auto *data = loaded ? static_cast<const char *>(LockResource(loaded)) : nullptr;
+        const DWORD size = found ? SizeofResource(module, found) : 0;
+        // VS_FIXEDFILEINFO follows the 6-byte header and the key L"VS_VERSION_INFO", 32-bit aligned.
+        if (data && size >= 40 + 52 && qFromLittleEndian<quint32>(data + 40) == 0xFEEF04BD) {
+            fixed = QByteArray(data + 40, 52);
+        }
+    }
+    FreeLibrary(module);
+    if (fixed.isEmpty()) {
+        return true; // no version information to rename
+    }
+
+    const quint32 high = qFromLittleEndian<quint32>(fixed.constData() + 8);
+    const quint32 low = qFromLittleEndian<quint32>(fixed.constData() + 12);
+    const QString version = QStringLiteral("%1.%2.%3").arg(high >> 16).arg(high & 0xFFFF).arg(low >> 16);
+    const QByteArray strings = versionNode(
+        QStringLiteral("StringFileInfo"), 1, {}, 0,
+        {versionNode(QStringLiteral("040904b0"), 1, {}, 0,
+                     {versionString(QStringLiteral("FileDescription"), appName),
+                      versionString(QStringLiteral("FileVersion"), version),
+                      versionString(QStringLiteral("InternalName"), appName),
+                      versionString(QStringLiteral("OriginalFilename"), QFileInfo(exe).fileName()),
+                      versionString(QStringLiteral("ProductName"), appName),
+                      versionString(QStringLiteral("ProductVersion"), version)})});
+    QByteArray translation(4, '\0'); // US English, UTF-16, as the string table's key says
+    qToLittleEndian<quint16>(0x0409, translation.data());
+    qToLittleEndian<quint16>(1200, translation.data() + 2);
+    const QByteArray variables = versionNode(QStringLiteral("VarFileInfo"), 1, {}, 0,
+                                             {versionNode(QStringLiteral("Translation"), 0, translation, 4)});
+    const QByteArray info = versionNode(QStringLiteral("VS_VERSION_INFO"), 0, fixed, 52, {strings, variables});
+
+    HANDLE update = BeginUpdateResourceW(path.c_str(), FALSE);
+    if (!update) {
+        return fail(error, cannot);
+    }
+    for (qsizetype i = 1; i < languages.size(); ++i) {
+        UpdateResourceW(update, kVersionType, MAKEINTRESOURCEW(1), languages.at(i), nullptr, 0);
+    }
+    const bool ok = UpdateResourceW(update, kVersionType, MAKEINTRESOURCEW(1), languages.first(),
+                                    const_cast<char *>(info.constData()), DWORD(info.size()));
+    const bool written = EndUpdateResourceW(update, ok ? FALSE : TRUE) && ok;
+    return written || fail(error, cannot);
+}
 #endif
 } // namespace
 
@@ -538,6 +635,9 @@ QString ExportService::exportApplication(const Project &project, const QString &
         return abort(QString());
     }
 #ifdef Q_OS_WIN
+    if (!renameProgram(renamed, name, error)) {
+        return abort(QString());
+    }
     if (!icon.isNull()) {
         // An .ico goes in as it is, with all its sizes; anything else (or an .ico that is not one) as made here.
         QList<IconImage> images;
