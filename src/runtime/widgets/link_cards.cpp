@@ -65,6 +65,7 @@ LinkCardBase::LinkCardBase(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
     auto *header = new QHBoxLayout;
     m_title = new FluentQt::StrongBodyLabel(this);
     m_status = new FluentQt::CaptionLabel(this);
+    fluentToolTip(m_status);
     // A long status (a link that parses Modbus adds the poller's) takes only the room the title leaves.
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -73,6 +74,7 @@ LinkCardBase::LinkCardBase(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
     // A single-row strip has no header: this one sits at its right end, after the button, and says the same.
     // Left-aligned, so a status too long for the strip loses the end of the poller's part, never the start.
     m_stripStatus = new FluentQt::CaptionLabel(this);
+    fluentToolTip(m_stripStatus);
     m_stripStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_stripStatus->hide();
     m_grid = new QGridLayout;
@@ -293,6 +295,7 @@ SerialConfigCardWidget::SerialConfigCardWidget(const WidgetMeta &meta, QWidget *
     m_port->setPlaceholderText(tr("选择串口"));
     m_refresh = new FluentQt::ToolButton(m_portRow);
     m_refresh->setIcon(FluentQt::icon(FluentQt::FluentIcon::Sync));
+    fluentToolTip(m_refresh, tr("搜索串口"));
     keepSquareBeside(m_refresh, m_port);
     portLayout->addWidget(m_port, 1);
     portLayout->addWidget(m_refresh);
@@ -594,9 +597,8 @@ MqttConfigCardWidget::MqttConfigCardWidget(const WidgetMeta &meta, QWidget *pare
     m_clientId->setPlaceholderText(tr("留空自动生成"));
     m_username = new FluentQt::LineEdit(this);
     m_username->setPlaceholderText(tr("可选"));
-    m_password = new FluentQt::LineEdit(this);
+    m_password = new FluentQt::PasswordLineEdit(this);
     m_password->setPlaceholderText(tr("可选"));
-    m_password->setEchoMode(QLineEdit::Password);
     m_subscribe = new FluentQt::LineEdit(this);
     m_subscribe->setPlaceholderText(tr("多个主题用逗号分隔，支持 + 和 #"));
     m_publish = new FluentQt::LineEdit(this);

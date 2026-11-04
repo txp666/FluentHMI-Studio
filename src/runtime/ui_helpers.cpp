@@ -1,6 +1,7 @@
 #include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/StyleSheet.h>
+#include <FluentQtWidgets/Widgets/ToolTip.h>
 
 #include <QtCore/QEvent>
 #include <QtCore/QPointer>
@@ -46,6 +47,14 @@ void keepSquareBeside(QAbstractButton *button, QWidget *field)
         QStringLiteral("QToolButton[fqw=\"ToolButton\"] { padding: 0px; min-width: 0px; min-height: 0px; }");
     FluentQt::FluentStyleSheet::setCustomStyleSheet(button, compact, compact);
     new SquareFollower(button, field);
+}
+
+void fluentToolTip(QWidget *widget, const QString &text)
+{
+    if (!text.isEmpty()) {
+        widget->setToolTip(text);
+    }
+    widget->installEventFilter(new FluentQt::ToolTipFilter(widget));
 }
 
 QIcon iconFromFile(const QString &path)

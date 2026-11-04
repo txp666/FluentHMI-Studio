@@ -2,11 +2,10 @@
 
 #include "runtime/hmi_widget.h"
 
-class QLabel;
-
 namespace FluentQt {
 class BodyLabel;
 class CaptionLabel;
+class ImageLabel;
 class ProgressBar;
 class ProgressRing;
 } // namespace FluentQt
@@ -43,7 +42,7 @@ class NumericDisplayWidget : public HmiWidget
 
   private:
     FluentQt::CaptionLabel *m_title = nullptr;
-    QLabel *m_value = nullptr;
+    FluentQt::BodyLabel *m_value = nullptr;
     FluentQt::CaptionLabel *m_unit = nullptr;
 };
 
@@ -83,12 +82,13 @@ class ImageWidget : public HmiWidget
   protected:
     void apply() override;
     void resizeEvent(QResizeEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
 
   private:
     void refresh();
 
-    QLabel *m_image = nullptr;
-    QPixmap m_pixmap;
+    FluentQt::ImageLabel *m_image = nullptr;
+    FluentQt::CaptionLabel *m_placeholder = nullptr;
 };
 
 class GaugeWidget : public HmiWidget

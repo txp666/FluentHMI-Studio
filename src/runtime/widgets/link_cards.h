@@ -10,6 +10,7 @@ class CaptionLabel;
 class CheckBox;
 class ComboBox;
 class LineEdit;
+class PasswordLineEdit;
 class PrimaryPushButton;
 class SpinBox;
 class StrongBodyLabel;
@@ -162,7 +163,7 @@ class MqttConfigCardWidget : public LinkCardBase
     FluentQt::SpinBox *m_port = nullptr;
     FluentQt::LineEdit *m_clientId = nullptr;
     FluentQt::LineEdit *m_username = nullptr;
-    FluentQt::LineEdit *m_password = nullptr;
+    FluentQt::PasswordLineEdit *m_password = nullptr;
     FluentQt::LineEdit *m_subscribe = nullptr;
     FluentQt::LineEdit *m_publish = nullptr;
     FluentQt::ComboBox *m_qos = nullptr;

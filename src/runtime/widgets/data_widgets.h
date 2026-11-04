@@ -7,7 +7,6 @@
 #include <optional>
 #include <vector>
 
-class QLabel;
 class QTableWidgetItem;
 class QTextEdit;
 class QTimer;
@@ -85,7 +84,7 @@ class RealtimeChartWidget : public HmiWidget
 
     ChartHeader *m_header = nullptr;
     ChartPlot *m_plot = nullptr;
-    QLabel *m_mode = nullptr;
+    FluentQt::CaptionLabel *m_mode = nullptr;
     FluentQt::LineEdit *m_displayEdit = nullptr;
     FluentQt::ToolButton *m_clearReference = nullptr;
     QTimer *m_refreshTimer = nullptr;

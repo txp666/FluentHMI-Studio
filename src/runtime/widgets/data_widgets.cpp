@@ -4,6 +4,7 @@
 #include "core/hex_utils.h"
 #include "core/protocol_parser.h"
 #include "runtime/runtime_context.h"
+#include "runtime/ui_helpers.h"
 #include "runtime/widgets/display_widgets.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
@@ -640,17 +641,18 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
     m_displayEdit->setFixedWidth(80);
     toolbar->addWidget(m_displayEdit);
     // 实时, the cursor's sample, or what went wrong saving, loading or recording.
-    m_mode = new QLabel(tr("实时"), this);
+    m_mode = new FluentQt::CaptionLabel(tr("实时"), this);
+    m_mode->setTextColor(QColor(QStringLiteral("#0078d4")), QColor(QStringLiteral("#4aa3df")));
     m_mode->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_mode->setMinimumWidth(1); // a long message is cut short rather than widening the chart
     toolbar->addWidget(m_mode);
     toolbar->addStretch();
     auto *save = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Save), this);
-    save->setToolTip(tr("保存完整曲线数据"));
+    fluentToolTip(save, tr("保存完整曲线数据"));
     auto *load = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Folder), this);
-    load->setToolTip(tr("加载对比曲线"));
+    fluentToolTip(load, tr("加载对比曲线"));
     m_clearReference = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Broom), this);
-    m_clearReference->setToolTip(tr("清除对比"));
+    fluentToolTip(m_clearReference, tr("清除对比"));
     m_clearReference->hide();
     toolbar->addWidget(save);
     toolbar->addWidget(load);
@@ -774,9 +776,7 @@ void RealtimeChartWidget::applyTheme()
 {
     const bool dark = isDarkTheme();
     const QString foreground = dark ? QStringLiteral("#e5e5e5") : QStringLiteral("#202020");
-    const QString accent = dark ? QStringLiteral("#4aa3df") : QStringLiteral("#0078d4");
     m_header->setForeground(QColor(foreground));
-    m_mode->setStyleSheet(QStringLiteral("font-size: 12px; color: %1; padding: 1px 0;").arg(accent));
     for (int i = 0; i < m_plot->seriesCount(); ++i) {
         m_plot->setSeriesColor(i, curveColor(i));
     }
