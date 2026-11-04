@@ -31,8 +31,8 @@ struct ReleaseInfo
 
 namespace UpdateRelease {
 
-// How this platform's package name ends ("-macos-universal.zip", "-windows-x64.zip"), or
-// empty where no package is built.
+// How this platform's package name ends ("-macos-universal.zip", "-windows-x64.zip",
+// "-linux-x64.deb", "-linux-arm64.deb"), or empty where no package is built.
 QString packageSuffix();
 
 // Reads GitHub's "latest release" JSON. The package is the asset whose name ends with

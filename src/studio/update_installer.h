@@ -14,7 +14,8 @@ namespace fhmi {
 // moves the old installation aside, moves the new one into its place, optionally starts it
 // and removes the old one. If the second move fails the old installation is moved back.
 // Everything happens in a staging folder beside the installation, so each move is a rename
-// on one volume.
+// on one volume. On Linux the installation is a .deb's: once the studio has exited, apt
+// installs the downloaded package, as root through pkexec.
 class UpdateInstaller : public QObject
 {
     Q_OBJECT
@@ -24,11 +25,11 @@ class UpdateInstaller : public QObject
     ~UpdateInstaller() override;
 
     // What an update replaces: FluentHMI Studio.app on macOS, the folder holding
-    // FluentHMIStudio.exe on Windows. Empty when this is not a packaged installation
-    // (a build tree, or a platform without packages).
+    // FluentHMIStudio.exe on Windows, /opt/FluentHMIStudio on Linux. Empty when this is not
+    // a packaged installation (a build tree, or a platform without packages).
     static QString installRoot();
-    // Beside installRoot(); downloads and the unpacked package go here. It exists only
-    // while an update is under way or waiting to be installed.
+    // Beside installRoot() (on Linux in the user's cache); downloads and the unpacked package
+    // go here. It exists only while an update is under way or waiting to be installed.
     static QString stagingDir();
     // Whether this installation can replace itself; `reason` says why not. Leaves nothing
     // behind.
@@ -37,7 +38,7 @@ class UpdateInstaller : public QObject
     // staging folder it reads it from.
     static QString takeFailureReport();
 
-    // Unpacks the package; answers with prepared() or failed().
+    // Unpacks the package (a .deb stays as it is); answers with prepared() or failed().
     void prepare(const QString &package);
     bool isPrepared() const { return !m_newRoot.isEmpty(); }
     void cancel();
@@ -55,6 +56,7 @@ class UpdateInstaller : public QObject
 
     QProcess *m_unpack = nullptr;
     QString m_newRoot;
+    QByteArray m_packageDigest; // of the .deb, for the root installer's own check
 };
 
 } // namespace fhmi

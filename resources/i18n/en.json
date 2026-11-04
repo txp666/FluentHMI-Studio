@@ -607,6 +607,7 @@
  "网格大小": "Grid size",
  "网络错误: %1": "Network error: %1",
  "自动": "Auto",
+ "自动安装需要系统提供 pkexec 和 apt-get，请使用系统软件安装器安装已下载的 DEB。": "Automatic installation requires pkexec and apt-get. Use your system software installer to install the downloaded DEB.",
  "自动滚动": "Auto-scroll",
  "自由": "Free",
  "虚拟环境创建失败": "Failed to create the virtual environment",

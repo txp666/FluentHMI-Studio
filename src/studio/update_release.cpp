@@ -14,6 +14,10 @@ QString packageSuffix()
     return QStringLiteral("-macos-universal.zip");
 #elif defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64)
     return QStringLiteral("-windows-x64.zip");
+#elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
+    return QStringLiteral("-linux-x64.deb");
+#elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_ARM_64)
+    return QStringLiteral("-linux-arm64.deb");
 #else
     return QString();
 #endif
