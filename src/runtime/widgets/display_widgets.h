@@ -2,10 +2,12 @@
 
 #include "runtime/hmi_widget.h"
 
+#include <QtGui/QImage>
+#include <QtGui/QTransform>
+
 namespace FluentQt {
 class BodyLabel;
 class CaptionLabel;
-class ImageLabel;
 class ProgressBar;
 class ProgressRing;
 } // namespace FluentQt
@@ -74,6 +76,12 @@ class ProgressRingWidget : public HmiWidget
     FluentQt::BodyLabel *m_label = nullptr;
 };
 
+// Where an ImageDisplay draws its picture: maps the picture's pixel coordinates into a widget box of `box` logical
+// pixels. The picture is scaled by `scaleMode` (适应, 拉伸 or 原始大小), mirrored in its own frame, then turned
+// `rotation` degrees clockwise about the box centre, and always fits inside the box as a whole.
+QTransform imageTransform(const QSizeF &box, const QSize &image, int rotation, bool mirrorH, bool mirrorV,
+                          const QString &scaleMode);
+
 class ImageWidget : public HmiWidget
 {
   public:
@@ -81,14 +89,15 @@ class ImageWidget : public HmiWidget
 
   protected:
     void apply() override;
-    void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
   private:
-    void refresh();
-
-    FluentQt::ImageLabel *m_image = nullptr;
     FluentQt::CaptionLabel *m_placeholder = nullptr;
+    QImage m_image; // the picture at its own size; painted through imageTransform, so it stays sharp at any scale
+    QString m_scaleMode;
+    int m_rotation = 0;
+    bool m_mirrorH = false;
+    bool m_mirrorV = false;
 };
 
 class GaugeWidget : public HmiWidget

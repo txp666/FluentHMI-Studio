@@ -376,7 +376,20 @@ QList<WidgetMeta> displayWidgets()
               integer(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100, 1, 99999)},
              80, 80),
         meta(QStringLiteral("ImageDisplay"), QT_TR_NOOP("图片显示"), WidgetCategory::Display, QStringLiteral("photo"),
-             200, 150, {str(QStringLiteral("imagePath"), QT_TR_NOOP("图片路径"), QString())}),
+             200, 150,
+             {str(QStringLiteral("imagePath"), QT_TR_NOOP("图片路径"), QString()),
+              described(choice(QStringLiteral("scaleMode"), QT_TR_NOOP("缩放方式"),
+                               QStringLiteral("适应"),                               // i18n: value
+                               {QStringLiteral("适应"), QStringLiteral("拉伸"),      // i18n: value
+                                QStringLiteral("原始大小")}),                        // i18n: value
+                        QStringLiteral("适应：保持比例放到最大；拉伸：铺满控件框；"  // i18n: ignore
+                                       "原始大小：按图片的像素大小，放不下时缩小")), // i18n: ignore
+              described(integer(QStringLiteral("rotation"), QT_TR_NOOP("旋转(°)"), 0, 0, 359),
+                        QStringLiteral("顺时针，绕中心转；控件框不动，整张图片缩小到放得进框里")), // i18n: ignore
+              described(boolean(QStringLiteral("mirrorH"), QT_TR_NOOP("水平镜像"), false),
+                        QStringLiteral("左右翻转，在旋转之前")), // i18n: ignore
+              described(boolean(QStringLiteral("mirrorV"), QT_TR_NOOP("垂直镜像"), false),
+                        QStringLiteral("上下翻转，在旋转之前"))}), // i18n: ignore
     };
 }
 

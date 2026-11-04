@@ -7,6 +7,7 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QtMath>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtWidgets/QHBoxLayout>
@@ -241,18 +242,56 @@ void ProgressRingWidget::applyBoundValue(const QVariant &value, const BindingEnt
 // ImageDisplay
 // ---------------------------------------------------------------------------
 
+QTransform imageTransform(const QSizeF &box, const QSize &image, int rotation, bool mirrorH, bool mirrorV,
+                          const QString &scaleMode)
+{
+    const int theta = ((rotation % 360) + 360) % 360;
+    double cos = 1;
+    double sin = 0;
+    if (theta % 90 == 0) { // exact quarter turns
+        static const double quarter[4][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
+        cos = quarter[theta / 90][0];
+        sin = quarter[theta / 90][1];
+    } else {
+        const double radians = qDegreesToRadians(double(theta));
+        cos = std::cos(radians);
+        sin = std::sin(radians);
+    }
+    const double c = std::abs(cos);
+    const double n = std::abs(sin);
+    const double w = box.width();
+    const double h = box.height();
+    const double iw = image.width();
+    const double ih = image.height();
+    // The base rect before turning: the picture's own size, or for 拉伸 the box (its sides swapped near a quarter
+    // turn, so a turned picture still fills the box).
+    double bw = iw;
+    double bh = ih;
+    if (scaleMode == QStringLiteral("拉伸")) { // i18n: value
+        const bool across = theta % 180 > 45 && theta % 180 < 135;
+        bw = across ? h : w;
+        bh = across ? w : h;
+    }
+    // Scaled so the turned base rect's bounding box fits the box; 原始大小 never enlarges.
+    double k = std::min(w / (bw * c + bh * n), h / (bw * n + bh * c));
+    if (scaleMode == QStringLiteral("原始大小")) { // i18n: value
+        k = std::min(1.0, k);
+    }
+    const double sx = (mirrorH ? -1 : 1) * k * bw / iw;
+    const double sy = (mirrorV ? -1 : 1) * k * bh / ih;
+    // (x, y) -> u = (x - iw/2)·sx, v = (y - ih/2)·sy -> (w/2 + u·cos - v·sin, h/2 + u·sin + v·cos)
+    return QTransform(sx * cos, sx * sin, -sy * sin, sy * cos, w / 2 - iw / 2 * sx * cos + ih / 2 * sy * sin,
+                      h / 2 - iw / 2 * sx * sin - ih / 2 * sy * cos);
+}
+
 ImageWidget::ImageWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    // The image label has a fixed size; it must not become the widget's minimum, so the widget still shrinks.
-    layout->setSizeConstraint(QLayout::SetNoConstraint);
     m_placeholder = new FluentQt::CaptionLabel(this);
     m_placeholder->setAlignment(Qt::AlignCenter);
     m_placeholder->setTextColor(QColor(QStringLiteral("#606060")), QColor(QStringLiteral("#b3b3b3")));
-    m_image = new FluentQt::ImageLabel(this);
     layout->addWidget(m_placeholder);
-    layout->addWidget(m_image, 0, Qt::AlignCenter);
     repaintOnThemeChange(this);
 }
 
@@ -262,43 +301,31 @@ void ImageWidget::apply()
     if (!path.isEmpty() && QFileInfo(path).isRelative()) {
         path = QDir(assetBaseDir().isEmpty() ? QDir::currentPath() : assetBaseDir()).filePath(path);
     }
-    const QImage image = path.isEmpty() ? QImage() : QImage(path);
-    m_image->setImage(image);
-    m_image->setVisible(!image.isNull());
-    m_placeholder->setVisible(image.isNull());
-    if (image.isNull()) {
+    m_image = path.isEmpty() ? QImage() : QImage(path);
+    m_scaleMode = text("scaleMode");
+    m_rotation = integer("rotation");
+    m_mirrorH = flag("mirrorH");
+    m_mirrorV = flag("mirrorV");
+    m_placeholder->setVisible(m_image.isNull());
+    if (m_image.isNull()) {
         m_placeholder->setText(path.isEmpty() ? tr("未选择图片") : tr("无法加载图片"));
-    } else {
-        refresh();
     }
     update();
 }
 
-void ImageWidget::resizeEvent(QResizeEvent *event)
-{
-    HmiWidget::resizeEvent(event);
-    refresh();
-}
-
 void ImageWidget::paintEvent(QPaintEvent *)
 {
-    if (!m_image->isNull()) {
+    QPainter painter(this);
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    if (!m_image.isNull()) {
+        painter.setTransform(imageTransform(size(), m_image.size(), m_rotation, m_mirrorH, m_mirrorV, m_scaleMode));
+        painter.drawImage(QPointF(0, 0), m_image);
         return;
     }
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
     const bool dark = isDarkTheme();
     painter.setPen(QPen(dark ? QColor(0x60, 0x60, 0x60) : QColor(0xC8, 0xC8, 0xC8), 1, Qt::DashLine));
     painter.setBrush(dark ? QColor(0x29, 0x29, 0x29) : QColor(0xF5, 0xF5, 0xF5));
     painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
-}
-
-void ImageWidget::refresh()
-{
-    // Aspect-fit in logical pixels; ImageLabel paints the original at the screen's pixel ratio, so it stays sharp.
-    if (!m_image->isNull() && !size().isEmpty()) {
-        m_image->setScaledSize(m_image->image().size().scaled(size(), Qt::KeepAspectRatio).expandedTo(QSize(1, 1)));
-    }
 }
 
 // ---------------------------------------------------------------------------
