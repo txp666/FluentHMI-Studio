@@ -95,8 +95,8 @@ const QStringList kLinkParsers = {
     QStringLiteral("modbus"),   QStringLiteral("modbus_tcp"), QStringLiteral("modbus_ascii")};
 
 // A link card's parser: its mode; what it hands the Modbus poller while its link is connected and parses
-// Modbus (the property editor shows these only for a Modbus mode of the card's own); its frame format. A serial
-// or TCP card can also be a Modbus slave (`slave`): its role, how it answers and its data table.
+// Modbus (the property editor shows these only for a Modbus mode of the card's own); its frame format. A serial,
+// TCP or UDP card can also be a Modbus slave (`slave`): its role, how it answers and its data table.
 QList<PropDef> linkParsing(bool slave)
 {
     QList<PropDef> props{choice(QStringLiteral("defaultParser"), QT_TR_NOOP("默认解析模式"),
@@ -467,6 +467,19 @@ QList<WidgetMeta> commWidgets()
                         {QStringLiteral("客户端"), QStringLiteral("服务端")}),                           // i18n: value
                  str(QStringLiteral("defaultHost"), QT_TR_NOOP("默认地址"), QStringLiteral("127.0.0.1")),
                  integer(QStringLiteral("defaultPort"), QT_TR_NOOP("默认端口"), 8080, 1, 65535)} +
+                 linkParsing(true),
+             240, 50),
+        meta(QStringLiteral("UdpConfigCard"), QT_TR_NOOP("UDP 配置卡片"), WidgetCategory::Comm, QStringLiteral("wifi"),
+             360, 220,
+             QList<PropDef>{
+                 str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("UDP 配置")),
+                 choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"), // i18n: value
+                        {QStringLiteral("完整"), QStringLiteral("简洁")}),                             // i18n: value
+                 described(integer(QStringLiteral("defaultLocalPort"), QT_TR_NOOP("默认本地端口"), 0, 0, 65535),
+                           QStringLiteral("0 表示由系统选一个空闲端口")), // i18n: ignore
+                 described(str(QStringLiteral("defaultHost"), QT_TR_NOOP("默认远程地址"), QStringLiteral("127.0.0.1")),
+                           QStringLiteral("留空则回复最后发送方")), // i18n: ignore
+                 integer(QStringLiteral("defaultPort"), QT_TR_NOOP("默认远程端口"), 8080, 1, 65535)} +
                  linkParsing(true),
              240, 50),
         meta(QStringLiteral("MqttConfigCard"), QT_TR_NOOP("MQTT 配置卡片"), WidgetCategory::Comm,

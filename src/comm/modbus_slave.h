@@ -12,7 +12,7 @@
 
 namespace fhmi {
 
-// The role a serial or TCP card plays on Modbus (modbusRole).
+// The role a serial, TCP or UDP card plays on Modbus (modbusRole).
 namespace ModbusRole {
 inline const QString Master = QStringLiteral("主站"); // i18n: value
 inline const QString Slave = QStringLiteral("从站");  // i18n: value
@@ -128,7 +128,7 @@ class ModbusTcpRequestFramer : public Parser
     QByteArray m_buf;
 };
 
-// The slave of one serial or TCP card whose modbusRole is 从站. Its table lives as long as the running project,
+// The slave of one serial, TCP or UDP card whose modbusRole is 从站. Its table lives as long as the running project,
 // whichever link the card has; the card's link answers through it while it parses modbus or modbus_tcp
 // (Link::setModbusSlave()). Every write, from a master, a control, a command or the register table, reports the
 // change as a slave message, which the hub hands on like a received one (CommHub::addModbusSlave()).

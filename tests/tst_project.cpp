@@ -16,7 +16,7 @@ class TestProject : public QObject
   private slots:
     void registryHasEveryDesignerWidget()
     {
-        QCOMPARE(WidgetRegistry::instance().all().size(), 29); // as PyQt UI Designer, without the Modbus card
+        QCOMPARE(WidgetRegistry::instance().all().size(), 30); // as PyQt UI Designer, without the Modbus card
         const WidgetMeta *button = WidgetRegistry::instance().find("PushButton");
         QVERIFY(button);
         QCOMPARE(button->defaultProperties().value("text").toString(), QStringLiteral("按钮"));
@@ -178,12 +178,12 @@ class TestProject : public QObject
     }
 
     // Each link card carries the Modbus poller's settings right after its parser mode and before its frame
-    // format, as PyQt UI Designer does: key, label, default and range. A serial or TCP card has its Modbus role
+    // format, as PyQt UI Designer does: key, label, default and range. A serial, TCP or UDP card has its Modbus role
     // first and its slave settings after them.
     void linkCardsCarryPollingSettings_data()
     {
         QTest::addColumn<QString>("type");
-        for (const char *type : {"SerialConfigCard", "TcpConfigCard", "MqttConfigCard"}) {
+        for (const char *type : {"SerialConfigCard", "TcpConfigCard", "MqttConfigCard", "UdpConfigCard"}) {
             QTest::newRow(type) << QString::fromLatin1(type);
         }
     }

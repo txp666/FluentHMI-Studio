@@ -177,6 +177,7 @@ const QHash<QString, Factory> &factories()
         {QStringLiteral("SerialConfigCard"), make<SerialConfigCardWidget>()},
         {QStringLiteral("TcpConfigCard"), make<TcpConfigCardWidget>()},
         {QStringLiteral("MqttConfigCard"), make<MqttConfigCardWidget>()},
+        {QStringLiteral("UdpConfigCard"), make<UdpConfigCardWidget>()},
     };
     return table;
 }
