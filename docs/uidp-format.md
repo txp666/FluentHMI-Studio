@@ -17,7 +17,7 @@ FluentHMIRuntime motor.uidp --screenshot shot.png
 FluentHMIStudio --export <输出目录> motor.uidp
 ```
 
-`FluentHMIRuntime` 在安装包里：macOS 是 `FluentHMI Studio.app/Contents/Helpers/FluentHMIRuntime.app/Contents/MacOS/FluentHMIRuntime`，Windows 是和 `FluentHMIStudio.exe` 同目录的 `FluentHMIRuntime.exe`。
+`FluentHMIRuntime` 在安装包里：macOS 是 `FluentHMI Studio.app/Contents/Helpers/FluentHMIRuntime.app/Contents/MacOS/FluentHMIRuntime`，Windows 是和 `FluentHMIStudio.exe` 同目录的 `FluentHMIRuntime.exe`，Linux 是 .deb 装好的 `/opt/FluentHMIStudio/FluentHMIRuntime`。
 
 能不能真正收发数据，要用 Studio 打开工程，切到「预览」，点链路卡片上的「连接」，接上设备看。
 

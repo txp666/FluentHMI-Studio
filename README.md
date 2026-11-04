@@ -67,6 +67,85 @@ Package sizes are taken from each project's GitHub Release. Startup and memory w
 
 What the Python version still has and this one doesn't yet: exporting a source project you can keep editing (see the roadmap below).
 
+## Linux
+
+### Install
+
+Each release has a .deb for x64 and for arm64: `FluentHMI-Studio-vX.Y.Z-linux-x64.deb` (26.7 MB, 91 MB installed) and `FluentHMI-Studio-vX.Y.Z-linux-arm64.deb` (26.4 MB, 92 MB installed). They install on Ubuntu 24.04 or later, Debian 13 and Raspberry Pi OS trixie, which have glibc 2.39 or later; Raspberry Pi OS bookworm and most RK3568 vendor images (Debian 11/12, Ubuntu 20.04/22.04) are too old.
+
+```bash
+sudo apt install ./FluentHMI-Studio-vX.Y.Z-linux-x64.deb
+```
+
+apt installs the system libraries Studio needs. Studio goes to `/opt/FluentHMIStudio`; start it from the application menu or with `fluenthmi-studio`. The launcher runs it on X11 (XWayland on a Wayland desktop) unless `QT_QPA_PLATFORM` is set, since that is where its frameless title bar is proven.
+
+### Exported apps
+
+On Linux an export is one file, `<App>.tar.gz`, which keeps the program executable wherever it is copied to. It holds the folder `<App>/`: the program `<App>`, `start.sh`, `lib/` and `plugins/` with Qt and the X11 helper libraries minimal systems lack, `qt.conf`, `project.uidp`, `appearance.json`, `assets/`, and `<App>.png`, the project's icon (or the FluentHMI logo) at 256 px.
+
+```bash
+tar -xzf <App>.tar.gz
+./<App>/start.sh
+```
+
+`start.sh` runs the app from its own folder, on X11 when there is a display and `QT_QPA_PLATFORM` is not set. To use the app on another machine of the same architecture, copy the archive there (`scp`, a USB stick) and unpack it. That machine needs glibc 2.39 or later and these system libraries, which desktop installs have:
+
+```bash
+sudo apt install libgl1 libopengl0 libegl1 libfontconfig1 libfreetype6 libglib2.0-0t64 libdbus-1-3 \
+  libudev1 libssl3t64 libgssapi-krb5-2 libxkbcommon0 libx11-6 libx11-xcb1 libxext6 libxfixes3 libxi6 \
+  libxrender1 libsm6 libice6 libxcb1 libxcb-glx0 libxcb-randr0 libxcb-render0 libxcb-shape0 \
+  libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 libxcb-xkb1 \
+  libwayland-client0 libwayland-cursor0 libwayland-egl1
+```
+
+Chinese text needs a CJK font; on a board image without one, install `fonts-noto-cjk`.
+
+To put the app in the application menu, save a desktop entry as `~/.local/share/applications/<App>.desktop`, named after the program, which is the name the app gives the desktop. A copy in `~/.config/autostart/` starts it at login:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=<App>
+Exec="/home/pi/<App>/start.sh"
+Icon=/home/pi/<App>/<App>.png
+StartupWMClass=<App>
+Terminal=false
+```
+
+To start it at boot full screen, with no desktop, a systemd service can run it on eglfs, which draws through the GPU's DRM/KMS driver (it uses the system's `libdrm2`, `libgbm1` and, for touch and keys, `libinput10`); where there is no GPU driver, `QT_QPA_PLATFORM=linuxfb` draws on the framebuffer instead. Save it as `/etc/systemd/system/<App>.service`, then `sudo systemctl enable --now <App>`:
+
+```ini
+[Unit]
+Description=<App>
+
+[Service]
+User=pi
+SupplementaryGroups=dialout video render input
+Environment=QT_QPA_PLATFORM=eglfs
+ExecStart=/home/pi/<App>/start.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Studio exports apps for the system it runs on, so a Linux app comes from Studio on Linux of the same architecture, which can be the board itself. Export from the command line there, with `QT_QPA_PLATFORM=offscreen` in front when there is no display (over SSH):
+
+```bash
+fluenthmi-studio --export out project.uidp
+```
+
+### Serial ports
+
+A serial port's device node (`/dev/ttyUSB0`, `/dev/ttyACM0`, ...) belongs to a group, `dialout` on Debian, Ubuntu and Fedora and `uucp` on Arch, and only its members may open it. When Studio or an exported app has no permission to open a port, it names the group; add yourself to it, then log out and back in:
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+- On Ubuntu 22.04, `brltty` (a braille display service) grabs CH340/CH341 USB serial adapters. If `/dev/ttyUSB0` appears and vanishes again, remove it: `sudo apt remove brltty`.
+- ModemManager probes a newly plugged `ttyACM` device for a few seconds; the port is busy until it has finished.
+
 ## Architecture
 
 ```
@@ -83,7 +162,7 @@ The design canvas shows the real runtime widgets, wrapped in QGraphicsProxyWidge
 
 ## Building
 
-Requires CMake 3.21+, C++17 and Qt 6.12 (Core, Gui, Widgets, Svg, Network, SerialPort). A Qt in the default folder of the Qt installer or aqtinstall (`~/Qt`, `C:\Qt`) is found by itself; for one anywhere else, add `-DCMAKE_PREFIX_PATH=<qt-dir>`.
+Requires CMake 3.21+, C++17 and Qt 6.12 (Core, Gui, Widgets, Svg, Network, SerialPort). A Qt in the default folder of the Qt installer or aqtinstall (`~/Qt`, `C:\Qt`) is found by itself; for one anywhere else, add `-DCMAKE_PREFIX_PATH=<qt-dir>`. On Linux, also install `libgl1-mesa-dev`, `libxcb-cursor0` and `libxkbcommon-x11-0`.
 
 ```bash
 git clone --recursive https://github.com/txp666/FluentHMI-Studio.git
@@ -95,7 +174,7 @@ ctest --preset debug
 
 In VS Code, open this folder: Ctrl/Cmd+Shift+B builds, and F5 builds and starts Studio. On Windows, start VS Code from a Developer PowerShell for Visual Studio, so that CMake finds the compiler, and before the first F5 pick "Debug FluentHMI Studio (Windows, MSVC)" under Run and Debug.
 
-On macOS, run `open build/debug/FluentHMIStudio.app`. To export without the UI:
+On macOS, run `open build/debug/FluentHMIStudio.app`; on Linux, `build/debug/FluentHMIStudio`. To export without the UI:
 
 ```bash
 FluentHMIStudio --export <output-dir> <project.uidp>
@@ -117,6 +196,8 @@ Studio gets updates from this repository's GitHub Releases. The settings page ha
 
 Updating now downloads the package for your platform (`-macos-universal.zip` / `-windows-x64.zip`), checks its size and SHA-256 against the `.sha256` file in the Release, and unpacks it into a `.fluenthmi-update` folder next to the install folder. Then click Restart and update (重启并更新), or quit Studio later, and a small helper script (sh on macOS, PowerShell on Windows) waits for Studio to exit, moves the old version aside, puts the new one in its place, restarts it if asked to, and finally deletes the old version. If the new version can't be put in place, the script restores the old one, and the next launch tells you why. When Studio runs from a build folder, from a quarantined temporary location on macOS, or without permission to write to its install folder (for example under Program Files), it doesn't update itself and opens the download page instead.
 
+On Linux the package is the .deb (`-linux-x64.deb` / `-linux-arm64.deb`), verified the same way and kept as it is in `~/.cache/FluentHMI/FluentHMI Studio/update`. When Studio exits, pkexec asks for an administrator's password. As root, the installation then copies the package to a folder of its own, checks the copy's SHA-256 again, checks that it is FluentHMI Studio for this system's architecture, waits for Studio to exit, and installs it with `apt-get`. Studio restarts as you, never as root, if asked to; a failed installation leaves the old version in place, and the next launch tells you why. This needs Studio installed from the .deb in `/opt/FluentHMIStudio`, and pkexec and apt-get on the system; otherwise Studio opens the download page.
+
 To update without the UI (the package is replaced after this process exits):
 
 ```bash
@@ -132,13 +213,13 @@ cmake --preset release && cmake --build --preset release
 python3 scripts/package.py --build-dir build/release --output-dir dist
 ```
 
-On macOS this produces `FluentHMI Studio.app`, with the runner at `Contents/Helpers/FluentHMIRuntime.app`; on Windows it produces `FluentHMI-Studio/`, with the Studio and runner exes in the same folder. The package holds a single copy of Qt: on macOS Qt lives in the runner and Studio uses it through its rpath and `qt.conf`; on Windows both share the Qt DLLs and plugins in the folder, and `runtime-files.txt` lists the files the runner needs. Exporting an app copies only the runner and its Qt, which is why exported apps can be copied straight to another computer and run. At the end, the script exports `examples/demo.uidp` with the packaged Studio and starts the exported app with `--check`; if any step fails, no archive is produced. On macOS it also checks that no library is still loaded from the build machine's Qt folder, and uses `DYLD_PRINT_LIBRARIES` to confirm that at run time Studio and the exported app load only system libraries and libraries inside the package. The output is a zip plus a `.sha256` file; macOS builds are only ad hoc signed, without Developer ID signing or notarization.
+On macOS this produces `FluentHMI Studio.app`, with the runner at `Contents/Helpers/FluentHMIRuntime.app`; on Windows it produces `FluentHMI-Studio/`, with the Studio and runner exes in the same folder; on Linux it produces a .deb that installs the same flat folder as `/opt/FluentHMIStudio`, with Qt's libraries in `lib/` and its plugins in `plugins/`, plus the launcher `/usr/bin/fluenthmi-studio`, a desktop entry and an icon. The package holds a single copy of Qt: on macOS Qt lives in the runner and Studio uses it through its rpath and `qt.conf`; on Windows and Linux both share the Qt libraries and plugins in the folder, and `runtime-files.txt` lists the files the runner needs. On Linux both programs find `lib/` through their RUNPATH (`$ORIGIN/lib`, set with patchelf), and the X11 helper libraries that minimal systems lack are bundled beside Qt's, so an exported app runs where nothing was installed. Exporting an app copies only the runner and its Qt, which is why exported apps can be copied straight to another computer and run. At the end, the script exports `examples/demo.uidp` with the packaged Studio and starts the exported app with `--check`; if any step fails, no archive is produced. On macOS it also checks that no library is still loaded from the build machine's Qt folder, and uses `DYLD_PRINT_LIBRARIES` to confirm that at run time Studio and the exported app load only system libraries and libraries inside the package. On Linux it checks the same with RUNPATHs and `ldd` (no library may be missing), and at run time with `LD_DEBUG=libs`, for Studio unpacked from the finished .deb and for the export unpacked from its tar.gz and started with `start.sh --check`; the programs it starts need a display, so run it under `xvfb-run -a` or in a desktop session. The output is a zip plus a `.sha256` file (on Linux a .deb plus a `.sha256`); macOS builds are only ad hoc signed, without Developer ID signing or notarization.
 
-To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`, optionally add `docs/release-notes/vX.Y.Z.md`, then push a `vX.Y.Z` tag. The `Release` workflow builds, tests and packages on Windows and macOS (universal), and only publishes the GitHub Release when everything passes.
+To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`, optionally add `docs/release-notes/vX.Y.Z.md`, then push a `vX.Y.Z` tag. The `Release` workflow builds, tests and packages on Windows, macOS (universal) and Linux (x64 and arm64, on Ubuntu 24.04). For each .deb it checks the package name, version, architecture and dependencies, lets apt resolve it, installs it and exports the demo with it, and runs that export in a clean Ubuntu 24.04 container with only the system libraries listed above. It only publishes the GitHub Release when everything passes. Started by hand, or by a pull request that changes the packaging, it packages and checks without publishing.
 
 ## Current status (0.3.1)
 
-Done: all 30 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows and macOS packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
+Done: all 30 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows, macOS and Linux (x64 and arm64 .deb) packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
 The MQTT link is a built-in MQTT 3.1.1 client (based on QSslSocket, so the Qt MQTT module isn't needed): it supports username and password, QoS 0/1/2, `+`/`#` wildcard subscriptions, and TLS with the system certificate store, and it reconnects automatically if a connection that succeeded drops. As in the Python version, each message is treated as one frame, and a payload that is a single plain number is also given with the topic name as its key.
 
