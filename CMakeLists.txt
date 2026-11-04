@@ -109,6 +109,8 @@ target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort)
 # exported applications all build their controls from this one library.
 # ---------------------------------------------------------------------------
 add_library(fhmi_runtime STATIC
+    src/runtime/appearance.cpp
+    src/runtime/appearance.h
     src/runtime/hmi_widget.cpp
     src/runtime/hmi_widget.h
     src/runtime/modbus_poller.cpp

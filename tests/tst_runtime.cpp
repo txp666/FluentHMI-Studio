@@ -4,12 +4,14 @@
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
+#include "runtime/appearance.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
 #include "studio/export_service.h"
 
+#include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Slider.h>
@@ -1542,6 +1544,15 @@ class TestRuntime : public QObject
         project.widgets = QJsonArray{QJsonObject{{"id", "img"},
                                                  {"type", "ImageDisplay"},
                                                  {"properties", QJsonObject{{"imagePath", "logo.png"}}}}};
+        // A studio set to orange once exported a cyan application.
+        auto *config = FluentQt::FluentConfig::instance();
+        auto *theme = FluentQt::ThemeManager::instance();
+        const QColor studioColor = config->themeColor();
+        const auto restore = qScopeGuard([config, theme, studioColor]() {
+            config->setThemeColor(studioColor);
+            theme->setAccentColor(studioColor);
+        });
+        config->setThemeColor(QColor(QStringLiteral("#e8590c")));
         QString error;
         const QString created = ExportService::exportApplication(project, output.path(), &error);
         QVERIFY2(!created.isEmpty(), qPrintable(error));
@@ -1558,6 +1569,10 @@ class TestRuntime : public QObject
         const QString bundled = exported.widgets.at(0).toObject().value("properties").toObject().value("imagePath").toString();
         QCOMPARE(bundled, QStringLiteral("assets/logo.png"));
         QVERIFY(QFileInfo::exists(resources.filePath(bundled)));
+        // What the exported runtime applies at start-up.
+        theme->setAccentColor(QColor(QStringLiteral("#009faa")));
+        QVERIFY(applyAppearance(resources.path()));
+        QCOMPARE(theme->accentColor(), QColor(QStringLiteral("#e8590c")));
 
         // A second export to the same place refuses rather than overwriting.
         QVERIFY(ExportService::exportApplication(project, output.path(), &error).isEmpty());
