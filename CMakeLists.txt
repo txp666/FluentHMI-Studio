@@ -95,6 +95,8 @@ add_library(fhmi_comm STATIC
     src/comm/link.h
     src/comm/modbus_master.cpp
     src/comm/modbus_master.h
+    src/comm/modbus_slave.cpp
+    src/comm/modbus_slave.h
     src/comm/mqtt_link.cpp
     src/comm/mqtt_link.h
     src/comm/serial_link.cpp

@@ -1,5 +1,6 @@
 #include "runtime/widgets/link_cards.h"
 
+#include "comm/modbus_slave.h"
 #include "comm/mqtt_link.h"
 #include "comm/serial_link.h"
 #include "comm/tcp_link.h"
@@ -105,6 +106,13 @@ void LinkCardBase::paintEvent(QPaintEvent *)
 
 void LinkCardBase::onAttached()
 {
+    if (text("modbusRole") == ModbusRole::Slave) {
+        // The table lives while the project runs, through every connection.
+        m_slave = new ModbusSlave(ModbusSlave::settingsFromProperties(properties()),
+                                  ModbusSlaveStore::fromProperties(properties()), this);
+        context()->hub()->addModbusSlave(m_slave);
+        connect(m_slave, &ModbusSlave::statusChanged, this, [this]() { showStatus(); });
+    }
     live(connect(context()->modbusPoller(), &ModbusPoller::statusChanged, this, [this]() { showStatus(); }));
     updatePolling();
 }
@@ -112,6 +120,8 @@ void LinkCardBase::onAttached()
 void LinkCardBase::onDetached()
 {
     context()->modbusPoller()->removeLinkCard(this);
+    delete m_slave; // its links are gone already
+    m_slave = nullptr;
     setConnectedUi(false, tr("未连接"));
 }
 
@@ -148,6 +158,11 @@ bool LinkCardBase::configureParser(Link *link)
     } else if (type == hub->defaultParserType()) {
         config = hub->defaultParserConfig();
     }
+    // A slave's counts start again with each connection.
+    link->setModbusSlave(m_slave);
+    if (m_slave) {
+        m_slave->resetCounts();
+    }
     QString error;
     if (!link->setParser(type, config, &error)) {
         context()->notify(tr("解析模式无效"), error, NotifyType::Error, 3000);
@@ -179,8 +194,11 @@ void LinkCardBase::showStatus()
     if (isLive() && m_connected) {
         const Link *link = currentLink();
         const ModbusPoller *poller = context()->modbusPoller();
-        if (link && link->isConnected() && link->parsesModbus() && link->canSend() && !poller->status().isEmpty() &&
-            !poller->isWaiting()) {
+        if (link && link->isConnected() && link->answersModbus() && link->modbusSlave()) {
+            text += QStringLiteral(" · ") + link->modbusSlave()->status();
+            polling = true;
+        } else if (link && link->isConnected() && link->parsesModbus() && link->canSend() &&
+                   !poller->status().isEmpty() && !poller->isWaiting()) {
             text += QStringLiteral(" · ") + poller->status();
             toolTip = poller->blocks().isEmpty() ? text : poller->toolTip();
             polling = true;

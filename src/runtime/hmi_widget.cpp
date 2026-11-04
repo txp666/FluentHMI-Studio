@@ -172,6 +172,7 @@ const QHash<QString, Factory> &factories()
         {QStringLiteral("RealtimeChart"), make<RealtimeChartWidget>()},
         {QStringLiteral("DataTable"), make<DataTableWidget>()},
         {QStringLiteral("LogBox"), make<LogBoxWidget>()},
+        {QStringLiteral("ModbusSlaveTable"), make<ModbusSlaveTableWidget>()},
         {QStringLiteral("DataRecvCard"), make<DataRecvCardWidget>()},
         {QStringLiteral("DataSendCard"), make<DataSendCardWidget>()},
         {QStringLiteral("SerialConfigCard"), make<SerialConfigCardWidget>()},

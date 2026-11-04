@@ -47,10 +47,16 @@ class RuntimeContext : public QObject
     bool isActive() const { return m_active; }
 
     // Sends a widget's command over every connected link, or explains why not.
-    // `sent` collects the frames the links accepted, for a status line.
+    // `sent` collects the frames the links accepted, for a status line. A Modbus write (FC 05, 06, 16) is also
+    // made in the table of every Modbus slave (CommHub::modbusSlaves()) whose area holds its addresses; one
+    // that some slave took needs no link.
     bool send(const CommandResult &result, QList<QByteArray> *sent = nullptr);
     // A Modbus request queued as `how` says (CommHub::sendModbus), explained the same way when no link takes it.
     bool sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how);
+
+    // A control's own change to `value` (a ToggleSwitch, Slider or SpinBox the user moved): written into every
+    // Modbus slave's table at the address of the control's Modbus binding, unless the binding has an expression.
+    void writeModbusSlaves(const HmiWidget *widget, double value);
 
     // What the Modbus poller reads: every Modbus binding, visible while its widget is on screen (not on a
     // tab page in the background), then the curves charts registered.

@@ -1,6 +1,8 @@
 #include "comm/comm_hub.h"
 #include "comm/link.h"
 #include "comm/modbus_master.h"
+#include "comm/modbus_slave.h"
+#include "core/hex_utils.h"
 #include "core/project.h"
 
 #include <QtCore/QFile>
@@ -113,6 +115,95 @@ class TestModbus : public QObject
             QVERIFY2(planned == test.value("blocks").toArray(),
                      qPrintable(test.value("name").toString() + QStringLiteral(": ") +
                                 QString::fromUtf8(QJsonDocument(planned).toJson(QJsonDocument::Compact))));
+        }
+    }
+
+    // The golden vectors both programs answer as a Modbus slave by: replies, log lines, slave messages and the
+    // table after each request; framing; the messages at start.
+    void slaveMatchesTheGoldenVectors()
+    {
+        QFile file(QStringLiteral(FHMI_TEST_DATA_DIR "/modbus_slave_vectors.json"));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject vectors = QJsonDocument::fromJson(file.readAll()).object();
+        const auto store = [](const QJsonObject &test) {
+            QHash<QString, ModbusSlaveStore::Area> areas;
+            const QJsonObject wanted = test.value("areas").toObject();
+            for (auto it = wanted.begin(); it != wanted.end(); ++it) {
+                areas.insert(it.key(), {it.value()[0].toInt(), it.value()[1].toInt()});
+            }
+            return ModbusSlaveStore(areas, test.value("init").toString());
+        };
+        const auto messages = [](const QList<Message> &list) {
+            QJsonArray out;
+            for (const Message &message : list) {
+                out.append(QJsonObject::fromVariantMap(message.toVariantMap()));
+            }
+            return out;
+        };
+        const auto bytes = [](const QString &hex) { return QByteArray::fromHex(hex.toLatin1()); };
+
+        const QJsonArray requests = vectors.value("requests").toArray();
+        QCOMPARE(requests.size(), 27);
+        for (const QJsonValue &value : requests) {
+            const QJsonObject test = value.toObject();
+            const QString name = test.value("name").toString();
+            ModbusSlaveStore table = store(test);
+            const ModbusFraming framing =
+                test.value("framing").toString() == QLatin1String("tcp") ? ModbusFraming::Tcp : ModbusFraming::Rtu;
+            int number = 0;
+            for (const QJsonValue &item : test.value("steps").toArray()) {
+                const QJsonObject step = item.toObject();
+                const QString where = QStringLiteral("%1, step %2").arg(name).arg(++number);
+                const ModbusSlaveAnswer answer =
+                    answerModbusRequest(table, framing, test.value("slave").toInt(), test.value("exceptions").toBool(),
+                                        bytes(step.value("in").toString()));
+                const QJsonValue out = answer.reply.isEmpty() ? QJsonValue() : QJsonValue(toHexString(answer.reply));
+                QVERIFY2(out == step.value("out"), qPrintable(where + QStringLiteral(": ") + out.toString()));
+                QJsonArray log;
+                for (const auto &[text, level] : answer.log) {
+                    log.append(QJsonArray{text, level});
+                }
+                if (!answer.reply.isEmpty()) {
+                    log.append(QJsonArray{answer.replyLog.first, answer.replyLog.second});
+                }
+                QVERIFY2(log == step.value("log").toArray(),
+                         qPrintable(where + QStringLiteral(": ") +
+                                    QString::fromUtf8(QJsonDocument(log).toJson(QJsonDocument::Compact))));
+                QVERIFY2(messages(answer.emits) == step.value("emit").toArray(), qPrintable(where));
+            }
+            const QJsonObject after = test.value("after").toObject();
+            for (auto it = after.begin(); it != after.end(); ++it) {
+                QVERIFY2(table.value(it.key().left(2), it.key().mid(2).toInt()) == it.value().toInt(),
+                         qPrintable(name + QStringLiteral(": ") + it.key()));
+            }
+        }
+
+        const QJsonArray streams = vectors.value("streams").toArray();
+        QCOMPARE(streams.size(), 12);
+        for (const QJsonValue &value : streams) {
+            const QJsonObject test = value.toObject();
+            ModbusRtuRequestFramer rtuFramer;
+            ModbusTcpRequestFramer tcpFramer;
+            Parser &framer = test.value("framing").toString() == QLatin1String("tcp")
+                                 ? static_cast<Parser &>(tcpFramer)
+                                 : static_cast<Parser &>(rtuFramer);
+            QJsonArray frames;
+            for (const QJsonValue &chunk : test.value("chunks").toArray()) {
+                const QList<QByteArray> found =
+                    chunk.toString() == QLatin1String("idle") ? framer.flush() : framer.frames(bytes(chunk.toString()));
+                for (const QByteArray &frame : found) {
+                    frames.append(toHexString(frame));
+                }
+            }
+            QVERIFY2(frames == test.value("frames").toArray(), qPrintable(test.value("name").toString()));
+        }
+
+        const QJsonArray starts = vectors.value("start").toArray();
+        QCOMPARE(starts.size(), 2);
+        for (const QJsonValue &value : starts) {
+            const QJsonObject test = value.toObject();
+            QVERIFY2(messages(store(test).startMessages(test.value("slave").toInt())) == test.value("emit").toArray(),
+                     qPrintable(test.value("name").toString()));
         }
     }
 

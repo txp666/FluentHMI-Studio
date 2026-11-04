@@ -1,5 +1,6 @@
 #include "runtime/modbus_poller.h"
 
+#include "comm/modbus_slave.h"
 #include "runtime/runtime_context.h"
 
 #include <QtCore/QTimer>
@@ -293,6 +294,7 @@ void ModbusPoller::poll()
 void ModbusPoller::replan()
 {
     const Settings current = settings();
+    const QList<ModbusSlave *> slaves = m_context->hub()->modbusSlaves();
     QList<ModbusNeed> active;
     for (ModbusNeed need : m_context->modbusNeeds()) {
         if (!need.visible) {
@@ -303,6 +305,10 @@ void ModbusPoller::replan()
         }
         if (need.slave < 1 || need.slave > 247 || need.address < 0 || need.address > 65535) {
             continue; // no request can read it
+        }
+        if (std::any_of(slaves.cbegin(), slaves.cend(),
+                        [&need](const ModbusSlave *slave) { return slave->settings().slave == need.slave; })) {
+            continue; // this program's own slave serves it from its table
         }
         need.period = std::max(0, need.period);
         active.append(need);

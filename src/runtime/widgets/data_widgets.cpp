@@ -21,6 +21,7 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QSaveFile>
 #include <QtCore/QTimer>
 #include <QtGui/QFontMetrics>
@@ -1099,6 +1100,202 @@ void DataTableWidget::onMessage(const Message &message)
 }
 
 // ---------------------------------------------------------------------------
+// ModbusSlaveTable
+// ---------------------------------------------------------------------------
+
+ModbusSlaveTableWidget::ModbusSlaveTableWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
+{
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(2, 2, 2, 2);
+    m_table = new FluentQt::TableWidget(this);
+    m_table->setColumnCount(2);
+    m_table->setHorizontalHeaderLabels({tr("地址"), tr("值")});
+    m_table->verticalHeader()->setVisible(false);
+    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layout->addWidget(m_table);
+    connect(m_table, &QTableWidget::itemChanged, this, &ModbusSlaveTableWidget::edited);
+}
+
+QString ModbusSlaveTableWidget::table() const
+{
+    const QString prefix = ModbusArea::prefix(text("mbArea"));
+    return prefix.isEmpty() ? QStringLiteral("hr") : prefix;
+}
+
+const ModbusSlaveStore *ModbusSlaveTableWidget::store() const
+{
+    if (isLive()) {
+        return m_slave ? &m_slave->store() : nullptr;
+    }
+    return m_design ? &*m_design : nullptr;
+}
+
+void ModbusSlaveTableWidget::apply()
+{
+    rebuild();
+}
+
+void ModbusSlaveTableWidget::showDesign(const QJsonObject *cardProperties)
+{
+    if (cardProperties) {
+        m_design = ModbusSlaveStore::fromProperties(*cardProperties);
+    } else {
+        m_design.reset();
+    }
+    rebuild();
+}
+
+void ModbusSlaveTableWidget::onAttached()
+{
+    // A card later in the document attaches after this table: take its slave once it is there.
+    live(connect(context()->hub(), &CommHub::slavesChanged, this, &ModbusSlaveTableWidget::bindSlave));
+    bindSlave();
+}
+
+void ModbusSlaveTableWidget::onDetached()
+{
+    disconnect(m_slaveConnection);
+    m_slave.clear();
+    rebuild();
+}
+
+void ModbusSlaveTableWidget::bindSlave()
+{
+    const QList<ModbusSlave *> slaves = context()->hub()->modbusSlaves();
+    ModbusSlave *first = slaves.isEmpty() ? nullptr : slaves.first();
+    if (first == m_slave && m_slave) {
+        return;
+    }
+    disconnect(m_slaveConnection);
+    m_slave = first;
+    if (first) {
+        m_slaveConnection = connect(first, &ModbusSlave::changed, this, &ModbusSlaveTableWidget::showChange);
+    }
+    rebuild();
+}
+
+QString ModbusSlaveTableWidget::display(quint16 value) const
+{
+    const QString t = table();
+    if (t == QLatin1String("co") || t == QLatin1String("di")) {
+        return value ? QStringLiteral("1") : QStringLiteral("0");
+    }
+    const QString format = text("displayFormat");
+    if (format == QStringLiteral("有符号")) {
+        return QString::number(qint16(value));
+    }
+    if (format == QStringLiteral("十六进制")) {
+        return QStringLiteral("0x") + QStringLiteral("%1").arg(value, 4, 16, QLatin1Char('0')).toUpper();
+    }
+    return QString::number(value);
+}
+
+std::optional<quint16> ModbusSlaveTableWidget::parse(const QString &typed) const
+{
+    QString value = typed.trimmed();
+    const QString t = table();
+    bool ok = false;
+    if (t == QLatin1String("co") || t == QLatin1String("di")) {
+        if (value == QLatin1String("0") || value == QLatin1String("1")) {
+            return quint16(value.toInt());
+        }
+        return std::nullopt;
+    }
+    const QString format = text("displayFormat");
+    if (format == QStringLiteral("十六进制")) {
+        if (value.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+            value = value.mid(2);
+        }
+        static const QRegularExpression digits(QStringLiteral("^[0-9A-Fa-f]{1,4}$"));
+        if (!digits.match(value).hasMatch()) {
+            return std::nullopt;
+        }
+        return quint16(value.toUInt(&ok, 16));
+    }
+    static const QRegularExpression number(QStringLiteral("^[+-]?[0-9]+$"));
+    if (!number.match(value).hasMatch()) {
+        return std::nullopt;
+    }
+    const qlonglong n = value.toLongLong(&ok);
+    const bool signedFormat = format == QStringLiteral("有符号");
+    if (!ok || n < (signedFormat ? -32768 : 0) || n > (signedFormat ? 32767 : 65535)) {
+        return std::nullopt;
+    }
+    return quint16(n & 0xFFFF);
+}
+
+void ModbusSlaveTableWidget::rebuild()
+{
+    m_filling = true;
+    m_table->clearSpans();
+    m_table->setRowCount(0);
+    const ModbusSlaveStore *source = store();
+    if (!source) {
+        m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_table->setRowCount(1);
+        auto *hint = new QTableWidgetItem(tr("没有从站链路卡片"));
+        hint->setFlags(Qt::ItemIsEnabled);
+        m_table->setItem(0, 0, hint);
+        m_table->setSpan(0, 0, 1, 2);
+        m_filling = false;
+        return;
+    }
+    // Values are edited only while running, in the slave's own table.
+    m_table->setEditTriggers(isLive() ? QAbstractItemView::DoubleClicked : QAbstractItemView::NoEditTriggers);
+    const QString t = table();
+    const ModbusSlaveStore::Area area = source->area(t);
+    m_table->setRowCount(area.count);
+    for (int row = 0; row < area.count; ++row) {
+        auto *address = new QTableWidgetItem(QString::number(area.start + row));
+        address->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        m_table->setItem(row, 0, address);
+        auto *value = new QTableWidgetItem(display(source->value(t, area.start + row)));
+        value->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
+        m_table->setItem(row, 1, value);
+    }
+    m_filling = false;
+}
+
+void ModbusSlaveTableWidget::showChange(const Message &message)
+{
+    const ModbusSlaveStore *source = store();
+    const QString t = table();
+    if (!source || message.value(QStringLiteral("fc")).toInt() != ModbusSlaveStore::readFunction(t)) {
+        return;
+    }
+    const int start = source->area(t).start;
+    m_filling = true;
+    for (auto it = message.constBegin(); it != message.constEnd(); ++it) {
+        if (!it.key().startsWith(t)) {
+            continue;
+        }
+        bool ok = false;
+        const int address = it.key().mid(t.size()).toInt(&ok);
+        if (QTableWidgetItem *item = ok ? m_table->item(address - start, 1) : nullptr) {
+            item->setText(display(source->value(t, address)));
+        }
+    }
+    m_filling = false;
+}
+
+void ModbusSlaveTableWidget::edited(QTableWidgetItem *item)
+{
+    if (m_filling || !m_slave || item->column() != 1) {
+        return;
+    }
+    const QString t = table();
+    const int address = m_slave->store().area(t).start + item->row();
+    const std::optional<quint16> value = parse(item->text());
+    if (!value || !m_slave->write(t, address, {*value})) {
+        m_filling = true;
+        item->setText(display(m_slave->store().value(t, address))); // not a value: the old one stays
+        m_filling = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LogBox
 // ---------------------------------------------------------------------------
 
@@ -1134,10 +1331,12 @@ void LogBoxWidget::onAttached()
                  [this](const QString &message) { appendLog(tr("错误: %1").arg(message), QStringLiteral("error")); }));
     live(connect(hub, &CommHub::linkInfo, this, [this](const QString &message) { appendLog(message); }));
     live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message) {
-        if (context()->isActive()) {
+        // A slave's own change is no frame received: its requests and replies are logged instead.
+        if (context()->isActive() && !context()->hub()->isSlaveData()) {
             appendLog(messageText(message));
         }
     }));
+    live(connect(hub, &CommHub::slaveLog, this, &LogBoxWidget::appendLog));
 }
 
 // ---------------------------------------------------------------------------

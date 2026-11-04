@@ -1,5 +1,6 @@
 #include "runtime/runtime_context.h"
 
+#include "comm/modbus_slave.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
 
@@ -86,11 +87,23 @@ void RuntimeContext::setActive(bool active)
         }
     }
     m_poller->setActive(active);
+    if (active) {
+        m_hub->deliverSlaveStart(); // the bound controls start from the slaves' tables
+    }
 }
 
 bool RuntimeContext::send(const CommandResult &result, QList<QByteArray> *sent)
 {
+    bool wroteSlaves = false;
+    if (result.command && result.command->kind == EncodedCommand::Kind::Modbus) {
+        for (ModbusSlave *slave : m_hub->modbusSlaves()) {
+            wroteSlaves = slave->execute(result.command->modbus) || wroteSlaves;
+        }
+    }
     if (!m_hub->isConnected()) {
+        if (wroteSlaves) {
+            return true;
+        }
         notify(tr("提示"), tr("未连接，命令未发送"), NotifyType::Warning);
         return false;
     }
@@ -98,11 +111,34 @@ bool RuntimeContext::send(const CommandResult &result, QList<QByteArray> *sent)
         notify(tr("提示"), result.error, NotifyType::Error);
         return false;
     }
-    if (m_hub->send(*result.command, sent) == 0) {
+    if (m_hub->send(*result.command, sent) == 0 && !wroteSlaves) {
         notify(tr("提示"), tr("没有链路接收该命令"), NotifyType::Warning);
         return false;
     }
     return true;
+}
+
+void RuntimeContext::writeModbusSlaves(const HmiWidget *widget, double value)
+{
+    const QList<ModbusSlave *> slaves = m_hub->modbusSlaves();
+    if (slaves.isEmpty()) {
+        return;
+    }
+    for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd(); ++it) {
+        if (it.value() != widget) {
+            continue;
+        }
+        for (const BindingEntry &binding : m_bindings) {
+            const QString table = ModbusArea::prefix(binding.mbArea);
+            if (binding.widgetId != it.key() || binding.parseMode != ParseMode::Modbus || table.isEmpty() ||
+                !binding.expression.trimmed().isEmpty()) {
+                continue; // an expression cannot be worked back
+            }
+            for (ModbusSlave *slave : slaves) {
+                slave->writeValue(table, binding.mbRegIndex, value, binding.mbDataType, binding.mbRegOrder);
+            }
+        }
+    }
 }
 
 bool RuntimeContext::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how)

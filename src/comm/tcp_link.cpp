@@ -148,6 +148,16 @@ qint64 TcpServerLink::writeBytes(const QByteArray &bytes)
     return accepted;
 }
 
+qint64 TcpServerLink::writeReply(Parser *parser, const QByteArray &bytes)
+{
+    for (auto it = m_clients.constBegin(); it != m_clients.constEnd(); ++it) {
+        if (it.value().get() == parser) {
+            return it.key()->write(bytes);
+        }
+    }
+    return -1; // the device is gone
+}
+
 void TcpServerLink::onNewConnection()
 {
     while (QTcpSocket *socket = m_server.nextPendingConnection()) {

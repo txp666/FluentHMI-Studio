@@ -1,5 +1,6 @@
 #include "designer/property_editor.h"
 
+#include "comm/modbus_slave.h"
 #include "core/binding.h"
 #include "core/protocol_parser.h"
 #include "designer/canvas_item.h"
@@ -982,10 +983,20 @@ void PropertyEditor::updateVisibility()
     if (meta.prop(QStringLiteral("parserConfig"))) {
         const QString parser = m_item->propertyValue(QStringLiteral("defaultParser")).toString();
         setFrameRowsVisible(QStringLiteral("parserConfig."), parser);
-        // A link card's Modbus polling settings, for a Modbus mode of its own. On 项目设置 they stay hidden,
-        // and still apply when the project's mode is a Modbus one.
-        for (const char *field : {"modbusPeriod", "modbusTimeout", "modbusSlave"}) {
-            setRowVisible(QLatin1String(field), isModbusParser(parser));
+        // A link card's Modbus settings, for a Modbus mode of its own. On 项目设置 they stay hidden, and still
+        // apply when the project's mode is a Modbus one. Polling is a master's, answering a slave's.
+        const bool modbus = isModbusParser(parser);
+        const bool slave = m_item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave;
+        for (const char *field : {"modbusRole", "modbusSlave"}) {
+            setRowVisible(QLatin1String(field), modbus);
+        }
+        for (const char *field : {"modbusPeriod", "modbusTimeout"}) {
+            setRowVisible(QLatin1String(field), modbus && !slave);
+        }
+        for (const char *field :
+             {"modbusDelay", "modbusExceptions", "slaveCoStart", "slaveCoCount", "slaveDiStart", "slaveDiCount",
+              "slaveHrStart", "slaveHrCount", "slaveIrStart", "slaveIrCount", "slaveInit"}) {
+            setRowVisible(QLatin1String(field), modbus && slave);
         }
     }
     if (meta.prop(QStringLiteral("commandMode"))) {

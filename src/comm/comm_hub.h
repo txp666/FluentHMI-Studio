@@ -11,6 +11,8 @@
 
 namespace fhmi {
 
+class ModbusSlave;
+
 // How sendModbus() queues a request on the links that parse Modbus.
 struct ModbusSend
 {
@@ -46,12 +48,21 @@ class CommHub : public QObject
     // Returns how many links accepted the bytes; `sent` collects the frames they accepted.
     int send(const QByteArray &bytes, QList<QByteArray> *sent = nullptr);
     // A link that parses Modbus queues the request in its master (a write by default, with a 1000 ms
-    // timeout), which frames it as MBAP, ASCII or RTU; any other link is sent the RTU frame right away.
-    // A queued request counts as accepted.
+    // timeout), which frames it as MBAP, ASCII or RTU; a link that answers as a Modbus slave is left out; any
+    // other link is sent the RTU frame right away. A queued request counts as accepted.
     int sendModbus(const ModbusRequest &request, QList<QByteArray> *sent = nullptr, const ModbusSend &how = {});
     int send(const EncodedCommand &command, QList<QByteArray> *sent = nullptr);
 
     void disconnectAll();
+
+    // The slaves of the link cards whose role is 从站, in the order of the document; the hub does not own them.
+    // A slave's change is emitted as messageReceived(), as if a link had received it, with isSlaveData() true
+    // meanwhile so the log leaves it out; its log lines come as slaveLog().
+    void addModbusSlave(ModbusSlave *slave);
+    QList<ModbusSlave *> modbusSlaves() const;
+    bool isSlaveData() const { return m_slaveData; }
+    // Emits each slave's start messages: every address of every area it has.
+    void deliverSlaveStart();
 
     // The encoding of the bytes rawReceived() is carrying right now, and those bytes as text:
     // raw bytes carry no link, so the encoding of the link they came from rides alongside.
@@ -66,13 +77,20 @@ class CommHub : public QObject
     void linkDisconnected(const QString &description);
     void linkError(const QString &message);
     void linkInfo(const QString &message);
+    void slaveLog(const QString &text, const QString &level);
+    // A slave was added or removed.
+    void slavesChanged();
     void connectionStateChanged(bool anyConnected);
     // Which links can send may have changed: one was added or removed, connected or disconnected, or a
     // listening server got its first device or lost its last.
     void linksChanged();
 
   private:
+    void deliverSlaveData(const Message &message);
+
     QList<QPointer<Link>> m_links;
+    QList<QPointer<ModbusSlave>> m_slaves;
+    bool m_slaveData = false;
     QJsonObject m_projectSerial;
     QString m_parserType = QStringLiteral("line");
     QJsonObject m_parserConfig;

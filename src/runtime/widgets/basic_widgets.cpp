@@ -219,6 +219,9 @@ void ToggleSwitchWidget::applyBoundValue(const QVariant &value, const BindingEnt
 
 void ToggleSwitchWidget::onAttached()
 {
+    // The user's flip goes into the Modbus slaves' tables at the binding's address (a bound value is blocked).
+    live(connect(m_switch, &FluentQt::SwitchButton::checkedChanged, this,
+                 [this](bool checked) { context()->writeModbusSlaves(this, checked ? 1 : 0); }));
     const bool modbus = text("commandMode") == QLatin1String("Modbus");
     const bool hasCommands = !text("onCommand").trimmed().isEmpty() || !text("offCommand").trimmed().isEmpty();
     if (modbus || hasCommands) {
@@ -276,11 +279,10 @@ void SliderWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 
 // A drag sends once, when the mouse lets go, instead of a command for every value the handle passes;
 // keys and the wheel move in steps and send each one.
+// Each of those values also goes into the Modbus slaves' tables, sendOnChange or not.
 void SliderWidget::onAttached()
 {
-    if (!flag("sendOnChange") && text("commandMode") != QLatin1String("Modbus")) {
-        return;
-    }
+    m_sends = flag("sendOnChange") || text("commandMode") == QLatin1String("Modbus");
     // FluentQt's slider never sets QSlider::isSliderDown(), and a drag that starts on the groove
     // emits no pressed/released signals, so the mouse is watched on the slider and its handle.
     m_slider->installEventFilter(this);
@@ -317,7 +319,10 @@ bool SliderWidget::eventFilter(QObject *watched, QEvent *event)
 
 void SliderWidget::sendValue(int value)
 {
-    context()->send(CommandEncoder::encode(properties(), QString::number(value)));
+    context()->writeModbusSlaves(this, value);
+    if (m_sends) {
+        context()->send(CommandEncoder::encode(properties(), QString::number(value)));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -349,11 +354,13 @@ void SpinBoxWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 
 void SpinBoxWidget::onAttached()
 {
-    if (!flag("sendOnChange") && text("commandMode") != QLatin1String("Modbus")) {
-        return;
-    }
-    live(connect(m_spin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
-        context()->send(CommandEncoder::encode(properties(), QString::number(value)));
+    // Every step goes into the Modbus slaves' tables, sendOnChange or not.
+    const bool sends = flag("sendOnChange") || text("commandMode") == QLatin1String("Modbus");
+    live(connect(m_spin, qOverload<int>(&QSpinBox::valueChanged), this, [this, sends](int value) {
+        context()->writeModbusSlaves(this, value);
+        if (sends) {
+            context()->send(CommandEncoder::encode(properties(), QString::number(value)));
+        }
     }));
 }
 
