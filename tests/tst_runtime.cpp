@@ -9,6 +9,7 @@
 #include "runtime/modbus_poller.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
+#include "runtime/widgets/display_widgets.h"
 #include "studio/export_service.h"
 
 #include <FluentQtWidgets/Config.h>
@@ -1528,6 +1529,44 @@ class TestRuntime : public QObject
         QCOMPARE(period->toolTip(), QStringLiteral("0 = 用默认周期（链路卡片的「默认轮询(ms)」，默认 500）"));
         period->setValue(250);
         QCOMPARE(scene.findItem(QStringLiteral("pv"))->binding().value("mbPeriod").toInt(), 250);
+    }
+
+    // tests/data/image_placement_vectors.json, shared with PyQt UI Designer: where an ImageDisplay draws the
+    // corners of its picture for a box, a picture size, a turn, mirroring and a scale mode.
+    void imagePlacementMatchesTheGoldenVectors()
+    {
+        QFile file(QStringLiteral(FHMI_TEST_DATA_DIR "/image_placement_vectors.json"));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject document = QJsonDocument::fromJson(file.readAll()).object();
+        const double tolerance = document.value("tolerance").toDouble();
+        const QJsonArray vectors = document.value("vectors").toArray();
+        QCOMPARE(vectors.size(), 17);
+        QStringList failures;
+        for (qsizetype i = 0; i < vectors.size(); ++i) {
+            const QJsonObject vector = vectors.at(i).toObject();
+            const QSizeF box(vector.value("box")[0].toDouble(), vector.value("box")[1].toDouble());
+            const int w = vector.value("image")[0].toInt();
+            const int h = vector.value("image")[1].toInt();
+            const QTransform transform =
+                imageTransform(box, QSize(w, h), vector.value("rotation").toInt(), vector.value("mirrorH").toBool(),
+                               vector.value("mirrorV").toBool(), vector.value("scaleMode").toString());
+            const QList<QPointF> corners{QPointF(0, 0), QPointF(w, 0), QPointF(w, h), QPointF(0, h)};
+            const QJsonArray expected = vector.value("corners").toArray();
+            for (int j = 0; j < 4; ++j) {
+                const QPointF got = transform.map(corners.at(j));
+                const QPointF want(expected.at(j)[0].toDouble(), expected.at(j)[1].toDouble());
+                if (std::abs(got.x() - want.x()) > tolerance || std::abs(got.y() - want.y()) > tolerance) {
+                    failures << QStringLiteral("vector %1, corner %2: (%3, %4), expected (%5, %6)")
+                                    .arg(i)
+                                    .arg(j)
+                                    .arg(got.x(), 0, 'g', 12)
+                                    .arg(got.y(), 0, 'g', 12)
+                                    .arg(want.x(), 0, 'g', 12)
+                                    .arg(want.y(), 0, 'g', 12);
+                }
+            }
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
     }
 
     void exportCarriesProjectAndImages()

@@ -44,6 +44,9 @@ const QHash<QString, QSet<QString>> &modeVisibility()
          {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
           QStringLiteral("commandTemplate"), QStringLiteral("frameHeader"), QStringLiteral("frameTail"),
           QStringLiteral("dataType"), QStringLiteral("byteOrder")}},
+        {QStringLiteral("JSON"),
+         {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
+          QStringLiteral("commandTemplate"), QStringLiteral("commandJsonNewline")}},
         {QStringLiteral("Modbus"),
          {QStringLiteral("mbSlave"), QStringLiteral("mbFunc"), QStringLiteral("mbAddress"), QStringLiteral("mbValue"),
           QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder")}},
@@ -54,11 +57,12 @@ const QHash<QString, QSet<QString>> &modeVisibility()
 const QSet<QString> &modeFields()
 {
     static const QSet<QString> fields = {
-        QStringLiteral("command"),     QStringLiteral("onCommand"),  QStringLiteral("offCommand"),
-        QStringLiteral("commandNewline"), QStringLiteral("commandTemplate"), QStringLiteral("frameHeader"),
-        QStringLiteral("frameTail"),   QStringLiteral("dataType"),   QStringLiteral("byteOrder"),
-        QStringLiteral("mbSlave"),     QStringLiteral("mbFunc"),     QStringLiteral("mbAddress"),
-        QStringLiteral("mbValue"),     QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder")};
+        QStringLiteral("command"),        QStringLiteral("onCommand"),       QStringLiteral("offCommand"),
+        QStringLiteral("commandNewline"), QStringLiteral("commandTemplate"), QStringLiteral("commandJsonNewline"),
+        QStringLiteral("frameHeader"),    QStringLiteral("frameTail"),       QStringLiteral("dataType"),
+        QStringLiteral("byteOrder"),      QStringLiteral("mbSlave"),         QStringLiteral("mbFunc"),
+        QStringLiteral("mbAddress"),      QStringLiteral("mbValue"),         QStringLiteral("mbDataType"),
+        QStringLiteral("mbRegOrder")};
     return fields;
 }
 

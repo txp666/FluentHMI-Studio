@@ -283,6 +283,7 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)
     target_compile_definitions(tst_runtime PRIVATE
         FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
+        FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
         FHMI_RUNTIME_BUILD_PATH="$<TARGET_FILE:FluentHMIRuntime>")
     add_dependencies(tst_runtime FluentHMIRuntime)
     add_test(NAME runtime COMMAND tst_runtime)

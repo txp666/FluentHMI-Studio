@@ -79,9 +79,11 @@ int nextTransaction();
 // mbRegOrder). `value` overrides mbValue.
 CommandResult modbusFromProperties(const QJsonObject &props, const std::optional<QString> &value = std::nullopt);
 
-// What a widget sends for `value` in its configured mode ("文本", "HEX" or "Modbus"),
+// What a widget sends for `value` in its configured mode ("文本", "HEX", "JSON" or "Modbus"),
 // following PyQt UI Designer: the template's {value} is replaced (HEX numeric types
 // pack the value first), text gets the configured newline, HEX gets header and tail.
+// JSON puts the value in as JSON (itself when it is one JSON value, else a string), drops the
+// whitespace and adds commandJsonNewline; a template that is not one JSON value is an error.
 CommandResult encode(const QJsonObject &props, const QString &value);
 
 } // namespace CommandEncoder
