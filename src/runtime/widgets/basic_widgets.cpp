@@ -74,7 +74,7 @@ void PushButtonWidget::onAttached()
         if (text("commandMode") == QLatin1String("Modbus")) {
             // A button reads by default: its function code falls back to FC03.
             if (!props.contains(QStringLiteral("mbFunc"))) {
-                props.insert(QStringLiteral("mbFunc"), QStringLiteral("03 读保持寄存器"));
+                props.insert(QStringLiteral("mbFunc"), QStringLiteral("03 读保持寄存器")); // i18n: value
             }
             context()->send(CommandEncoder::modbusFromProperties(props));
         } else if (const QString command = text("command").trimmed(); !command.isEmpty()) {
@@ -229,7 +229,7 @@ void ToggleSwitchWidget::onAttached()
             if (modbus) {
                 // Modbus switches always write a single coil (FC05).
                 QJsonObject props = properties();
-                props.insert(QStringLiteral("mbFunc"), QStringLiteral("05 写单线圈"));
+                props.insert(QStringLiteral("mbFunc"), QStringLiteral("05 写单线圈")); // i18n: value
                 context()->send(CommandEncoder::modbusFromProperties(props, QString::number(checked ? 0xFF00 : 0)));
                 return;
             }

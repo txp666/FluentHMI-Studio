@@ -1,5 +1,7 @@
 #include "runtime/hmi_widget.h"
 
+#include "core/i18n.h"
+
 #include "runtime/runtime_context.h"
 #include "runtime/widgets/basic_widgets.h"
 #include "runtime/widgets/container_widgets.h"
@@ -130,10 +132,7 @@ class PlaceholderWidget : public HmiWidget
     }
 
   protected:
-    void apply() override
-    {
-        m_label->setText(tr("%1\nC++ 运行时暂未实现").arg(meta().displayName));
-    }
+    void apply() override { m_label->setText(tr("%1\nC++ 运行时暂未实现").arg(translated(meta().displayName))); }
 
   private:
     FluentQt::CaptionLabel *m_label = nullptr;
@@ -261,7 +260,7 @@ QStringList tabNames(const QString &text)
             names.append(line.trimmed());
         }
     }
-    return names.isEmpty() ? QStringList{QStringLiteral("标签1")} : names;
+    return names.isEmpty() ? QStringList{QStringLiteral("标签1")} : names; // i18n: value
 }
 
 int clampTabIndex(int index, int count)

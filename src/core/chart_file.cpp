@@ -1,5 +1,6 @@
 #include "core/chart_file.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QIODevice>
 #include <QtCore/QLocale>
 #include <QtCore/QSet>
@@ -129,12 +130,12 @@ bool isBlank(const QString &text)
     return true;
 }
 
-QString finiteError() { return QStringLiteral("曲线样本必须是有限数"); }
+QString finiteError() { return QCoreApplication::translate("fhmi", "曲线样本必须是有限数"); }
 
 bool sampleFromText(const QString &text, double *value, QString *error)
 {
     if (!parsePythonFloat(text, value)) {
-        return fail(error, QStringLiteral("不是数字: '%1'").arg(text));
+        return fail(error, QCoreApplication::translate("fhmi", "不是数字: '%1'").arg(text));
     }
     return std::isfinite(*value) || fail(error, finiteError());
 }
@@ -148,7 +149,7 @@ bool sampleFromJson(const PyJsonValue &item, double *value, QString *error)
         break;
     case PyJsonValue::Int:
         if (!std::isfinite(item.number)) {
-            return fail(error, QStringLiteral("整数太大，无法转换为浮点数"));
+            return fail(error, QCoreApplication::translate("fhmi", "整数太大，无法转换为浮点数"));
         }
         *value = item.number;
         break;
@@ -158,7 +159,7 @@ bool sampleFromJson(const PyJsonValue &item, double *value, QString *error)
     case PyJsonValue::String:
         return sampleFromText(item.text, value, error);
     default:
-        return fail(error, QStringLiteral("曲线样本必须是数字"));
+        return fail(error, QCoreApplication::translate("fhmi", "曲线样本必须是数字"));
     }
     return std::isfinite(*value) || fail(error, finiteError());
 }
@@ -319,7 +320,7 @@ bool readJson(const QString &content, QStringList *names, QList<QList<double>> *
             channelValues.append(&document.items[i]);
         }
     } else if (document.kind == PyJsonValue::Array) {
-        const QString shape = QStringLiteral("曲线 JSON 通道必须包含 name 和 values");
+        const QString shape = QCoreApplication::translate("fhmi", "曲线 JSON 通道必须包含 name 和 values");
         for (const PyJsonValue &entry : document.items) {
             if (entry.kind != PyJsonValue::Object) {
                 return fail(error, shape);
@@ -343,11 +344,11 @@ bool readJson(const QString &content, QStringList *names, QList<QList<double>> *
             channelValues.append(samples);
         }
     } else {
-        return fail(error, QStringLiteral("曲线 JSON 必须是对象或通道数组"));
+        return fail(error, QCoreApplication::translate("fhmi", "曲线 JSON 必须是对象或通道数组"));
     }
     for (qsizetype i = 0; i < channelNames.size(); ++i) {
         if (channelNames.at(i)->kind != PyJsonValue::String || channelValues.at(i)->kind != PyJsonValue::Array) {
-            return fail(error, QStringLiteral("曲线 JSON 通道名称必须是文本，样本必须是数组"));
+            return fail(error, QCoreApplication::translate("fhmi", "曲线 JSON 通道名称必须是文本，样本必须是数组"));
         }
     }
     QStringList outNames;
@@ -386,7 +387,7 @@ class PyJsonReader
         }
         skipSpace();
         if (m_pos != m_text.size()) {
-            return fail(error, problem(QStringLiteral("多余的数据")));
+            return fail(error, problem(QCoreApplication::translate("fhmi", "多余的数据")));
         }
         return true;
     }
@@ -394,7 +395,7 @@ class PyJsonReader
   private:
     QString problem(const QString &what) const
     {
-        return QStringLiteral("JSON 格式错误: %1（第 %2 个字符）").arg(what).arg(m_pos + 1);
+        return QCoreApplication::translate("fhmi", "JSON 格式错误: %1（第 %2 个字符）").arg(what).arg(m_pos + 1);
     }
 
     bool error(const QString &what)
@@ -433,7 +434,7 @@ class PyJsonReader
     bool value(PyJsonValue *out, int depth)
     {
         if (depth > 512) {
-            return error(QStringLiteral("嵌套太深"));
+            return error(QCoreApplication::translate("fhmi", "嵌套太深"));
         }
         const QChar c = peek();
         if (c == QLatin1Char('{')) {
@@ -483,7 +484,7 @@ class PyJsonReader
         }
         for (;;) {
             if (peek() != QLatin1Char('"')) {
-                return error(QStringLiteral("缺少用双引号括起的名称"));
+                return error(QCoreApplication::translate("fhmi", "缺少用双引号括起的名称"));
             }
             QString key;
             if (!string(&key)) {
@@ -491,7 +492,7 @@ class PyJsonReader
             }
             skipSpace();
             if (peek() != QLatin1Char(':')) {
-                return error(QStringLiteral("缺少 ':'"));
+                return error(QCoreApplication::translate("fhmi", "缺少 ':'"));
             }
             ++m_pos;
             skipSpace();
@@ -507,7 +508,7 @@ class PyJsonReader
                 return true;
             }
             if (peek() != QLatin1Char(',')) {
-                return error(QStringLiteral("缺少 ',' 或 '}'"));
+                return error(QCoreApplication::translate("fhmi", "缺少 ',' 或 '}'"));
             }
             ++m_pos;
             skipSpace();
@@ -535,7 +536,7 @@ class PyJsonReader
                 return true;
             }
             if (peek() != QLatin1Char(',')) {
-                return error(QStringLiteral("缺少 ',' 或 ']'"));
+                return error(QCoreApplication::translate("fhmi", "缺少 ',' 或 ']'"));
             }
             ++m_pos;
             skipSpace();
@@ -548,7 +549,7 @@ class PyJsonReader
         out->clear();
         for (;;) {
             if (m_pos >= m_text.size()) {
-                return error(QStringLiteral("字符串没有结束"));
+                return error(QCoreApplication::translate("fhmi", "字符串没有结束"));
             }
             const QChar c = m_text.at(m_pos);
             if (c == QLatin1Char('"')) {
@@ -556,7 +557,7 @@ class PyJsonReader
                 return true;
             }
             if (c.unicode() < 0x20) {
-                return error(QStringLiteral("字符串里有控制字符"));
+                return error(QCoreApplication::translate("fhmi", "字符串里有控制字符"));
             }
             if (c != QLatin1Char('\\')) {
                 *out += c;
@@ -574,7 +575,7 @@ class PyJsonReader
                 for (int k = 2; k < 6; ++k) {
                     const int hex = hexValue(peek(k));
                     if (hex < 0) {
-                        return error(QStringLiteral("无效的 \\u 转义"));
+                        return error(QCoreApplication::translate("fhmi", "无效的 \\u 转义"));
                     }
                     unit = char16_t(unit * 16 + hex);
                 }
@@ -582,7 +583,7 @@ class PyJsonReader
                 *out += QChar(unit);
                 m_pos += 6;
             } else {
-                return error(QStringLiteral("无效的转义"));
+                return error(QCoreApplication::translate("fhmi", "无效的转义"));
             }
         }
     }
@@ -599,7 +600,7 @@ class PyJsonReader
         }
         if (!digit()) {
             m_pos = start;
-            return error(QStringLiteral("缺少值"));
+            return error(QCoreApplication::translate("fhmi", "缺少值"));
         }
         if (peek() == QLatin1Char('0')) {
             ++m_pos;
@@ -810,7 +811,7 @@ bool readChartFile(const QByteArray &content, ChartFileFormat format, QStringLis
     QStringDecoder decoder(QStringDecoder::Utf8, QStringDecoder::Flag::ConvertInitialBom);
     const QString text = decoder(content);
     if (decoder.hasError()) {
-        return fail(error, QStringLiteral("文件不是 UTF-8 文本"));
+        return fail(error, QCoreApplication::translate("fhmi", "文件不是 UTF-8 文本"));
     }
     return format == ChartFileFormat::Json ? readJson(text, names, values, error) : readCsv(text, names, values, error);
 }

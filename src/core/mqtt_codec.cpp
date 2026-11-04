@@ -1,5 +1,6 @@
 #include "core/mqtt_codec.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
 
 namespace fhmi::Mqtt {
@@ -192,17 +193,17 @@ QString connAckText(int code)
 {
     switch (code) {
     case 1:
-        return QStringLiteral("协议版本不支持");
+        return QCoreApplication::translate("fhmi", "协议版本不支持");
     case 2:
-        return QStringLiteral("客户端ID无效");
+        return QCoreApplication::translate("fhmi", "客户端ID无效");
     case 3:
-        return QStringLiteral("服务器不可用");
+        return QCoreApplication::translate("fhmi", "服务器不可用");
     case 4:
-        return QStringLiteral("用户名或密码错误");
+        return QCoreApplication::translate("fhmi", "用户名或密码错误");
     case 5:
-        return QStringLiteral("未授权，请检查用户名和密码");
+        return QCoreApplication::translate("fhmi", "未授权，请检查用户名和密码");
     default:
-        return QStringLiteral("返回码 %1").arg(code);
+        return QCoreApplication::translate("fhmi", "返回码 %1").arg(code);
     }
 }
 

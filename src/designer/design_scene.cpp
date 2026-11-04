@@ -307,7 +307,7 @@ CanvasItem *DesignScene::createItem(const QString &typeName, const QPointF &scen
         return nullptr;
     }
     const WidgetMeta *meta = WidgetRegistry::instance().find(typeName);
-    auto *item = new CanvasItem(typeName, meta->defaultProperties(), uniqueId(typeName), m_assetBaseDir);
+    auto *item = new CanvasItem(typeName, meta->newWidgetProperties(), uniqueId(typeName), m_assetBaseDir);
     const qreal g = m_gridSize;
     item->setPos(std::round(scenePos.x() / g) * g, std::round(scenePos.y() / g) * g);
     addItem(item);

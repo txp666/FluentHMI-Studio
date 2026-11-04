@@ -23,6 +23,9 @@ enum class PropType
     Object,  // a JSON object with a section of its own in the property editor, not one row
 };
 
+// The labels, display names and default texts here are Chinese source texts (QT_TR_NOOP): translate them where
+// they are shown, with translated() from core/i18n.h. Enum options are .uidp values and never change; only their
+// display is translated.
 struct PropDef
 {
     QString name;
@@ -45,6 +48,7 @@ enum class WidgetCategory
     Comm,
 };
 
+// The category's title, translated.
 QString categoryTitle(WidgetCategory category);
 
 struct WidgetMeta
@@ -61,7 +65,11 @@ struct WidgetMeta
     int minHeight = 20;
     bool container = false;
 
+    // What a property missing from a file reads as: the same whatever the language.
     QJsonObject defaultProperties() const;
+    // The properties of a widget added from the palette: the defaults, with its default texts (a button's 按钮,
+    // a chart's title) in the interface language. They are all written to the file, so it opens the same anywhere.
+    QJsonObject newWidgetProperties() const;
     const PropDef *prop(const QString &name) const;
     // The property a data binding writes into, or empty if the widget cannot be bound.
     QString bindProperty() const;

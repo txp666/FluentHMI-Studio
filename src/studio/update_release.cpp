@@ -1,5 +1,6 @@
 #include "studio/update_release.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -29,7 +30,7 @@ bool parse(const QByteArray &json, const QString &packageSuffix, ReleaseInfo *re
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
     if (!document.isObject()) {
-        return fail(QStringLiteral("发布信息不是有效的 JSON: %1").arg(parseError.errorString()));
+        return fail(QCoreApplication::translate("fhmi", "发布信息不是有效的 JSON: %1").arg(parseError.errorString()));
     }
     const QJsonObject root = document.object();
     ReleaseInfo info;
@@ -41,7 +42,7 @@ bool parse(const QByteArray &json, const QString &packageSuffix, ReleaseInfo *re
     qsizetype parsedUpTo = 0;
     info.version = QVersionNumber::fromString(number, &parsedUpTo);
     if (info.version.isNull() || parsedUpTo != number.size()) {
-        return fail(QStringLiteral("无法识别的版本号: %1").arg(info.tag));
+        return fail(QCoreApplication::translate("fhmi", "无法识别的版本号: %1").arg(info.tag));
     }
     info.notes = root.value(QStringLiteral("body")).toString();
     info.page = QUrl(root.value(QStringLiteral("html_url")).toString());
@@ -74,6 +75,18 @@ bool parse(const QByteArray &json, const QString &packageSuffix, ReleaseInfo *re
     }
     *release = info;
     return true;
+}
+
+QString notesFor(const QString &notes, bool english)
+{
+    const QStringList lines = notes.split(QLatin1Char('\n'));
+    for (qsizetype i = 0; i < lines.size(); ++i) {
+        if (lines.at(i).trimmed() == QLatin1String("## English")) {
+            const QStringList part = english ? lines.mid(i + 1) : lines.mid(0, i);
+            return part.join(QLatin1Char('\n')).trimmed();
+        }
+    }
+    return notes;
 }
 
 bool isNewer(const ReleaseInfo &release, const QString &current)

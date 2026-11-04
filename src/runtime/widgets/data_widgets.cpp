@@ -721,17 +721,17 @@ std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromPropertie
             {QStringLiteral("jsonPath"), field("jsonPath", QString())},
             {QStringLiteral("byteOffset"), field("byteOffset", 0)},
             {QStringLiteral("dataType"), field("dataType", QStringLiteral("float32"))},
-            {QStringLiteral("byteOrder"), field("byteOrder", QStringLiteral("大端(BE)"))},
+            {QStringLiteral("byteOrder"), field("byteOrder", QStringLiteral("大端(BE)"))}, // i18n: value
             {QStringLiteral("frameHeader"), field("frameHeader", QString())},
             {QStringLiteral("frameTail"), field("frameTail", QString())},
             {QStringLiteral("mbRegIndex"), field("regIndex", 0)},
             {QStringLiteral("mbDataType"), field("mbDataType", QStringLiteral("uint16"))},
-            {QStringLiteral("mbRegOrder"), field("mbRegOrder", QStringLiteral("大端(AB CD)"))},
+            {QStringLiteral("mbRegOrder"), field("mbRegOrder", QStringLiteral("大端(AB CD)"))}, // i18n: value
             {QStringLiteral("mbFcFilter"), field("mbFcFilter", -1)},
             {QStringLiteral("mbSlaveFilter"), field("mbSlaveFilter", -1)},
             {QStringLiteral("mbArea"), field("mbArea", ModbusArea::HoldingRegisters)},
         };
-        const QString name = field("name", QStringLiteral("曲线%1").arg(i + 1)).toString();
+        const QString name = field("name", QStringLiteral("曲线%1").arg(i + 1)).toString(); // i18n: value
         auto entry = BindingEntry::fromWidget(
             QJsonObject{{QStringLiteral("type"), QStringLiteral("RealtimeChart")}, {QStringLiteral("binding"), binding}});
         BindingEntry fallback;
@@ -937,7 +937,7 @@ void RealtimeChartWidget::loadReference(const QString &path)
     clearReference();
     const QString stem = QFileInfo(path).completeBaseName();
     for (int i = 0; i < names.size(); ++i) {
-        m_references.append({QStringLiteral("%1（%2）").arg(names.at(i), stem), values.value(i)});
+        m_references.append({tr("%1（%2）").arg(names.at(i), stem), values.value(i)});
     }
     m_clearReference->show();
     applyTheme();
@@ -1025,7 +1025,7 @@ DataTableWidget::DataTableWidget(const WidgetMeta &meta, QWidget *parent) : HmiW
 
 bool DataTableWidget::logging() const
 {
-    return text("recordMode") == QStringLiteral("逐行记录");
+    return text("recordMode") == QStringLiteral("逐行记录"); // i18n: value
 }
 
 void DataTableWidget::apply()
@@ -1037,7 +1037,7 @@ void DataTableWidget::apply()
         }
     }
     if (m_columns.isEmpty()) {
-        m_columns = {QStringLiteral("字段"), QStringLiteral("值")};
+        m_columns = {QStringLiteral("字段"), QStringLiteral("值")}; // i18n: value
     }
     m_table->setRowCount(0);
     m_table->setColumnCount(int(m_columns.size()));
@@ -1064,7 +1064,7 @@ void DataTableWidget::onMessage(const Message &message)
     if (logging()) {
         // Each column takes the field it is named after, 时间 the arrival time; frames with
         // none of the named fields belong to another message and are skipped.
-        const QString timeColumn = QStringLiteral("时间");
+        const QString timeColumn = QStringLiteral("时间"); // i18n: value
         bool relevant = false;
         for (const QString &column : std::as_const(m_columns)) {
             relevant = relevant || (column != timeColumn && message.contains(column));
@@ -1183,10 +1183,10 @@ QString ModbusSlaveTableWidget::display(quint16 value) const
         return value ? QStringLiteral("1") : QStringLiteral("0");
     }
     const QString format = text("displayFormat");
-    if (format == QStringLiteral("有符号")) {
+    if (format == QStringLiteral("有符号")) { // i18n: value
         return QString::number(qint16(value));
     }
-    if (format == QStringLiteral("十六进制")) {
+    if (format == QStringLiteral("十六进制")) { // i18n: value
         return QStringLiteral("0x") + QStringLiteral("%1").arg(value, 4, 16, QLatin1Char('0')).toUpper();
     }
     return QString::number(value);
@@ -1204,7 +1204,7 @@ std::optional<quint16> ModbusSlaveTableWidget::parse(const QString &typed) const
         return std::nullopt;
     }
     const QString format = text("displayFormat");
-    if (format == QStringLiteral("十六进制")) {
+    if (format == QStringLiteral("十六进制")) { // i18n: value
         if (value.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
             value = value.mid(2);
         }
@@ -1219,7 +1219,7 @@ std::optional<quint16> ModbusSlaveTableWidget::parse(const QString &typed) const
         return std::nullopt;
     }
     const qlonglong n = value.toLongLong(&ok);
-    const bool signedFormat = format == QStringLiteral("有符号");
+    const bool signedFormat = format == QStringLiteral("有符号"); // i18n: value
     if (!ok || n < (signedFormat ? -32768 : 0) || n > (signedFormat ? 32767 : 65535)) {
         return std::nullopt;
     }

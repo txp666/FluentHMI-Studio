@@ -466,29 +466,30 @@ QString CanvasItem::layoutMode() const
 {
     const QString type = typeName();
     if (type == QLatin1String("HBoxLayout")) {
-        return QStringLiteral("水平");
+        return QStringLiteral("水平"); // i18n: value
     }
     if (type == QLatin1String("VBoxLayout") || type == QLatin1String("GroupBox")) {
-        return QStringLiteral("垂直");
+        return QStringLiteral("垂直"); // i18n: value
     }
     if (type == QLatin1String("FlexLayout")) {
         return propertyValue(QStringLiteral("direction")).toString() == QLatin1String("column")
-                   ? QStringLiteral("弹性列")
-                   : QStringLiteral("弹性(Flex)");
+                   ? QStringLiteral("弹性列")      // i18n: ignore
+                   : QStringLiteral("弹性(Flex)"); // i18n: value
     }
     if (type == QLatin1String("CardContainer")) {
-        return propertyValue(QStringLiteral("layout")).toString(QStringLiteral("自由"));
+        return propertyValue(QStringLiteral("layout")).toString(QStringLiteral("自由")); // i18n: value
     }
     if (type == QLatin1String("TabWidget")) {
         const int page = propertyValue(QStringLiteral("currentTab")).toInt(0);
-        return m_properties.value(QStringLiteral("_tabLayout_%1").arg(page)).toString(QStringLiteral("自由"));
+        return m_properties.value(QStringLiteral("_tabLayout_%1").arg(page))
+            .toString(QStringLiteral("自由")); // i18n: value
     }
-    return QStringLiteral("自由");
+    return QStringLiteral("自由"); // i18n: value
 }
 
 bool CanvasItem::isFreeLayout() const
 {
-    return layoutMode() == QStringLiteral("自由");
+    return layoutMode() == QStringLiteral("自由"); // i18n: value
 }
 
 void CanvasItem::fitWidth(qreal available)
@@ -514,7 +515,7 @@ void CanvasItem::relayoutChildren()
         }
     }
     const QString mode = layoutMode();
-    const bool free = mode == QStringLiteral("自由");
+    const bool free = mode == QStringLiteral("自由"); // i18n: value
     for (CanvasItem *child : std::as_const(visible)) {
         child->setFlag(ItemIsMovable, free);
     }
@@ -531,20 +532,20 @@ void CanvasItem::relayoutChildren()
     const qreal width = m_size.width();
     const qreal height = m_size.height();
 
-    if (mode == QStringLiteral("水平")) {
+    if (mode == QStringLiteral("水平")) { // i18n: value
         qreal x = pad;
         for (CanvasItem *child : std::as_const(visible)) {
             child->setPos(x, top);
             x += child->m_size.width() + spacing;
         }
-    } else if (mode == QStringLiteral("垂直")) {
+    } else if (mode == QStringLiteral("垂直")) { // i18n: value
         qreal y = top;
         for (CanvasItem *child : std::as_const(visible)) {
             child->setPos(pad, y);
             child->fitWidth(width - 2 * pad);
             y += child->m_size.height() + spacing;
         }
-    } else if (mode == QStringLiteral("弹性(Flex)")) {
+    } else if (mode == QStringLiteral("弹性(Flex)")) { // i18n: value
         qreal x = pad, y = top, rowHeight = 0;
         for (CanvasItem *child : std::as_const(visible)) {
             if (x + child->m_size.width() > width - pad && x > pad) {
@@ -556,7 +557,7 @@ void CanvasItem::relayoutChildren()
             x += child->m_size.width() + spacing;
             rowHeight = std::max(rowHeight, child->m_size.height());
         }
-    } else if (mode == QStringLiteral("弹性列")) {
+    } else if (mode == QStringLiteral("弹性列")) { // i18n: ignore
         qreal x = pad, y = top, columnWidth = 0;
         for (CanvasItem *child : std::as_const(visible)) {
             if (y + child->m_size.height() > height - pad && y > top) {

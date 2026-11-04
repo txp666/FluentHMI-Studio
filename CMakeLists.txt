@@ -70,6 +70,8 @@ add_library(fhmi_core STATIC
     src/core/gbk_table.h
     src/core/hex_utils.cpp
     src/core/hex_utils.h
+    src/core/i18n.cpp
+    src/core/i18n.h
     src/core/message.h
     src/core/mqtt_codec.cpp
     src/core/mqtt_codec.h
@@ -298,4 +300,10 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_docs PRIVATE fhmi_core Qt6::Test)
     target_compile_definitions(tst_docs PRIVATE FHMI_DOCS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs")
     add_test(NAME docs COMMAND tst_docs)
+
+    # Every Chinese text in src/ is translatable and resources/i18n/en.json has its English.
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME i18n COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_i18n.py)
+    endif()
 endif()

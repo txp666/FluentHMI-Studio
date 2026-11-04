@@ -42,6 +42,10 @@ bool parse(const QByteArray &json, const QString &packageSuffix, ReleaseInfo *re
 // Whether `release` is newer than the running version, given as "0.1.1".
 bool isNewer(const ReleaseInfo &release, const QString &current);
 
+// The part of bilingual release notes (Chinese, then a line "## English" and the English notes) for one
+// language: what follows that line in English, what precedes it in Chinese; all of it without the line.
+QString notesFor(const QString &notes, bool english);
+
 // The SHA-256 that a "<hex>  <file name>" checksum file gives for `fileName`, in lower-case
 // hex; empty when the file names another file or is malformed.
 QByteArray checksumFor(const QByteArray &checksumFile, const QString &fileName);

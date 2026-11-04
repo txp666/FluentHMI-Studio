@@ -124,10 +124,7 @@ void TcpServerLink::close()
     }
 }
 
-QString TcpServerLink::description() const
-{
-    return QStringLiteral("TCP 服务端 :%1").arg(m_server.serverPort());
-}
+QString TcpServerLink::description() const { return tr("TCP 服务端 :%1").arg(m_server.serverPort()); }
 
 bool TcpServerLink::isConnected() const
 {

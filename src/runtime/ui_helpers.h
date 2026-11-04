@@ -1,9 +1,14 @@
 #pragma once
 
+#include <QtCore/QStringList>
 #include <QtGui/QIcon>
 
 class QAbstractButton;
 class QWidget;
+
+namespace FluentQt {
+class ComboBox;
+}
 
 namespace fhmi {
 
@@ -21,5 +26,13 @@ void fluentToolTip(QWidget *widget, const QString &text = QString());
 // An image file as an icon, every size an .ico holds included, or a null icon when it cannot be read.
 // QIcon(path) decodes a JPEG at the size asked for, squashing a photo that is not square.
 QIcon iconFromFile(const QString &path);
+
+// Fills a combo box with .uidp values: each item shows the value translated and keeps the value itself as its
+// data, so read it back with selectedValue(), never from the text.
+void addValueItems(FluentQt::ComboBox *combo, const QStringList &values);
+// The value of the current item, or an empty string when nothing is selected.
+QString selectedValue(const FluentQt::ComboBox *combo);
+// Selects the item holding `value` and returns whether there is one.
+bool selectValue(FluentQt::ComboBox *combo, const QString &value);
 
 } // namespace fhmi

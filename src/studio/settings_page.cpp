@@ -1,5 +1,6 @@
 #include "studio/settings_page.h"
 
+#include "core/i18n.h"
 #include "studio/update_controller.h"
 
 #include <FluentQtWidgets/Config.h>
@@ -7,6 +8,7 @@
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/Settings/SettingCard.h>
 #include <FluentQtWidgets/Theme.h>
+#include <FluentQtWidgets/Widgets/InfoBar.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/ScrollArea.h>
 #include <FluentQtWidgets/Window/FluentWindow.h>
@@ -97,6 +99,28 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
                 }
             });
     appearance->addSettingCard(themeColor);
+
+    // FluentConfig keeps the language too (localeName); it takes effect at the next start.
+    const QVariantList languages{kLanguageAuto, kLanguageChinese, kLanguageEnglish};
+    const QString savedLanguage = FluentQt::FluentConfig::instance()->localeName();
+    auto *languageItem = new FluentQt::OptionsConfigItem(
+        QStringLiteral("Studio"), QStringLiteral("Language"),
+        languages.contains(savedLanguage) ? savedLanguage : kLanguageAuto, languages, this);
+    // Each language's own name reads the same in every language.
+    const QStringList languageTexts{tr("跟随系统"),
+                                    QStringLiteral("简体中文"), // i18n: ignore
+                                    QStringLiteral("English")};
+    auto *language =
+        new FluentQt::ComboBoxSettingCard(languageItem, FluentQt::FluentIcon::Language, tr("语言"),
+                                          tr("界面和导出应用的语言，重启后生效"), languageTexts, appearance);
+    language->setObjectName(QStringLiteral("languageCard"));
+    connect(languageItem, &FluentQt::ConfigItem::valueChanged, this, [this](const QVariant &value) {
+        FluentQt::FluentConfig::instance()->setLocaleName(value.toString());
+        FluentQt::FluentConfig::instance()->save();
+        FluentQt::InfoBar::success(tr("语言已更改"), tr("重启软件后生效"), Qt::Horizontal, true, 3000,
+                                   FluentQt::InfoBarPosition::Top, window());
+    });
+    appearance->addSettingCard(language);
 #ifdef Q_OS_WIN
     appearance->addSettingCard(createMicaCard(appearance));
 #endif

@@ -4,6 +4,7 @@
 #include "core/hex_utils.h"
 #include "core/widget_meta.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -201,7 +202,7 @@ std::optional<bool> bindingLed(const QVariant &value, const QString &onValue, co
 
 QVariant bindingDecimals(const QVariant &value, const QString &places)
 {
-    if (places.isEmpty() || places == QStringLiteral("自动") || value.typeId() == QMetaType::Bool) {
+    if (places.isEmpty() || places == QStringLiteral("自动") || value.typeId() == QMetaType::Bool) { // i18n: value
         if (isReal(value) && std::isfinite(value.toDouble())) {
             // 15 significant digits: the noise of binary arithmetic (267 * 0.1 = 26.700000000000003)
             // goes, every digit a double really holds stays.
@@ -251,7 +252,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.jsonPath = jsonPath;
     entry.byteOffset = binding.value(QStringLiteral("byteOffset")).toInt(0);
     entry.dataType = binding.value(QStringLiteral("dataType")).toString(QStringLiteral("uint16"));
-    entry.byteOrder = binding.value(QStringLiteral("byteOrder")).toString(QStringLiteral("大端(BE)"));
+    entry.byteOrder = binding.value(QStringLiteral("byteOrder")).toString(QStringLiteral("大端(BE)")); // i18n: value
     entry.expression = binding.value(QStringLiteral("expression")).toString();
     entry.frameHeader = parseHexOrEmpty(binding.value(QStringLiteral("frameHeader")).toString());
     entry.frameTail = parseHexOrEmpty(binding.value(QStringLiteral("frameTail")).toString());
@@ -259,14 +260,15 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.mbRegIndex = binding.value(QStringLiteral("mbRegIndex")).toInt(0);
     entry.mbSlaveFilter = binding.value(QStringLiteral("mbSlaveFilter")).toInt(-1);
     entry.mbDataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
-    entry.mbRegOrder = binding.value(QStringLiteral("mbRegOrder")).toString(QStringLiteral("大端(AB CD)"));
+    entry.mbRegOrder =
+        binding.value(QStringLiteral("mbRegOrder")).toString(QStringLiteral("大端(AB CD)")); // i18n: value
     entry.mbFcFilter = binding.value(QStringLiteral("mbFcFilter")).toInt(-1);
     entry.mbArea = binding.value(QStringLiteral("mbArea")).toString(ModbusArea::HoldingRegisters);
     entry.mbPeriod = binding.value(QStringLiteral("mbPeriod")).toInt(0);
-    entry.displayFormat = props.value(QStringLiteral("displayFormat")).toString(QStringLiteral("自动"));
+    entry.displayFormat = props.value(QStringLiteral("displayFormat")).toString(QStringLiteral("自动")); // i18n: value
     entry.decimals = props.value(QStringLiteral("decimals")).toVariant().toString();
     if (entry.decimals.isEmpty()) {
-        entry.decimals = QStringLiteral("自动");
+        entry.decimals = QStringLiteral("自动"); // i18n: value
     }
     entry.ledOnValue = props.value(QStringLiteral("onValue")).toVariant().toString();
     entry.ledOffValue = props.value(QStringLiteral("offValue")).toVariant().toString();
@@ -302,15 +304,17 @@ QVariant BindingEntry::extractFromParsed(const Message &data) const
 
 QStringList ModbusArea::options()
 {
-    return {HoldingRegisters, QStringLiteral("输入寄存器"), QStringLiteral("线圈"), QStringLiteral("离散输入")};
+    return {HoldingRegisters, QStringLiteral("输入寄存器"),      // i18n: value
+            QStringLiteral("线圈"), QStringLiteral("离散输入")}; // i18n: value
 }
 
 QString ModbusArea::prefix(const QString &area)
 {
-    static const QHash<QString, QString> prefixes = {{QStringLiteral("保持寄存器"), QStringLiteral("hr")},
-                                                     {QStringLiteral("输入寄存器"), QStringLiteral("ir")},
-                                                     {QStringLiteral("线圈"), QStringLiteral("co")},
-                                                     {QStringLiteral("离散输入"), QStringLiteral("di")}};
+    static const QHash<QString, QString> prefixes = {
+        {QStringLiteral("保持寄存器"), QStringLiteral("hr")}, // i18n: value
+        {QStringLiteral("输入寄存器"), QStringLiteral("ir")}, // i18n: value
+        {QStringLiteral("线圈"), QStringLiteral("co")},       // i18n: value
+        {QStringLiteral("离散输入"), QStringLiteral("di")}};  // i18n: value
     return prefixes.value(area);
 }
 
@@ -356,7 +360,7 @@ QVariant BindingEntry::extractModbus(const Message &data) const
     if (!r1) {
         return {};
     }
-    const bool bigWords = mbRegOrder == QStringLiteral("大端(AB CD)");
+    const bool bigWords = mbRegOrder == QStringLiteral("大端(AB CD)"); // i18n: value
     const quint32 word = bigWords ? (quint32(*r0) << 16) | *r1 : (quint32(*r1) << 16) | *r0;
     if (mbDataType == QLatin1String("uint32")) {
         return qlonglong(word);
@@ -421,7 +425,7 @@ QVariant BindingEntry::extractFromRaw(const QByteArray &raw) const
         return {};
     }
     const auto *bytes = reinterpret_cast<const uchar *>(payload.constData() + byteOffset);
-    const bool be = byteOrder == QStringLiteral("大端(BE)");
+    const bool be = byteOrder == QStringLiteral("大端(BE)"); // i18n: value
     if (dataType == QLatin1String("uint8")) {
         return qlonglong(bytes[0]);
     }
@@ -517,7 +521,7 @@ QVariant BindingEntry::formatValue(const QVariant &value) const
     if (propName != QLatin1String("text") && propName != QLatin1String("value")) {
         return value;
     }
-    if (displayFormat == QStringLiteral("自动")) {
+    if (displayFormat == QStringLiteral("自动")) { // i18n: value
         return bindingDecimals(value, decimals);
     }
     std::optional<qint64> num;
@@ -532,13 +536,13 @@ QVariant BindingEntry::formatValue(const QVariant &value) const
     const qint64 n = *num;
     const quint64 magnitude = n < 0 ? quint64(-(n + 1)) + 1 : quint64(n);
     const QString sign = n < 0 ? QStringLiteral("-") : QString();
-    if (displayFormat == QStringLiteral("十六进制(HEX)")) {
+    if (displayFormat == QStringLiteral("十六进制(HEX)")) { // i18n: value
         return sign + QStringLiteral("0x") + padded(QString::number(magnitude, 16).toUpper(), 2);
     }
-    if (displayFormat == QStringLiteral("二进制(BIN)")) {
+    if (displayFormat == QStringLiteral("二进制(BIN)")) { // i18n: value
         return sign + QStringLiteral("0b") + padded(QString::number(magnitude, 2), 8);
     }
-    if (displayFormat == QStringLiteral("十进制")) {
+    if (displayFormat == QStringLiteral("十进制")) { // i18n: value
         return QString::number(n);
     }
     return value;

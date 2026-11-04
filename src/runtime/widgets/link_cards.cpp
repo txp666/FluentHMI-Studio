@@ -28,20 +28,13 @@ namespace fhmi {
 
 namespace {
 
-const QString kProjectParser = QStringLiteral("项目设置");
+const QString kProjectParser = QStringLiteral("项目设置"); // i18n: value
 
-void selectText(FluentQt::ComboBox *combo, const QString &text)
-{
-    const int index = combo->findText(text);
-    if (index >= 0) {
-        combo->setCurrentIndex(index);
-    }
-}
-
-FluentQt::ComboBox *comboOf(QWidget *parent, const QStringList &items)
+// A combo box of a property's options, .uidp values shown translated.
+FluentQt::ComboBox *comboOf(QWidget *parent, const QStringList &values)
 {
     auto *combo = new FluentQt::ComboBox(parent);
-    combo->addItems(items);
+    addValueItems(combo, values);
     return combo;
 }
 
@@ -147,7 +140,7 @@ void LinkCardBase::updatePolling()
 bool LinkCardBase::configureParser(Link *link)
 {
     CommHub *hub = context()->hub();
-    QString type = m_parser->currentText();
+    QString type = selectedValue(m_parser);
     QJsonObject config;
     // The card's own frame format applies once it picks its own mode; left empty, a card on
     // the project's mode still uses the project's format.
@@ -326,12 +319,12 @@ SerialConfigCardWidget::~SerialConfigCardWidget()
 void SerialConfigCardWidget::apply()
 {
     m_title->setText(text("title"));
-    selectText(m_baud, text("defaultBaud"));
-    selectText(m_dataBits, text("defaultDatabits"));
-    selectText(m_parity, text("defaultParity"));
-    selectText(m_stopBits, text("defaultStopbits"));
-    selectText(m_flow, text("defaultFlow"));
-    selectText(m_parser, text("defaultParser"));
+    selectValue(m_baud, text("defaultBaud"));
+    selectValue(m_dataBits, text("defaultDatabits"));
+    selectValue(m_parity, text("defaultParity"));
+    selectValue(m_stopBits, text("defaultStopbits"));
+    selectValue(m_flow, text("defaultFlow"));
+    selectValue(m_parser, text("defaultParser"));
     updatePolling(); // modbusPeriod and the like apply at once
 
     clearFields();
@@ -339,7 +332,7 @@ void SerialConfigCardWidget::apply()
         w->hide();
     }
     const QString mode = text("displayMode");
-    const bool singleRow = mode == QStringLiteral("单行");
+    const bool singleRow = mode == QStringLiteral("单行"); // i18n: value
     m_title->setVisible(!singleRow);
     m_status->setVisible(!singleRow);
     auto *layout = static_cast<QVBoxLayout *>(this->layout());
@@ -365,7 +358,7 @@ void SerialConfigCardWidget::apply()
     m_baud->setMaximumWidth(QWIDGETSIZE_MAX);
     addField(tr("串口"), m_portRow);
     addField(tr("波特率"), m_baud);
-    if (mode != QStringLiteral("简洁")) {
+    if (mode != QStringLiteral("简洁")) { // i18n: value
         addField(tr("数据位"), m_paramsRow, true);
         addField(tr("流控制"), m_flow);
         addField(tr("解析模式"), m_parser);
@@ -378,7 +371,10 @@ void SerialConfigCardWidget::refreshPorts()
     const QString current = m_port->currentText();
     m_port->clear();
     m_port->addItems(SerialLink::availablePorts());
-    selectText(m_port, current);
+    const int index = m_port->findText(current);
+    if (index >= 0) {
+        m_port->setCurrentIndex(index);
+    }
 }
 
 void SerialConfigCardWidget::onAttached()
@@ -436,11 +432,11 @@ void SerialConfigCardWidget::toggleConnection()
         context()->notify(tr("提示"), tr("请先选择串口"), NotifyType::Warning);
         return;
     }
-    settings.baudRate = m_baud->currentText().toInt();
-    settings.dataBits = m_dataBits->currentText();
-    settings.parity = m_parity->currentText();
-    settings.stopBits = m_stopBits->currentText();
-    settings.flowControl = m_flow->currentText();
+    settings.baudRate = selectedValue(m_baud).toInt();
+    settings.dataBits = selectedValue(m_dataBits);
+    settings.parity = selectedValue(m_parity);
+    settings.stopBits = selectedValue(m_stopBits);
+    settings.flowControl = selectedValue(m_flow);
     if (!configureParser(m_link)) {
         return;
     }
@@ -473,10 +469,10 @@ TcpConfigCardWidget::~TcpConfigCardWidget()
 void TcpConfigCardWidget::apply()
 {
     m_title->setText(text("title"));
-    selectText(m_mode, text("defaultMode"));
+    selectValue(m_mode, text("defaultMode"));
     m_host->setText(text("defaultHost"));
     m_port->setValue(integer("defaultPort"));
-    selectText(m_parser, text("defaultParser"));
+    selectValue(m_parser, text("defaultParser"));
     updatePolling();
     clearFields();
     m_parser->hide();
@@ -484,7 +480,7 @@ void TcpConfigCardWidget::apply()
     addField(tr("模式"), m_mode);
     addField(tr("地址"), m_host);
     addField(tr("端口"), m_port);
-    if (text("displayMode") != QStringLiteral("简洁")) {
+    if (text("displayMode") != QStringLiteral("简洁")) { // i18n: value
         addField(tr("解析模式"), m_parser);
     }
     finishFields();
@@ -640,16 +636,16 @@ void MqttConfigCardWidget::apply()
     m_password->setText(text("defaultPassword"));
     m_subscribe->setText(text("defaultSubscribe"));
     m_publish->setText(text("defaultPublish"));
-    selectText(m_qos, text("defaultQos"));
+    selectValue(m_qos, text("defaultQos"));
     m_tls->setChecked(flag("defaultTls"));
-    selectText(m_parser, text("defaultParser"));
+    selectValue(m_parser, text("defaultParser"));
     updatePolling();
 
     clearFields();
     for (QWidget *w : {static_cast<QWidget *>(m_clientId), m_loginRow, m_qosRow, static_cast<QWidget *>(m_parser)}) {
         w->hide();
     }
-    const bool full = text("displayMode") != QStringLiteral("简洁");
+    const bool full = text("displayMode") != QStringLiteral("简洁"); // i18n: value
     addField(tr("服务器"), m_serverRow);
     if (full) {
         addField(tr("客户端ID"), m_clientId);
@@ -713,7 +709,7 @@ void MqttConfigCardWidget::toggleConnection()
     settings.password = m_password->text();
     settings.topics = Mqtt::topics(m_subscribe->text());
     settings.publishTopic = m_publish->text();
-    settings.qos = m_qos->currentText().toInt();
+    settings.qos = selectedValue(m_qos).toInt();
     settings.tls = m_tls->isChecked();
     QString error;
     if (!m_link->connectTo(settings, &error)) {

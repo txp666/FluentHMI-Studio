@@ -1,5 +1,10 @@
 #include "runtime/appearance.h"
 
+#include "core/i18n.h"
+
+#include <FluentQtWidgets/Translator.h>
+
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QJsonDocument>
@@ -23,17 +28,28 @@ QString modeName(FluentQt::Theme mode)
     return QStringLiteral("Light");
 }
 
+QJsonObject readAppearance(const QString &dir)
+{
+    QFile file(QDir(dir).filePath(QLatin1String(kAppearanceFile)));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QJsonObject();
+    }
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
 } // namespace
 
-bool writeAppearance(const QString &dir, FluentQt::Theme mode, const QColor &color, QString *error)
+bool writeAppearance(const QString &dir, FluentQt::Theme mode, const QColor &color, const QString &language,
+                     QString *error)
 {
     const QString path = QDir(dir).filePath(QLatin1String(kAppearanceFile));
     QFile file(path);
     const QJsonObject appearance{{QStringLiteral("ThemeMode"), modeName(mode)},
-                                 {QStringLiteral("ThemeColor"), color.name(QColor::HexRgb)}};
+                                 {QStringLiteral("ThemeColor"), color.name(QColor::HexRgb)},
+                                 {QStringLiteral("Language"), language}};
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(QJsonDocument(appearance).toJson()) < 0) {
         if (error) {
-            *error = QObject::tr("无法写入 %1").arg(QDir::toNativeSeparators(path));
+            *error = QCoreApplication::translate("fhmi", "无法写入 %1").arg(QDir::toNativeSeparators(path));
         }
         return false;
     }
@@ -42,11 +58,7 @@ bool writeAppearance(const QString &dir, FluentQt::Theme mode, const QColor &col
 
 bool applyAppearance(const QString &dir)
 {
-    QFile file(QDir(dir).filePath(QLatin1String(kAppearanceFile)));
-    if (!file.open(QIODevice::ReadOnly)) {
-        return false;
-    }
-    const QJsonObject appearance = QJsonDocument::fromJson(file.readAll()).object();
+    const QJsonObject appearance = readAppearance(dir);
     if (appearance.isEmpty()) {
         return false;
     }
@@ -62,6 +74,20 @@ bool applyAppearance(const QString &dir)
         theme->setAccentColor(color);
     }
     return true;
+}
+
+QString appearanceLanguage(const QString &dir)
+{
+    return readAppearance(dir).value(QStringLiteral("Language")).toString();
+}
+
+QString installLanguage(QCoreApplication *app, const QString &setting)
+{
+    const QString resolved = applyLanguage(app, setting);
+    if (resolved == kLanguageChinese) {
+        FluentQt::installFluentTranslator(app, QLocale(QLocale::Chinese, QLocale::China));
+    }
+    return resolved;
 }
 
 } // namespace fhmi
