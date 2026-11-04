@@ -1,5 +1,9 @@
 #include "studio/export_service.h"
 
+#include "runtime/appearance.h"
+
+#include <FluentQtWidgets/Config.h>
+
 #include <QtCore/QBuffer>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
@@ -578,6 +582,11 @@ QString ExportService::exportApplication(const Project &project, const QString &
         exported.icon = QStringLiteral("assets/") + copy;
     }
     if (!exported.save(QDir(stagedResources).filePath(QStringLiteral("project.uidp")), error)) {
+        return abort(QString());
+    }
+    // The studio's theme mode and colour, as its preview shows them.
+    if (!writeAppearance(stagedResources, FluentQt::FluentConfig::instance()->themeMode(),
+                         FluentQt::FluentConfig::instance()->themeColor(), error)) {
         return abort(QString());
     }
 

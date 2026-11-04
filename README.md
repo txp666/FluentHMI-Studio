@@ -72,7 +72,7 @@ src/comm      fhmi_comm     Link 接口 + 串口 / TCP 客户端 / TCP 服务端
 src/runtime   fhmi_runtime  基于 FluentQtWidgets 的运行时控件、RuntimeSurface、绑定引擎
 src/designer  fhmi_designer 画布（QGraphicsScene）、控件面板、属性编辑器、对齐与容器嵌套
 src/studio    FluentHMIStudio   设计器应用：界面设计 / 预览运行 / 设置，导出服务
-src/player    FluentHMIRuntime  导出应用的运行器：读取自身旁边（或 .app 内）的 project.uidp
+src/player    FluentHMIRuntime  导出应用的运行器：读取自身旁边（或 .app 内）的 project.uidp 和 appearance.json
 tools         uidp_reference    从控件注册表重新生成 docs/uidp-widgets.md 和 docs/uidp-format.md 末尾的控件一览
 ```
 
@@ -97,6 +97,8 @@ macOS 运行 `open build/debug/FluentHMIStudio.app`。无界面导出：
 ```bash
 FluentHMIStudio --export <输出目录> <工程.uidp>
 ```
+
+导出的应用以导出时 Studio 设置页的主题（浅色、深色或跟随系统）和主题色启动，与预览一致；这两项写在应用内工程旁的 `appearance.json` 里，无界面导出用 Studio 保存的设置。运行器直接打开工程时仍用自己保存的设置。
 
 运行器可以把整个工程画面渲染成图片，`docs/images` 里的控件一览就是这样生成的：
 

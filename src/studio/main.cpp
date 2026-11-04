@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName(QStringLiteral("FluentHMI Studio"));
     QCoreApplication::setApplicationVersion(QStringLiteral(FHMI_VERSION));
 
-    // Exported applications read the same file, so they follow the studio's theme.
+    // Exports take their theme mode and colour from here too, also when made with --export.
     const QString configDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
                               QStringLiteral("/FluentHMI");
     QDir().mkpath(configDir);

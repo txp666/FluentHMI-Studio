@@ -1,7 +1,8 @@
 // FluentHMI Runtime: what every exported application runs. It looks for its project
 // next to itself (or inside its .app bundle), so an export is just a copy of this
-// program with a project.uidp beside it.
+// program with a project.uidp beside it, and the studio's appearance.json.
 #include "player/player_window.h"
+#include "runtime/appearance.h"
 #include "runtime/runtime_surface.h"
 
 #include <FluentQtWidgets/Config.h>
@@ -19,13 +20,19 @@
 
 namespace {
 
-QString findProject(const QStringList &args)
+QString projectArgument(const QStringList &args)
 {
     for (int i = 1; i < args.size(); ++i) {
         if (args.at(i).endsWith(QLatin1String(".uidp"), Qt::CaseInsensitive) && QFileInfo(args.at(i)).isFile()) {
             return args.at(i);
         }
     }
+    return QString();
+}
+
+// The project an exported application carries.
+QString bundledProject()
+{
     const QDir dir(QCoreApplication::applicationDirPath());
     for (const QString &candidate : {dir.filePath(QStringLiteral("project.uidp")),
                                      dir.filePath(QStringLiteral("../Resources/project.uidp"))}) {
@@ -55,6 +62,16 @@ int main(int argc, char *argv[])
     }
     FluentQt::ThemeManager::instance()->setTheme(FluentQt::FluentConfig::instance()->themeMode());
 
+    // A project named on the command line comes first; otherwise this is an exported application,
+    // which starts with the theme mode and colour of the studio that exported it.
+    QString path = projectArgument(app.arguments());
+    if (path.isEmpty()) {
+        path = bundledProject();
+        if (!path.isEmpty()) {
+            fhmi::applyAppearance(QFileInfo(path).absolutePath());
+        }
+    }
+
     // Developer options: --theme light|dark overrides the saved theme, and
     // --screenshot <png> renders the whole surface to an image, then exits.
     const QStringList args = app.arguments();
@@ -72,7 +89,6 @@ int main(int argc, char *argv[])
     // --check: load the project and build its window, then exit. Packaging uses it to prove
     // an exported application starts with the Qt it carries.
     const bool check = app.arguments().contains(QStringLiteral("--check"));
-    QString path = findProject(app.arguments());
     if (path.isEmpty() && check) {
         QTextStream(stderr) << "no project.uidp found\n";
         return 1;

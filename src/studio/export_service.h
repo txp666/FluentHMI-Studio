@@ -8,7 +8,7 @@ namespace fhmi {
 
 // Turns a project into a standalone application without a compiler: a copy of the
 // prebuilt FluentHMI Runtime carrying the project (and the images it uses), renamed
-// after the project's app name.
+// after the project's app name, that starts with the studio's theme mode and colour.
 class ExportService
 {
   public:

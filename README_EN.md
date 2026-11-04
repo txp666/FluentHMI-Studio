@@ -74,7 +74,7 @@ src/comm      fhmi_comm     Link interface + serial / TCP client / TCP server / 
 src/runtime   fhmi_runtime  Runtime widgets built on FluentQtWidgets, RuntimeSurface, binding engine
 src/designer  fhmi_designer Canvas (QGraphicsScene), widget panel, property editor, alignment and container nesting
 src/studio    FluentHMIStudio   The designer app: design / preview / settings pages, export service
-src/player    FluentHMIRuntime  The runner for exported apps: reads the project.uidp next to it (or inside the .app)
+src/player    FluentHMIRuntime  The runner for exported apps: reads the project.uidp and appearance.json next to it (or inside the .app)
 tools         uidp_reference    Regenerates docs/uidp-widgets.md and the widget list at the end of docs/uidp-format.md from the widget registry
 ```
 
@@ -99,6 +99,8 @@ On macOS, run `open build/debug/FluentHMIStudio.app`. To export without the UI:
 ```bash
 FluentHMIStudio --export <output-dir> <project.uidp>
 ```
+
+An exported app starts with the theme (light, dark or follow system) and theme colour set on Studio's Settings page at export time, as the preview shows them; both go into `appearance.json` beside the project inside the app, and a headless export uses Studio's saved settings. When the runner opens a project directly, it keeps its own saved settings.
 
 The runner can render a whole project to an image; the widget overviews in `docs/images` were made this way:
 
