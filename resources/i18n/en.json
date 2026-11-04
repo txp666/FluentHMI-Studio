@@ -536,6 +536,7 @@
  "没有准备好的新版本": "No new version is ready",
  "没有已连接的 TCP 客户端": "No TCP clients connected",
  "没有找到已发布的版本": "No published release found",
+ "没有权限打开 %1。请把当前用户加入拥有它的用户组：sudo usermod -aG %2 $USER，然后注销并重新登录": "No permission to open %1. Add yourself to the group that owns it with sudo usermod -aG %2 $USER, then log out and back in",
  "没有链路接收该命令": "No link took the command",
  "波特率": "Baud rate",
  "流控制": "Flow control",
