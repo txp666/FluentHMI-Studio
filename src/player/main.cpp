@@ -76,6 +76,11 @@ int main(int argc, char *argv[])
     if (!bundled.isEmpty()) {
         path = bundled;
         fhmi::applyAppearance(QFileInfo(path).absolutePath());
+#ifdef Q_OS_LINUX
+        // Wayland docks show an application's icon only through its desktop entry, which they find by this id: an
+        // entry named after the program (<App>.desktop, as the README shows) then matches the exported application.
+        QGuiApplication::setDesktopFileName(QFileInfo(QCoreApplication::applicationFilePath()).fileName());
+#endif
     }
 
     // Developer options: --theme light|dark overrides the saved theme, and

@@ -15,8 +15,8 @@ class ExportService
     // The runtime this studio ships with: a bundle on macOS, an executable elsewhere.
     static QString runtimePath();
 
-    // Creates <outputDir>/<appName>(.app). Returns the created path, or an empty
-    // string with *error set.
+    // Creates <outputDir>/<appName>(.app), or on Linux <outputDir>/<appName>.tar.gz holding
+    // <appName>/ with a start.sh. Returns the created path, or an empty string with *error set.
     static QString exportApplication(const Project &project, const QString &outputDir, QString *error);
 
     // A name every file system accepts, from the project's app name.

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FluentHMI Studio
+Name[zh_CN]=FluentHMI Studio
+Comment=Visual HMI designer for hardware engineers
+Comment[zh_CN]=面向硬件工程师的可视化上位机设计器
+Exec=fluenthmi-studio
+Icon=io.github.txp666.FluentHMIStudio
+StartupWMClass=FluentHMIStudio
+Categories=Development;Electronics;
+Terminal=false

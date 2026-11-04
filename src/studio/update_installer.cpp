@@ -3,10 +3,12 @@
 #include "studio/update_release.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QProcess>
+#include <QtCore/QStandardPaths>
 
 namespace fhmi {
 
@@ -64,6 +66,56 @@ if (-not $done) { Set-Content -LiteralPath $log -Value $script:lastError -Encodi
 if ($Relaunch) { Start-Process -FilePath (Join-Path $Root 'FluentHMIStudio.exe') -WorkingDirectory $Root }
 if ($done) { Invoke-Retried { Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction Stop } | Out-Null }
 )";
+#elif defined(Q_OS_LINUX)
+// Runs as root, through pkexec. It is passed on the command line, so nothing the user could change runs with
+// root's rights, and it reads from the user's cache only once: its copy of the package is root's, checked against
+// the digest the studio verified, and must be this application for this system. Then it waits for the studio to
+// exit and lets apt install the copy.
+// $1 pid  $2 package  $3 its SHA-256
+const char InstallScript[] = R"SH(set -eu
+umask 077
+pid=$1; package=$2; digest=$3
+fail() { echo "$*" >&2; exit 1; }
+case "$pid" in ''|*[!0-9]*) fail 'invalid process id';; esac
+case "$digest" in *[!0-9a-f]*) fail 'invalid digest';; esac
+[ "${#digest}" -eq 64 ] || fail 'invalid digest'
+work=$(mktemp -d /tmp/fluenthmi-update.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+copy="$work/package.deb"
+# The package could be a link to a file only root may read: the copy stays private until it has passed.
+cp "$package" "$copy"
+actual=$(sha256sum < "$copy")
+[ "${actual%% *}" = "$digest" ] || fail 'the package does not match the release'
+[ "$(dpkg-deb --field "$copy" Package)" = fluenthmi-studio ] || fail 'not a FluentHMI Studio package'
+[ "$(dpkg-deb --field "$copy" Architecture)" = "$(dpkg --print-architecture)" ] || fail 'the package is for another architecture'
+# apt reads the package as its own user.
+chmod 755 "$work"
+chmod 644 "$copy"
+n=0
+while kill -0 "$pid" 2>/dev/null; do
+    [ "$n" -lt 600 ] || fail 'FluentHMI Studio did not exit'
+    sleep 0.2
+    n=$((n + 1))
+done
+DEBIAN_FRONTEND=noninteractive apt-get --yes --no-remove install "$copy"
+)SH";
+
+// Runs as the user, detached: asks for root's rights, keeps what the installation printed, leaves a report where
+// takeFailureReport() looks when it failed, and starts the studio again if asked, never as root.
+// $1 pkexec  $2 pid  $3 package  $4 its SHA-256  $5 staging  $6 relaunch (1/0)  $7 the root script
+const char LaunchScript[] = R"SH(pkexec=$1; pid=$2; package=$3; digest=$4; staging=$5; relaunch=$6; script=$7
+log="$staging/install.log"
+"$pkexec" /bin/sh -c "$script" fluenthmi-update "$pid" "$package" "$digest" >"$log" 2>&1
+status=$?
+n=0
+while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 600 ]; do sleep 0.2; n=$((n + 1)); done
+if [ "$status" -eq 0 ]; then
+    rm -rf "$staging"
+else
+    { echo "pkexec exit status $status"; tail -n 20 "$log"; } >"$staging/update-failed.txt"
+fi
+[ "$relaunch" = 1 ] && nohup /usr/bin/fluenthmi-studio >/dev/null 2>&1 &
+)SH";
 #endif
 
 } // namespace
@@ -96,6 +148,11 @@ QString UpdateInstaller::installRoot()
     if (QFileInfo::exists(appDir.filePath(QStringLiteral("runtime-files.txt")))) {
         return appDir.absolutePath();
     }
+#elif defined(Q_OS_LINUX)
+    // Where the .deb installs; a build tree or a copied folder is nothing apt would replace.
+    if (QFileInfo(appDir.absolutePath()).canonicalFilePath() == QLatin1String("/opt/FluentHMIStudio")) {
+        return appDir.absolutePath();
+    }
 #endif
     return QString();
 }
@@ -103,7 +160,13 @@ QString UpdateInstaller::installRoot()
 QString UpdateInstaller::stagingDir()
 {
     const QString root = installRoot();
+#if defined(Q_OS_LINUX)
+    // The installation is root's; the download waits in the user's cache until apt installs it.
+    return root.isEmpty() ? QString()
+                          : QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/update");
+#else
     return root.isEmpty() ? QString() : QFileInfo(root).absolutePath() + QStringLiteral("/.fluenthmi-update");
+#endif
 }
 
 bool UpdateInstaller::canInstall(QString *reason)
@@ -119,13 +182,23 @@ bool UpdateInstaller::canInstall(QString *reason)
         return fail(reason, tr("macOS 正从临时位置运行本应用，请先把它移到“应用程序”文件夹再更新"));
     }
 #endif
+#if defined(Q_OS_LINUX)
+    if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty() ||
+        !QFileInfo::exists(QStringLiteral("/usr/bin/apt-get"))) {
+        return fail(reason, tr("自动安装需要系统提供 pkexec 和 apt-get，请使用系统软件安装器安装已下载的 DEB。"));
+    }
+    // The download needs a folder of its own.
+    const QString writable = stagingDir();
+#else
     // The swap renames the installation and needs a folder beside it.
+    const QString writable = QFileInfo(root).absolutePath();
+#endif
     const QString staging = stagingDir();
     QDir(staging).removeRecursively();
     QFile probe(QDir(staging).filePath(QStringLiteral("probe")));
     if (!QDir().mkpath(staging) || !probe.open(QIODevice::WriteOnly)) {
         QDir(staging).removeRecursively();
-        return fail(reason, tr("没有写入 %1 的权限").arg(QDir::toNativeSeparators(QFileInfo(root).absolutePath())));
+        return fail(reason, tr("没有写入 %1 的权限").arg(QDir::toNativeSeparators(writable)));
     }
     probe.close();
     QDir(staging).removeRecursively();
@@ -154,6 +227,20 @@ QString UpdateInstaller::takeFailureReport()
 void UpdateInstaller::prepare(const QString &package)
 {
     cancel();
+#if defined(Q_OS_LINUX)
+    // apt installs the package as it was downloaded. The root installer checks its own copy against this digest,
+    // since the download stays the user's to change until then.
+    QFile deb(package);
+    QCryptographicHash digest(QCryptographicHash::Sha256);
+    if (!deb.open(QIODevice::ReadOnly) || !digest.addData(&deb)) {
+        emit failed(tr("无法读取 %1: %2").arg(package, deb.errorString()));
+        return;
+    }
+    m_packageDigest = digest.result().toHex();
+    m_newRoot = package;
+    emit prepared();
+    return;
+#endif
     const QString dir = QDir(stagingDir()).filePath(QStringLiteral("new"));
     QDir(dir).removeRecursively();
     QDir().mkpath(dir);
@@ -230,6 +317,7 @@ void UpdateInstaller::cancel()
         unpack->deleteLater();
     }
     m_newRoot.clear();
+    m_packageDigest.clear();
 }
 
 void UpdateInstaller::discard()
@@ -273,13 +361,23 @@ bool UpdateInstaller::launch(bool relaunch, QString *error)
                          QStringLiteral("-Backup"), QDir::toNativeSeparators(backup), QStringLiteral("-Staging"),
                          QDir::toNativeSeparators(staging), QStringLiteral("-Relaunch"),
                          relaunch ? QStringLiteral("1") : QStringLiteral("0")});
+#elif defined(Q_OS_LINUX)
+    Q_UNUSED(backup);
+    const QString pkexec = QStandardPaths::findExecutable(QStringLiteral("pkexec"));
+    if (pkexec.isEmpty()) {
+        return fail(error, tr("自动安装需要系统提供 pkexec 和 apt-get，请使用系统软件安装器安装已下载的 DEB。"));
+    }
+    helper.setProgram(QStringLiteral("/bin/sh"));
+    helper.setArguments({QStringLiteral("-c"), QString::fromUtf8(LaunchScript), QStringLiteral("fluenthmi-update"),
+                         pkexec, pid, m_newRoot, QString::fromLatin1(m_packageDigest), staging,
+                         relaunch ? QStringLiteral("1") : QStringLiteral("0"), QString::fromUtf8(InstallScript)});
 #else
     Q_UNUSED(relaunch);
     Q_UNUSED(backup);
     Q_UNUSED(pid);
     return fail(error, tr("这个平台没有安装包"));
 #endif
-#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN) || defined(Q_OS_LINUX)
     if (!helper.startDetached()) {
         return fail(error, tr("无法启动更新程序: %1").arg(helper.errorString()));
     }

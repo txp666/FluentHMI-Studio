@@ -2,7 +2,36 @@
 
 #include <QtCore/QHash>
 
+#ifdef Q_OS_LINUX
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
+
+#include <cerrno>
+#include <unistd.h>
+#endif
+
 namespace fhmi {
+
+#ifdef Q_OS_LINUX
+namespace {
+
+// Qt says only "Permission denied". On Linux that means this user is not in the group that owns the device node
+// (dialout on Debian, Ubuntu and Fedora, uucp on Arch), which takes a usermod and a new login. A port another
+// program holds fails the same way but passes access(), and keeps Qt's message. Empty when there is nothing to add.
+QString permissionHint(const QString &portName)
+{
+    const QString device = portName.startsWith(QLatin1Char('/')) ? portName : QStringLiteral("/dev/") + portName;
+    if (::access(QFile::encodeName(device).constData(), R_OK | W_OK) == 0 || errno != EACCES) {
+        return QString();
+    }
+    const QFileInfo node(device);
+    const QString group = node.group().isEmpty() ? QString::number(node.groupId()) : node.group();
+    return SerialLink::tr("没有权限打开 %1。请把当前用户加入拥有它的用户组：sudo usermod -aG %2 $USER，然后注销并重新登录")
+        .arg(device, group);
+}
+
+} // namespace
+#endif
 
 SerialLink::SerialLink(QObject *parent) : Link(parent)
 {
@@ -66,6 +95,13 @@ bool SerialLink::open(const SerialSettings &settings, QString *error)
     if (!m_port.open(QIODevice::ReadWrite)) {
         if (error) {
             *error = m_port.errorString();
+#ifdef Q_OS_LINUX
+            const QString hint =
+                m_port.error() == QSerialPort::PermissionError ? permissionHint(settings.portName) : QString();
+            if (!hint.isEmpty()) {
+                *error = hint;
+            }
+#endif
         }
         return false;
     }
