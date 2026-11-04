@@ -70,7 +70,7 @@ PropDef parserConfig()
 }
 
 const QStringList kCommandModes = {QStringLiteral("文本"), // i18n: value
-                                   QStringLiteral("HEX"), QStringLiteral("Modbus")};
+                                   QStringLiteral("HEX"), QStringLiteral("JSON"), QStringLiteral("Modbus")};
 const QStringList kHexTypes = {
     QStringLiteral("HEX字符串"), QStringLiteral("uint8"),  QStringLiteral("int8"), // i18n: value
     QStringLiteral("uint16"),    QStringLiteral("int16"),  QStringLiteral("uint32"),
@@ -190,6 +190,10 @@ QList<WidgetMeta> basicWidgets()
         choice(QStringLiteral("commandMode"), QT_TR_NOOP("发送模式"), QStringLiteral("文本"), // i18n: value
                kCommandModes);
     const PropDef tpl = str(QStringLiteral("commandTemplate"), QT_TR_NOOP("发送模板"), QStringLiteral("{value}"));
+    // JSON mode's own line ending, so that it defaults to none while 文本 keeps CR LF.
+    const PropDef jsonNewline = choice(QStringLiteral("commandJsonNewline"), QT_TR_NOOP("换行符"),
+                                       QStringLiteral("无"), // i18n: value
+                                       kNewlines);
     const PropDef slave = integer(QStringLiteral("mbSlave"), QT_TR_NOOP("从站地址"), 1, 1, 247);
     const PropDef address = integer(QStringLiteral("mbAddress"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535);
     // A count for reads, a whole number to write (negative for int16 / int32) otherwise.
@@ -202,7 +206,7 @@ QList<WidgetMeta> basicWidgets()
 
     QList<PropDef> button{str(QStringLiteral("text"), QT_TR_NOOP("文本"), QT_TR_NOOP("按钮")),
                           boolean(QStringLiteral("enabled"), QT_TR_NOOP("启用"), true), mode,
-                          command(QStringLiteral("command"), QT_TR_NOOP("发送内容")), tpl};
+                          command(QStringLiteral("command"), QT_TR_NOOP("发送内容")), tpl, jsonNewline};
     button += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     button += {slave,
                choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("03 读保持寄存器"), // i18n: value
@@ -229,7 +233,8 @@ QList<WidgetMeta> basicWidgets()
                             boolean(QStringLiteral("readOnly"), QT_TR_NOOP("只读"), false),
                             boolean(QStringLiteral("sendOnEnter"), QT_TR_NOOP("回车发送"), false),
                             mode,
-                            tpl};
+                            tpl,
+                            jsonNewline};
     lineEdit += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     lineEdit += {slave,
                  choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value
@@ -241,7 +246,8 @@ QList<WidgetMeta> basicWidgets()
                          boolean(QStringLiteral("sendOnSelect"), QT_TR_NOOP("选中发送"), false),
                          text(QStringLiteral("commands"), QT_TR_NOOP("发送命令表"), QString()),
                          mode,
-                         tpl};
+                         tpl,
+                         jsonNewline};
     combo += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     combo += {slave,
               choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value
@@ -256,7 +262,8 @@ QList<WidgetMeta> basicWidgets()
                           mode,
                           command(QStringLiteral("onCommand"), QT_TR_NOOP("开启命令")),
                           command(QStringLiteral("offCommand"), QT_TR_NOOP("关闭命令")),
-                          tpl};
+                          tpl,
+                          jsonNewline};
     toggle += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     toggle += {slave, integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈地址"), 0, 0, 65535)};
     toggle += notification(QT_TR_NOOP("切换通知"), QT_TR_NOOP("开关已切换"), QStringLiteral("信息")); // i18n: value
@@ -268,7 +275,7 @@ QList<WidgetMeta> basicWidgets()
         if (suffix) {
             props.append(str(QStringLiteral("suffix"), QT_TR_NOOP("后缀"), QString()));
         }
-        props += {boolean(QStringLiteral("sendOnChange"), QT_TR_NOOP("变化发送"), false), mode, tpl};
+        props += {boolean(QStringLiteral("sendOnChange"), QT_TR_NOOP("变化发送"), false), mode, tpl, jsonNewline};
         props += hexFraming(kNumericTypes, QStringLiteral("uint16"), true);
         props += {slave,
                   choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value

@@ -7,6 +7,7 @@
 #include <QtCore/QHash>
 #include <QtCore/QtEndian>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -110,6 +111,314 @@ QString newline(const QString &option)
 }
 
 QString hexError() { return QCoreApplication::translate("fhmi", "HEX 格式错误，请检查内容、帧头和帧尾"); }
+
+// JSON mode. Strict RFC 8259 grammar (no range checks, no NaN / Infinity), checked by hand because
+// QJsonDocument neither keeps a value as written nor follows the grammar exactly.
+const QString kPlaceholder = QStringLiteral("{value}");
+
+bool jsonSpace(QChar c)
+{
+    return c == u' ' || c == u'\t' || c == u'\n' || c == u'\r';
+}
+
+class JsonValidator
+{
+  public:
+    explicit JsonValidator(const QString &text) : m_text(text) {}
+
+    // Exactly one JSON value, optionally surrounded by JSON whitespace.
+    bool valid()
+    {
+        skipSpace();
+        if (!value(0)) {
+            return false;
+        }
+        skipSpace();
+        return m_pos == m_text.size();
+    }
+
+  private:
+    // More nested objects and arrays than this count as not JSON, as in PyQt UI Designer, rather than
+    // risking the stack.
+    static constexpr int kMaxDepth = 512;
+
+    QChar peek() const { return m_pos < m_text.size() ? m_text.at(m_pos) : QChar(); }
+    bool eat(QChar c)
+    {
+        if (m_pos >= m_text.size() || m_text.at(m_pos) != c) {
+            return false;
+        }
+        ++m_pos;
+        return true;
+    }
+    bool digit() const { return m_pos < m_text.size() && peek() >= u'0' && peek() <= u'9'; }
+    // One or more digits.
+    bool digits()
+    {
+        if (!digit()) {
+            return false;
+        }
+        while (digit()) {
+            ++m_pos;
+        }
+        return true;
+    }
+    void skipSpace()
+    {
+        while (m_pos < m_text.size() && jsonSpace(peek())) {
+            ++m_pos;
+        }
+    }
+    bool literal(const char *word)
+    {
+        const QLatin1String w(word);
+        if (QStringView(m_text).mid(m_pos, w.size()) != w) {
+            return false;
+        }
+        m_pos += w.size();
+        return true;
+    }
+
+    bool value(int depth)
+    {
+        switch (peek().unicode()) {
+        case u'{':
+            return object(depth);
+        case u'[':
+            return array(depth);
+        case u'"':
+            return string();
+        case u't':
+            return literal("true");
+        case u'f':
+            return literal("false");
+        case u'n':
+            return literal("null");
+        default:
+            return number();
+        }
+    }
+
+    bool object(int depth) // depth: the objects and arrays around this one
+    {
+        if (depth >= kMaxDepth) {
+            return false;
+        }
+        ++m_pos; // '{'
+        skipSpace();
+        if (eat(u'}')) {
+            return true;
+        }
+        while (true) {
+            skipSpace();
+            if (peek() != u'"' || !string()) {
+                return false;
+            }
+            skipSpace();
+            if (!eat(u':')) {
+                return false;
+            }
+            skipSpace();
+            if (!value(depth + 1)) {
+                return false;
+            }
+            skipSpace();
+            if (eat(u'}')) {
+                return true;
+            }
+            if (!eat(u',')) {
+                return false;
+            }
+        }
+    }
+
+    bool array(int depth) // depth: the objects and arrays around this one
+    {
+        if (depth >= kMaxDepth) {
+            return false;
+        }
+        ++m_pos; // '['
+        skipSpace();
+        if (eat(u']')) {
+            return true;
+        }
+        while (true) {
+            skipSpace();
+            if (!value(depth + 1)) {
+                return false;
+            }
+            skipSpace();
+            if (eat(u']')) {
+                return true;
+            }
+            if (!eat(u',')) {
+                return false;
+            }
+        }
+    }
+
+    bool string()
+    {
+        ++m_pos; // '"'
+        while (m_pos < m_text.size()) {
+            const QChar c = m_text.at(m_pos++);
+            if (c == u'"') {
+                return true;
+            }
+            if (c.unicode() < 0x20) {
+                return false;
+            }
+            if (c != u'\\') {
+                continue;
+            }
+            if (m_pos >= m_text.size()) {
+                return false;
+            }
+            const QChar e = m_text.at(m_pos++);
+            if (e == u'u') {
+                for (int i = 0; i < 4; ++i) {
+                    if (m_pos >= m_text.size() || !isAsciiHexDigit(m_text.at(m_pos++))) {
+                        return false;
+                    }
+                }
+            } else if (!QStringView(u"\"\\/bfnrt").contains(e)) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    static bool isAsciiHexDigit(QChar c)
+    {
+        return (c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f') || (c >= u'A' && c <= u'F');
+    }
+
+    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
+    bool number()
+    {
+        eat(u'-');
+        if (!eat(u'0') && !digits()) {
+            return false;
+        }
+        if (eat(u'.') && !digits()) {
+            return false;
+        }
+        if (eat(u'e') || eat(u'E')) {
+            if (!eat(u'+')) {
+                eat(u'-');
+            }
+            if (!digits()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    const QString &m_text;
+    qsizetype m_pos = 0;
+};
+
+bool isJson(const QString &text) { return JsonValidator(text).valid(); }
+
+// One pass over `text`: drop JSON whitespace outside strings and, when `valueJson` is given, replace each
+// {value} outside strings by it; nullopt when a {value} sits inside a string literal.
+std::optional<QString> fillJson(const QString &text, const std::optional<QString> &valueJson)
+{
+    QString out;
+    out.reserve(text.size());
+    bool inString = false;
+    bool escaped = false;
+    for (qsizetype i = 0; i < text.size();) {
+        const QChar c = text.at(i);
+        const bool placeholder = valueJson && QStringView(text).mid(i).startsWith(kPlaceholder);
+        if (inString) {
+            if (placeholder) {
+                return std::nullopt;
+            }
+            out.append(c);
+            if (escaped) {
+                escaped = false;
+            } else if (c == u'\\') {
+                escaped = true;
+            } else if (c == u'"') {
+                inString = false;
+            }
+            ++i;
+        } else if (placeholder) {
+            out.append(*valueJson);
+            i += kPlaceholder.size();
+        } else {
+            if (!jsonSpace(c)) {
+                out.append(c);
+                inString = c == u'"';
+            }
+            ++i;
+        }
+    }
+    return out;
+}
+
+// Python's json.dumps(s, ensure_ascii=False).
+QString jsonString(const QString &text)
+{
+    QString out = QStringLiteral("\"");
+    for (const QChar c : text) {
+        switch (c.unicode()) {
+        case u'"':
+            out += QLatin1String("\\\"");
+            break;
+        case u'\\':
+            out += QLatin1String("\\\\");
+            break;
+        case 0x08:
+            out += QLatin1String("\\b");
+            break;
+        case 0x0C:
+            out += QLatin1String("\\f");
+            break;
+        case 0x0A:
+            out += QLatin1String("\\n");
+            break;
+        case 0x0D:
+            out += QLatin1String("\\r");
+            break;
+        case 0x09:
+            out += QLatin1String("\\t");
+            break;
+        default:
+            if (c.unicode() < 0x20) {
+                out += QStringLiteral("\\u%1").arg(uint(c.unicode()), 4, 16, QLatin1Char('0'));
+            } else {
+                out += c;
+            }
+        }
+    }
+    return out + QLatin1Char('"');
+}
+
+// Python's str.isspace(): QChar::isSpace() plus the separators U+001C..U+001F.
+bool blank(const QString &text)
+{
+    return std::all_of(text.cbegin(), text.cend(),
+                       [](QChar c) { return c.isSpace() || (c.unicode() >= 0x1C && c.unicode() <= 0x1F); });
+}
+
+CommandResult jsonCommand(const QJsonObject &props, const QString &value)
+{
+    const QString templ = prop(props, "commandTemplate", kPlaceholder);
+    const QString effective = blank(templ) ? kPlaceholder : templ;
+    const auto shape = fillJson(effective, QStringLiteral("null"));
+    if (!shape || !isJson(*shape)) {
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "JSON 模板无效: %1").arg(templ));
+    }
+    const QString valueJson = isJson(value) ? *fillJson(value, std::nullopt) : jsonString(value);
+    const QString option = prop(props, "commandJsonNewline", QStringLiteral("无")); // i18n: value
+    const bool known = option == QLatin1String("\\r\\n") || option == QLatin1String("\\n")
+                       || option == QLatin1String("\\r");
+    EncodedCommand command;
+    command.bytes = (*fillJson(effective, valueJson) + (known ? newline(option) : QString())).toUtf8();
+    return CommandResult::ok(command);
+}
 
 } // namespace
 
@@ -338,6 +647,9 @@ CommandResult encode(const QJsonObject &props, const QString &value)
 
     if (mode == QLatin1String("Modbus")) {
         return modbusFromProperties(props, value);
+    }
+    if (mode == QLatin1String("JSON")) {
+        return jsonCommand(props, value);
     }
 
     EncodedCommand command;

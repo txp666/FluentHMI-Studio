@@ -1,6 +1,9 @@
 #include "core/command_encoder.h"
 #include "core/protocol_parser.h"
 
+#include <QtCore/QFile>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
 #include <QtTest/QtTest>
 
 using namespace fhmi;
@@ -117,6 +120,28 @@ class TestCommandEncoder : public QObject
         QVERIFY(!CommandEncoder::modbusRequest(0, 3, 0, 1));
         QVERIFY(CommandEncoder::modbusRequest(1, 5, 0, 0xFF00));
         QVERIFY(!CommandEncoder::modbusRequest(1, 5, 0, 1));
+    }
+
+    // tests/data/json_command_vectors.json: JSON-mode commands shared with PyQt UI Designer, the exact text
+    // each sends or the template error.
+    void jsonGoldenVectors()
+    {
+        QFile file(QStringLiteral(FHMI_TEST_DATA_DIR "/json_command_vectors.json"));
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.errorString()));
+        const QJsonArray cases = QJsonDocument::fromJson(file.readAll()).object().value("cases").toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue &item : cases) {
+            const QJsonObject c = item.toObject();
+            const QByteArray name = c.value("name").toString().toUtf8();
+            const CommandResult r = CommandEncoder::encode(c.value("props").toObject(), c.value("value").toString());
+            if (c.contains("error")) {
+                QVERIFY2(!r.command, name.constData());
+                QCOMPARE(r.error, c.value("error").toString());
+            } else {
+                QVERIFY2(r.command, qPrintable(QString::fromUtf8(name) + QStringLiteral(": ") + r.error));
+                QCOMPARE(r.command->bytes, c.value("out").toString().toUtf8());
+            }
+        }
     }
 
     void transactionsWrap()
