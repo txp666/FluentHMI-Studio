@@ -389,9 +389,10 @@ LINUX_PLUGIN_DIRS = ("platforms", "wayland-shell-integration", "wayland-graphics
 # minimal: without its window plugin it must not start on one of them unnoticed.
 LINUX_PLATFORMS = ("libqxcb.so", "libqwayland", "libqeglfs.so", "libqlinuxfb.so")
 # System libraries Qt's xcb plugin needs that a board without apt may lack. They go into lib/ beside Qt's, and so
-# into every exported application.
+# into every exported application. libxkbcommon-x11 only works with the libxkbcommon of its own release, so the two
+# go together: a newer system libxkbcommon (Ubuntu 26.04's 1.13) crashes the bundled -x11 one at startup.
 LINUX_BUNDLED_SYSTEM_LIBS = ("libxcb-cursor.so.", "libxcb-icccm.so.", "libxcb-image.so.", "libxcb-keysyms.so.",
-                             "libxcb-render-util.so.", "libxcb-util.so.", "libxkbcommon-x11.so.")
+                             "libxcb-render-util.so.", "libxcb-util.so.", "libxkbcommon-x11.so.", "libxkbcommon.so.")
 # Everything else Qt loads from the system, as Ubuntu 24.04 and Debian 13 name the packages. The README lists them,
 # and the release workflow's clean container has only these, which proves an export needs nothing more.
 LINUX_SYSTEM_PACKAGES = (
