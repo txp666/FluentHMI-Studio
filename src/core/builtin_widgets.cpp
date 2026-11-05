@@ -541,7 +541,7 @@ QList<WidgetMeta> commWidgets()
              260, 50),
         // A CAN channel of a PCAN, ZLG, SocketCAN or slcan adapter, decoding with a DBC file and inline signals.
         meta(QStringLiteral("CanConfigCard"), QT_TR_NOOP("CAN 配置卡片"), WidgetCategory::Comm, QStringLiteral("car"),
-             380, 330,
+             380, 270,
              {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("CAN 连接")),
               choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"), // i18n: value
                      {QStringLiteral("完整"), QStringLiteral("简洁")}),                             // i18n: value

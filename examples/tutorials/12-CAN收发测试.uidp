@@ -77,7 +77,7 @@
         "x": 20,
         "y": 134,
         "w": 380,
-        "h": 330
+        "h": 270
       },
       "properties": {
         "title": "CAN 1",
@@ -94,7 +94,7 @@
         "x": 410,
         "y": 134,
         "w": 380,
-        "h": 330
+        "h": 270
       },
       "properties": {
         "title": "CAN 2",
@@ -400,9 +400,9 @@
       "id": "monitor",
       "geometry": {
         "x": 20,
-        "y": 474,
+        "y": 414,
         "w": 770,
-        "h": 200
+        "h": 260
       },
       "properties": {
         "showSignals": true
