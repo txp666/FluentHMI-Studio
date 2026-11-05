@@ -184,14 +184,15 @@ void CanConfigCardWidget::apply()
     m_fdRow->hide();
     m_hint->hide();
     addField(tr("适配器"), m_adapterRow);
-    addField(tr("通道"), m_targetRow);
     addField(tr("波特率"), m_bitrateRow);
     if (text("displayMode") != QStringLiteral("简洁")) { // i18n: value
         addField(tr("数据域"), m_fdRow);
     }
-    // SocketCAN's command: shown under the rows only for that adapter (updateAdapterUi()).
+    // SocketCAN's command: shown only for that adapter (updateAdapterUi()).
     addField(QStringLiteral("ip link"), m_hint, true);
     m_hintCaption = m_fieldLabels.last();
+    // The channel comes last so that 连接 ends its row, as on the other cards, whichever adapter hides which rows.
+    addField(tr("通道"), m_targetRow);
     finishFields();
     updateAdapterUi();
 }
