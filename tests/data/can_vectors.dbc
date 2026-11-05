@@ -1,0 +1,75 @@
+VERSION ""
+
+NS_ :
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	SIG_VALTYPE_
+
+BS_:
+
+BU_: Studio Ecu
+
+BO_ 168 VehicleData: 6 Ecu
+ SG_ VehicleSpeed : 0|10@1+ (0.5,0) [0|300] "km/h" Studio
+ SG_ Diagnostics : 16|8@1+ (1,0) [0|255] "" Studio
+
+BO_ 258 EngineData: 8 Ecu
+ SG_ PetrolLevel : 8|8@1+ (1,0) [0|255] "" Studio
+ SG_ EngTemp : 0|7@1- (2,0) [-50|150] "DegC" Studio
+ SG_ EngSpeed : 16|16@1+ (1,0) [0|8000] "rpm" Studio
+
+BO_ 715 Gear_Info: 1 Ecu
+ SG_ GearLock : 3|1@1+ (1,0) [0|1] "" Studio
+ SG_ Gear : 0|3@1+ (1,0) [0|5] "" Studio
+
+BO_ 193 PC2BLDC: 8 Studio
+ SG_ SetMotorSpeed : 0|12@1+ (1,0) [0|4095] "RPM" Ecu
+ SG_ SetDerect : 14|1@1+ (1,0) [0|1] "" Ecu
+ SG_ SetP : 16|8@1+ (1,0) [0|255] "" Ecu
+ SG_ Angel : 40|4@1+ (1,0) [0|15] "*30" Ecu
+ SG_ RunMode : 48|4@1+ (1,0) [0|5] "" Ecu
+
+BO_ 513 MotorolaMix: 8 Ecu
+ SG_ BeU16 : 7|16@0+ (1,0) [0|65535] "" Studio
+ SG_ BeS12 : 23|12@0- (0.1,-10) [-214.8|194.7] "V" Studio
+ SG_ BeOdd : 27|5@0+ (1,0) [0|31] "" Studio
+ SG_ BeCross : 37|10@0+ (1,0) [0|1023] "" Studio
+ SG_ LeTail : 56|8@1- (1,0) [-128|127] "" Studio
+
+BO_ 514 Wide: 8 Ecu
+ SG_ LeU32 : 0|32@1+ (0.001,0) [0|4294967.295] "" Studio
+ SG_ BeS32 : 39|32@0- (1,100) [-2147483548|2147483747] "" Studio
+
+BO_ 515 FloatData: 8 Ecu
+ SG_ LeFloat : 0|32@1- (1,0) [-1e30|1e30] "" Studio
+ SG_ BeFloat : 39|32@0- (2,1) [-1e30|1e30] "" Studio
+
+BO_ 516 DoubleData: 8 Ecu
+ SG_ LeDouble : 0|64@1- (1,0) [-1e300|1e300] "" Studio
+
+BO_ 517 Full64: 8 Ecu
+ SG_ LeU64 : 0|64@1+ (1,0) [0|9007199254740991] "" Studio
+
+BO_ 2566869221 ExtendedMsg: 8 Ecu
+ SG_ ExtValue : 0|16@1+ (0.01,-50) [-50|605.35] "" Studio
+
+BO_ 1536 FdFrame: 64 Ecu
+ SG_ FdFirst : 0|16@1+ (1,0) [0|65535] "" Studio
+ SG_ FdLast : 504|8@1+ (1,0) [0|255] "" Studio
+ SG_ FdBig : 439|24@0- (1,0) [-8388608|8388607] "" Studio
+
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 50000;
+BA_DEF_ BO_ "VFrameFormat" ENUM "StandardCAN","ExtendedCAN","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","StandardCAN_FD","ExtendedCAN_FD";
+BA_DEF_DEF_ "GenMsgCycleTime" 0;
+BA_DEF_DEF_ "VFrameFormat" "StandardCAN";
+BA_ "GenMsgCycleTime" BO_ 168 50;
+BA_ "GenMsgCycleTime" BO_ 715 100;
+BA_ "VFrameFormat" BO_ 1536 14;
+BA_ "VFrameFormat" BO_ 2566869221 1;
+VAL_ 715 Gear 4 "Reverve" 3 "Drive" 2 "Neutral" 1 "Reverse" 0 "Parking" ;
+VAL_ 715 GearLock 1 "Gear_Lock_On" 0 "Gear_Lock_Off" ;
+SIG_VALTYPE_ 515 LeFloat : 1;
+SIG_VALTYPE_ 515 BeFloat : 1;
+SIG_VALTYPE_ 516 LeDouble : 2;
