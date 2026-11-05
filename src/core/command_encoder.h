@@ -19,6 +19,18 @@ struct ModbusRequest
     QList<quint16> registers; // what an FC 16 request writes from address on
 };
 
+// A command in CAN mode, still unresolved: what canId names depends on each CAN link's own DBC and inline signals,
+// so every link resolves it itself (CanLink::prepare()).
+struct CanCommand
+{
+    QString target;      // canId: a DBC message name, or an ID (Can::parseId)
+    bool fd = false;     // canFd, for a raw ID; a DBC message takes FD from the DBC
+    int cycleMs = 0;     // canCycle; 0: the DBC's GenMsgCycleTime, if any
+    QString assignments; // the template with {value} in: Signal=value, ... for a message with signals
+    std::optional<QByteArray> payload; // for a raw ID: the bytes HEX mode builds from the same template
+    QString payloadError;              // why there is no payload
+};
+
 // A command ready to send. Modbus requests stay unframed: each link frames them
 // itself (MBAP for a link parsing Modbus TCP, ':' + hex + LRC for one parsing Modbus
 // ASCII, CRC-terminated RTU otherwise).
@@ -28,10 +40,12 @@ struct EncodedCommand
     {
         Bytes,
         Modbus,
+        Can, // goes to CAN links only, as Bytes and Modbus go to the others
     };
     Kind kind = Kind::Bytes;
     QByteArray bytes;
     ModbusRequest modbus;
+    CanCommand can;
 };
 
 struct CommandResult
@@ -79,11 +93,12 @@ int nextTransaction();
 // mbRegOrder). `value` overrides mbValue.
 CommandResult modbusFromProperties(const QJsonObject &props, const std::optional<QString> &value = std::nullopt);
 
-// What a widget sends for `value` in its configured mode ("文本", "HEX", "JSON" or "Modbus"),
+// What a widget sends for `value` in its configured mode ("文本", "HEX", "JSON", "Modbus" or "CAN"),
 // following PyQt UI Designer: the template's {value} is replaced (HEX numeric types
 // pack the value first), text gets the configured newline, HEX gets header and tail.
 // JSON puts the value in as JSON (itself when it is one JSON value, else a string), drops the
 // whitespace and adds commandJsonNewline; a template that is not one JSON value is an error.
+// CAN names its message in canId and leaves the rest to the CAN links (CanCommand).
 CommandResult encode(const QJsonObject &props, const QString &value);
 
 } // namespace CommandEncoder
