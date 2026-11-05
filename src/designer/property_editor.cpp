@@ -2,6 +2,7 @@
 
 #include "comm/modbus_slave.h"
 #include "core/binding.h"
+#include "core/dbc.h"
 #include "core/i18n.h"
 #include "core/protocol_parser.h"
 #include "designer/canvas_item.h"
@@ -19,9 +20,12 @@
 #include <FluentQtWidgets/Widgets/SpinBox.h>
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
 
+#include <QtCore/QDateTime>
+#include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QSet>
 #include <QtGui/QFocusEvent>
+#include <QtWidgets/QCompleter>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
@@ -50,6 +54,11 @@ const QHash<QString, QSet<QString>> &modeVisibility()
         {QStringLiteral("Modbus"),
          {QStringLiteral("mbSlave"), QStringLiteral("mbFunc"), QStringLiteral("mbAddress"), QStringLiteral("mbValue"),
           QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder")}},
+        // A message with signals takes Signal=value assignments in the template, a raw ID HEX mode's bytes.
+        {QStringLiteral("CAN"),
+         {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
+          QStringLiteral("commandTemplate"), QStringLiteral("dataType"), QStringLiteral("byteOrder"),
+          QStringLiteral("canId"), QStringLiteral("canFd"), QStringLiteral("canCycle")}},
     };
     return table;
 }
@@ -62,8 +71,77 @@ const QSet<QString> &modeFields()
         QStringLiteral("frameHeader"),    QStringLiteral("frameTail"),       QStringLiteral("dataType"),
         QStringLiteral("byteOrder"),      QStringLiteral("mbSlave"),         QStringLiteral("mbFunc"),
         QStringLiteral("mbAddress"),      QStringLiteral("mbValue"),         QStringLiteral("mbDataType"),
-        QStringLiteral("mbRegOrder")};
+        QStringLiteral("mbRegOrder"),     QStringLiteral("canId"),           QStringLiteral("canFd"),
+        QStringLiteral("canCycle")};
     return fields;
+}
+
+// What the project's CAN cards decode with, for completions: the signal keys a binding can use and the message
+// names a CAN command can name. Each card's DBC is read again only when the file changed.
+struct CanNames
+{
+    QStringList keys;
+    QStringList messages;
+};
+
+void collectCanCards(const QJsonArray &widgets, QList<QJsonObject> &out)
+{
+    for (const QJsonValue &value : widgets) {
+        const QJsonObject widget = value.toObject();
+        if (widget.value(QStringLiteral("type")).toString() == QLatin1String("CanConfigCard")) {
+            out.append(widget.value(QStringLiteral("properties")).toObject());
+        }
+        collectCanCards(widget.value(QStringLiteral("children")).toArray(), out);
+    }
+}
+
+CanNames canNames(const Project *project)
+{
+    CanNames names;
+    if (!project) {
+        return names;
+    }
+    struct Cached
+    {
+        QDateTime modified;
+        std::shared_ptr<const CanDatabase> dbc;
+    };
+    static QHash<QString, Cached> cache;
+    QList<QJsonObject> cards;
+    collectCanCards(project->widgets, cards);
+    for (const QJsonObject &card : std::as_const(cards)) {
+        std::shared_ptr<const CanDatabase> dbc;
+        const QString file = card.value(QStringLiteral("dbcFile")).toString().trimmed();
+        if (!file.isEmpty()) {
+            const QString path = QDir(project->assetBaseDir()).absoluteFilePath(file);
+            const QDateTime modified = QFileInfo(path).lastModified();
+            Cached &entry = cache[path];
+            if (!entry.dbc || entry.modified != modified) {
+                const auto loaded = Dbc::load(path);
+                entry = {modified, loaded ? std::make_shared<const CanDatabase>(*loaded) : nullptr};
+            }
+            dbc = entry.dbc;
+        }
+        if (const auto set = CanSignalSet::build(dbc, card.value(QStringLiteral("canSignals")).toString())) {
+            names.keys += set->signalKeys();
+            names.messages += set->messageNames();
+        }
+    }
+    names.keys.removeDuplicates();
+    names.messages.removeDuplicates();
+    return names;
+}
+
+void complete(FluentQt::LineEdit *edit, const QStringList &words)
+{
+    if (words.isEmpty()) {
+        return;
+    }
+    auto *completer = new QCompleter(words, edit);
+    completer->setCaseSensitivity(Qt::CaseInsensitive);
+    completer->setFilterMode(Qt::MatchContains);
+    completer->setMaxVisibleItems(12);
+    edit->setCompleter(completer);
 }
 
 const QHash<QString, QSet<QString>> &chartParseVisibility()
@@ -413,7 +491,11 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     auto *edit = new FluentQt::LineEdit(m_content);
     edit->setText(value.toVariant().toString());
     connect(edit, &QLineEdit::textChanged, this, [commit](const QString &t) { commit(t); });
-    if (def.name != QLatin1String("imagePath")) {
+    if (def.name == QLatin1String("canId")) {
+        complete(edit, canNames(m_project).messages);
+    }
+    const bool dbc = def.name == QLatin1String("dbcFile");
+    if (def.name != QLatin1String("imagePath") && !dbc) {
         return edit;
     }
     auto *row = new QWidget(m_content);
@@ -425,9 +507,11 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     keepSquareBeside(browse, edit);
     layout->addWidget(edit, 1);
     layout->addWidget(browse);
-    connect(browse, &QToolButton::clicked, this, [this, edit]() {
-        const QString path = QFileDialog::getOpenFileName(this, tr("选择图片"), QString(),
-                                                          tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.svg)"));
+    connect(browse, &QToolButton::clicked, this, [this, edit, dbc]() {
+        const QString path =
+            dbc ? QFileDialog::getOpenFileName(this, tr("选择 DBC 文件"), QString(), tr("DBC 文件 (*.dbc)"))
+                : QFileDialog::getOpenFileName(this, tr("选择图片"), QString(),
+                                               tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.svg)"));
         if (path.isEmpty()) {
             return;
         }
@@ -909,6 +993,8 @@ void PropertyEditor::buildBindingForm()
         combo({ParseMode::KeyValue, ParseMode::JsonPath, ParseMode::HexBytes, ParseMode::Modbus},
               value("parseMode", ParseMode::KeyValue).toString()));
     add("key", tr("绑定字段"), line(value("key", QString()).toString(), tr("字段名 (如 temperature)")));
+    // The signal keys of the project's CAN cards, so a DBC's names need not be typed out.
+    complete(static_cast<FluentQt::LineEdit *>(m_bindingEditors.value(QStringLiteral("key"))), canNames(m_project).keys);
     add("jsonPath", tr("JSON路径"), line(value("jsonPath", QString()).toString(), tr("路径 (如 data.sensors.0.temp)")));
     add("byteOffset", tr("字节偏移"), spin(0, 9999, value("byteOffset", 0).toInt()));
     add("dataType", tr("数据类型"),
@@ -1040,6 +1126,17 @@ void PropertyEditor::updateVisibility()
         } else {
             setRowVisible(QStringLiteral("commandMode"), true);
             setRowVisible(QStringLiteral("commands"), true);
+        }
+    }
+    if (meta.typeName == QLatin1String("CanConfigCard")) {
+        // The ZLG fields for a ZLG adapter, the data phase for CAN FD.
+        const bool zlg = m_item->propertyValue(QStringLiteral("defaultAdapter")).toString() == QLatin1String("ZLG");
+        for (const char *field : {"zlgModel", "defaultDeviceIndex", "defaultChannel", "termination"}) {
+            setRowVisible(QLatin1String(field), zlg);
+        }
+        const bool fd = m_item->propertyValue(QStringLiteral("canFd")).toBool();
+        for (const char *field : {"defaultDataBitrate", "defaultDataSamplePoint", "canBrs"}) {
+            setRowVisible(QLatin1String(field), fd);
         }
     }
     if (meta.prop(QStringLiteral("notify"))) {

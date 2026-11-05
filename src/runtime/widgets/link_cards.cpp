@@ -167,10 +167,11 @@ bool LinkCardBase::configureParser(Link *link)
     return true;
 }
 
-void LinkCardBase::setConnectedUi(bool connected, const QString &status)
+void LinkCardBase::setConnectedUi(bool connected, const QString &status, const QString &toolTip)
 {
     m_connected = connected;
     m_connection = status;
+    m_connectionTip = toolTip;
     m_connect->setText(connected ? tr("断开") : tr("连接"));
     // The poller's status keeps the colour of a connection: its text says when a block fails.
     for (FluentQt::CaptionLabel *label : {m_status, m_stripStatus}) {
@@ -202,7 +203,7 @@ void LinkCardBase::showStatus()
     }
     for (FluentQt::CaptionLabel *label : {m_status, m_stripStatus}) {
         label->setText(text);
-        label->setToolTip(toolTip);
+        label->setToolTip(toolTip.isEmpty() ? m_connectionTip : toolTip);
     }
     // In the strip the poller's part may shrink away, the connection never; otherwise as wide as its text.
     m_stripStatus->setMinimumWidth(polling ? m_stripStatus->fontMetrics().horizontalAdvance(m_connection) : 0);

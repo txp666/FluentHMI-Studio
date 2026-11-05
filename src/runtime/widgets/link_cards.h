@@ -53,8 +53,9 @@ class LinkCardBase : public HmiWidget
     virtual Link *currentLink() const = 0;
     // The parser a connecting link uses: the card's own choice, or the project's.
     bool configureParser(Link *link);
-    // The button and the status line: `status` describes the connection.
-    void setConnectedUi(bool connected, const QString &status);
+    // The button and the status line: `status` describes the connection; `toolTip` shows it whole when it is
+    // longer than the line (a CAN card's reason for refusing to connect).
+    void setConnectedUi(bool connected, const QString &status, const QString &toolTip = QString());
     // Tells the poller the card's link and settings again: after apply() and whenever the link changes.
     void updatePolling();
     // A labelled row; `small` labels it in the caption size, as a row of several fields is.
@@ -87,6 +88,7 @@ class LinkCardBase : public HmiWidget
     int m_lastRow = -1;
     bool m_connected = false;
     QString m_connection; // what the status line says about the connection
+    QString m_connectionTip;
 };
 
 class SerialConfigCardWidget : public LinkCardBase

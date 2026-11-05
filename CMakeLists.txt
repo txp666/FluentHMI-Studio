@@ -60,10 +60,18 @@ add_library(fhmi_core STATIC
     src/core/binding.cpp
     src/core/binding.h
     src/core/builtin_widgets.cpp
+    src/core/can_frame.cpp
+    src/core/can_frame.h
+    src/core/can_signal.cpp
+    src/core/can_signal.h
+    src/core/can_timing.cpp
+    src/core/can_timing.h
     src/core/chart_file.cpp
     src/core/chart_file.h
     src/core/command_encoder.cpp
     src/core/command_encoder.h
+    src/core/dbc.cpp
+    src/core/dbc.h
     src/core/expression.cpp
     src/core/expression.h
     src/core/gbk_table.cpp
@@ -88,9 +96,25 @@ target_include_directories(fhmi_core PUBLIC src)
 target_link_libraries(fhmi_core PUBLIC Qt6::Core)
 
 # ---------------------------------------------------------------------------
-# fhmi_comm: transport links (serial, TCP, MQTT, UDP) behind one hub.
+# fhmi_comm: transport links (serial, TCP, MQTT, UDP, CAN) behind one hub.
 # ---------------------------------------------------------------------------
 add_library(fhmi_comm STATIC
+    src/comm/can/can_backend.cpp
+    src/comm/can/can_backend.h
+    src/comm/can/can_link.cpp
+    src/comm/can/can_link.h
+    src/comm/can/can_polling_backend.cpp
+    src/comm/can/can_polling_backend.h
+    src/comm/can/pcan_api.h
+    src/comm/can/pcan_backend.cpp
+    src/comm/can/pcan_backend.h
+    src/comm/can/slcan_backend.cpp
+    src/comm/can/slcan_backend.h
+    src/comm/can/slcan_protocol.cpp
+    src/comm/can/slcan_protocol.h
+    src/comm/can/zlg_api.h
+    src/comm/can/zlg_backend.cpp
+    src/comm/can/zlg_backend.h
     src/comm/comm_hub.cpp
     src/comm/comm_hub.h
     src/comm/link.cpp
@@ -109,6 +133,11 @@ add_library(fhmi_comm STATIC
     src/comm/udp_link.h
 )
 target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort)
+# SocketCAN needs the Linux kernel's CAN headers. The PCAN and ZLG backends build everywhere (they only load their
+# vendor libraries at connect time); CanBackend::create() offers each where its vendor supports it.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(fhmi_comm PRIVATE src/comm/can/socketcan_backend.cpp src/comm/can/socketcan_backend.h)
+endif()
 
 # ---------------------------------------------------------------------------
 # fhmi_runtime: the live widgets. The designer canvas, the preview page and
@@ -129,6 +158,8 @@ add_library(fhmi_runtime STATIC
     src/runtime/ui_helpers.h
     src/runtime/widgets/basic_widgets.cpp
     src/runtime/widgets/basic_widgets.h
+    src/runtime/widgets/can_widgets.cpp
+    src/runtime/widgets/can_widgets.h
     src/runtime/widgets/container_widgets.cpp
     src/runtime/widgets/container_widgets.h
     src/runtime/widgets/data_widgets.cpp
@@ -266,6 +297,12 @@ if(FHMI_BUILD_TESTS)
             FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
         add_test(NAME ${test_name} COMMAND tst_${test_name})
     endforeach()
+    # CAN: DBC, signal codec and bit timing against golden vectors, and the text formats users type.
+    add_executable(tst_can tests/tst_can.cpp)
+    target_link_libraries(tst_can PRIVATE fhmi_comm Qt6::Test)
+    target_compile_definitions(tst_can PRIVATE FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+    add_test(NAME can COMMAND tst_can)
+
     add_executable(tst_mqtt tests/tst_mqtt.cpp)
     target_link_libraries(tst_mqtt PRIVATE fhmi_comm Qt6::Test)
     add_test(NAME mqtt COMMAND tst_mqtt)

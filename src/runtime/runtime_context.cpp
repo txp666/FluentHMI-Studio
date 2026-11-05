@@ -111,8 +111,14 @@ bool RuntimeContext::send(const CommandResult &result, QList<QByteArray> *sent)
         notify(tr("提示"), result.error, NotifyType::Error);
         return false;
     }
-    if (m_hub->send(*result.command, sent) == 0 && !wroteSlaves) {
-        notify(tr("提示"), tr("没有链路接收该命令"), NotifyType::Warning);
+    QString error;
+    if (m_hub->send(*result.command, sent, &error) == 0 && !wroteSlaves) {
+        // A CAN command that a link could not resolve says why; otherwise no link of its kind is connected.
+        if (!error.isEmpty()) {
+            notify(tr("提示"), error, NotifyType::Error);
+        } else {
+            notify(tr("提示"), tr("没有链路接收该命令"), NotifyType::Warning);
+        }
         return false;
     }
     return true;
@@ -177,7 +183,8 @@ void RuntimeContext::onMessage(const Message &message)
 
 void RuntimeContext::onRaw(const QByteArray &bytes)
 {
-    if (!m_active) {
+    // A CAN link's frame line is for showing; its frames reach bindings decoded, as messages.
+    if (!m_active || m_hub->carriesCanText()) {
         return;
     }
     for (BindingEntry &binding : m_bindings) {

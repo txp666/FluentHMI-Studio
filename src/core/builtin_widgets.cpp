@@ -70,7 +70,8 @@ PropDef parserConfig()
 }
 
 const QStringList kCommandModes = {QStringLiteral("文本"), // i18n: value
-                                   QStringLiteral("HEX"), QStringLiteral("JSON"), QStringLiteral("Modbus")};
+                                   QStringLiteral("HEX"), QStringLiteral("JSON"), QStringLiteral("Modbus"),
+                                   QStringLiteral("CAN")};
 const QStringList kHexTypes = {
     QStringLiteral("HEX字符串"), QStringLiteral("uint8"),  QStringLiteral("int8"), // i18n: value
     QStringLiteral("uint16"),    QStringLiteral("int16"),  QStringLiteral("uint32"),
@@ -158,6 +159,19 @@ QList<PropDef> hexFraming(const QStringList &dataTypes, const QString &dataTypeD
     return out;
 }
 
+// CAN mode: the message a command sets (a DBC message's name, or an ID) and how it goes out. Only FluentHMI Studio
+// sends CAN.
+QList<PropDef> canCommand()
+{
+    return {described(str(QStringLiteral("canId"), QT_TR_NOOP("CAN 报文"), QString()),
+                      QStringLiteral("DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 " // i18n: ignore
+                                     "`信号=值`，原始 ID 按 HEX 模式组字节")),                                // i18n: ignore
+            described(boolean(QStringLiteral("canFd"), QT_TR_NOOP("CAN FD 帧"), false),
+                      QStringLiteral("只用于原始 ID；DBC 报文是否 FD 由 DBC 决定")), // i18n: ignore
+            described(integer(QStringLiteral("canCycle"), QT_TR_NOOP("循环周期(ms)"), 0, 0, 60000),
+                      QStringLiteral("大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次"))}; // i18n: ignore
+}
+
 QList<PropDef> notification(const QString &event, const QString &content, const QString &type)
 {
     return {boolean(QStringLiteral("notify"), event, false),
@@ -215,6 +229,7 @@ QList<WidgetMeta> basicWidgets()
                dataType,
                regOrder,
                mbValue};
+    button += canCommand();
     button += notification(QT_TR_NOOP("按下通知"), QT_TR_NOOP("按钮已按下"), QStringLiteral("成功")); // i18n: value
 
     QList<PropDef> label{
@@ -240,6 +255,7 @@ QList<WidgetMeta> basicWidgets()
                  choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value
                         kInputFunctions),
                  address, dataType, regOrder};
+    lineEdit += canCommand();
 
     QList<PropDef> combo{text(QStringLiteral("items"), QT_TR_NOOP("选项"), QT_TR_NOOP("选项1\n选项2\n选项3")),
                          integer(QStringLiteral("currentIndex"), QT_TR_NOOP("默认选项"), 0, 0, 99),
@@ -256,6 +272,7 @@ QList<WidgetMeta> basicWidgets()
               dataType,
               regOrder,
               mbValue};
+    combo += canCommand();
 
     QList<PropDef> toggle{str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("开关")),
                           boolean(QStringLiteral("checked"), QT_TR_NOOP("默认开启"), false),
@@ -266,6 +283,7 @@ QList<WidgetMeta> basicWidgets()
                           jsonNewline};
     toggle += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     toggle += {slave, integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈地址"), 0, 0, 65535)};
+    toggle += canCommand();
     toggle += notification(QT_TR_NOOP("切换通知"), QT_TR_NOOP("开关已切换"), QStringLiteral("信息")); // i18n: value
 
     const auto ranged = [&](int value, bool suffix) {
@@ -281,6 +299,7 @@ QList<WidgetMeta> basicWidgets()
                   choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("06 写单寄存器"), // i18n: value
                          kWriteFunctions),
                   address, dataType, regOrder};
+        props += canCommand();
         return props;
     };
 
@@ -520,6 +539,56 @@ QList<WidgetMeta> commWidgets()
                  boolean(QStringLiteral("defaultTls"), QT_TR_NOOP("默认启用 TLS"), false)} +
                  linkParsing(false),
              260, 50),
+        // A CAN channel of a PCAN, ZLG, SocketCAN or slcan adapter, decoding with a DBC file and inline signals.
+        meta(QStringLiteral("CanConfigCard"), QT_TR_NOOP("CAN 配置卡片"), WidgetCategory::Comm, QStringLiteral("car"),
+             380, 330,
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("CAN 连接")),
+              choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"), // i18n: value
+                     {QStringLiteral("完整"), QStringLiteral("简洁")}),                             // i18n: value
+              described(choice(QStringLiteral("defaultAdapter"), QT_TR_NOOP("默认适配器"), QStringLiteral("PCAN"),
+                               {QStringLiteral("PCAN"), QStringLiteral("ZLG"), QStringLiteral("SocketCAN"),
+                                QStringLiteral("slcan")}),
+                        QStringLiteral("PCAN：Windows、macOS；ZLG：Windows；SocketCAN：Linux；slcan：所有系统")), // i18n: ignore
+              choice(QStringLiteral("zlgModel"), QT_TR_NOOP("ZLG 型号"), QStringLiteral("USBCANFD-200U"),
+                     {QStringLiteral("USBCAN-I"), QStringLiteral("USBCAN-I+"), QStringLiteral("USBCAN-I-mini"),
+                      QStringLiteral("USBCAN-II"), QStringLiteral("USBCAN-II+"), QStringLiteral("USBCAN-E-U"),
+                      QStringLiteral("USBCAN-2E-U"), QStringLiteral("USBCAN-4E-U"), QStringLiteral("USBCAN-8E-U"),
+                      QStringLiteral("USBCANFD-100U-mini"), QStringLiteral("USBCANFD-100U"),
+                      QStringLiteral("USBCANFD-200U"), QStringLiteral("USBCANFD-400U"),
+                      QStringLiteral("USBCANFD-800U")}),
+              described(integer(QStringLiteral("defaultDeviceIndex"), QT_TR_NOOP("ZLG 设备索引"), 0, 0, 15),
+                        QStringLiteral("同型号插了多个时的序号，从 0 开始")), // i18n: ignore
+              described(integer(QStringLiteral("defaultChannel"), QT_TR_NOOP("ZLG 通道"), 0, 0, 7),
+                        QStringLiteral("设备上的第几路 CAN，从 0 开始")), // i18n: ignore
+              choice(QStringLiteral("defaultBitrate"), QT_TR_NOOP("默认波特率"), QStringLiteral("500k"),
+                     {QStringLiteral("10k"), QStringLiteral("20k"), QStringLiteral("50k"), QStringLiteral("100k"),
+                      QStringLiteral("125k"), QStringLiteral("250k"), QStringLiteral("500k"), QStringLiteral("800k"),
+                      QStringLiteral("1M")}),
+              choice(QStringLiteral("defaultSamplePoint"), QT_TR_NOOP("默认采样点"), QStringLiteral("87.5%"),
+                     {QStringLiteral("87.5%"), QStringLiteral("81.25%"), QStringLiteral("80%"), QStringLiteral("75%")}),
+              boolean(QStringLiteral("canFd"), QT_TR_NOOP("CAN FD"), false),
+              choice(QStringLiteral("defaultDataBitrate"), QT_TR_NOOP("数据域波特率"), QStringLiteral("2M"),
+                     {QStringLiteral("1M"), QStringLiteral("2M"), QStringLiteral("4M"), QStringLiteral("5M"),
+                      QStringLiteral("8M")}),
+              choice(QStringLiteral("defaultDataSamplePoint"), QT_TR_NOOP("数据域采样点"), QStringLiteral("75%"),
+                     {QStringLiteral("75%"), QStringLiteral("80%")}),
+              described(boolean(QStringLiteral("canBrs"), QT_TR_NOOP("加速 (BRS)"), true),
+                        QStringLiteral("CAN FD 报文的数据段用数据域波特率发送")), // i18n: ignore
+              described(str(QStringLiteral("customTiming"), QT_TR_NOOP("自定义位时序"), QString()),
+                        QStringLiteral("`BRP,TSEG1,TSEG2,SJW`，CAN FD 再加 `;BRP,TSEG1,TSEG2,SJW`（数据域），按适配器" // i18n: ignore
+                                       "时钟（PCAN 经典 CAN 8 MHz、CAN FD 80 MHz）；留空则按波特率和采样点计算")),  // i18n: ignore
+              boolean(QStringLiteral("listenOnly"), QT_TR_NOOP("只听模式"), false),
+              described(boolean(QStringLiteral("termination"), QT_TR_NOOP("终端电阻"), false),
+                        QStringLiteral("ZLG USBCANFD 系列可由软件开关，其他适配器忽略")), // i18n: ignore
+              described(str(QStringLiteral("dbcFile"), QT_TR_NOOP("DBC 文件"), QString()),
+                        QStringLiteral("相对 .uidp 所在文件夹的路径；导出时复制进应用")), // i18n: ignore
+              described(text(QStringLiteral("canSignals"), QT_TR_NOOP("CAN 信号"), QString()),
+                        QStringLiteral("DBC 之外的信号，每行一个：`ID 名字 : 起始位|长度@1+ (因子,偏移) [最小|最大] " // i18n: ignore
+                                       "\"单位\"`，ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号")), // i18n: ignore
+              described(str(QStringLiteral("canFilter"), QT_TR_NOOP("接收过滤"), QString()),
+                        QStringLiteral("留空收全部；否则只收这些 ID，如 `100-1FF, 18FF50E5`")) // i18n: ignore
+             },
+             240, 50),
         meta(QStringLiteral("DataSendCard"), QT_TR_NOOP("数据发送卡片"), WidgetCategory::Comm, QStringLiteral("send"),
              350, 140,
              {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("数据发送")),
@@ -532,6 +601,12 @@ QList<WidgetMeta> commWidgets()
              240, 120),
         meta(QStringLiteral("LogBox"), QT_TR_NOOP("日志显示框"), WidgetCategory::Comm, QStringLiteral("document"), 400,
              200, {integer(QStringLiteral("maxLines"), QT_TR_NOOP("最大行数"), 500, 50, 50000)}, 200, 80),
+        // One row per CAN ID seen on the project's CAN links.
+        meta(QStringLiteral("CanMonitor"), QT_TR_NOOP("报文监视"), WidgetCategory::Comm, QStringLiteral("view"), 560,
+             280,
+             {described(boolean(QStringLiteral("showSignals"), QT_TR_NOOP("显示信号"), false),
+                        QStringLiteral("多一列，列出 DBC 和 canSignals 解出的信号值"))}, // i18n: ignore
+             240, 100),
         // The data table of the first link card whose modbusRole is 从站, one area of it.
         meta(QStringLiteral("ModbusSlaveTable"), QT_TR_NOOP("从站寄存器表"), WidgetCategory::Comm,
              QStringLiteral("table"), 260, 300,
