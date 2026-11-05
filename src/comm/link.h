@@ -34,6 +34,8 @@ class Link : public QObject
     // Whether a write can reach a device right now (a listening server may have none).
     virtual bool canSend() const { return isConnected(); }
     virtual void close() = 0;
+    // A CAN link takes CAN commands and frames only: send() does nothing on it, and the hub sends it no bytes.
+    virtual bool isCan() const { return false; }
 
     // Writes to the device; false when nothing could be written.
     bool send(const QByteArray &bytes);
@@ -63,6 +65,8 @@ class Link : public QObject
     void rawReceived(const QByteArray &bytes);
     void bytesSent(const QByteArray &bytes);
     void errorOccurred(const QString &message);
+    // Something the log shows at warning level (a DBC line skipped, a CAN bus in error passive).
+    void warningMessage(const QString &message);
     void infoMessage(const QString &message);
 
   protected:

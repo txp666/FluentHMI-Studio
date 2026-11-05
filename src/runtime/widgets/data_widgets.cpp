@@ -1,5 +1,8 @@
 #include "runtime/widgets/data_widgets.h"
 
+#include "comm/can/can_link.h"
+#include "core/can_frame.h"
+
 #include "core/chart_file.h"
 #include "core/hex_utils.h"
 #include "core/protocol_parser.h"
@@ -1329,6 +1332,8 @@ void LogBoxWidget::onAttached()
                  [this](const QString &link) { appendLog(tr("已断开: %1").arg(link), QStringLiteral("warn")); }));
     live(connect(hub, &CommHub::linkError, this,
                  [this](const QString &message) { appendLog(tr("错误: %1").arg(message), QStringLiteral("error")); }));
+    live(connect(hub, &CommHub::linkWarning, this,
+                 [this](const QString &message) { appendLog(tr("警告: %1").arg(message), QStringLiteral("warn")); }));
     live(connect(hub, &CommHub::linkInfo, this, [this](const QString &message) { appendLog(message); }));
     live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message) {
         // A slave's own change is no frame received: its requests and replies are logged instead.
@@ -1385,6 +1390,10 @@ void DataRecvCardWidget::apply()
 
 QString DataRecvCardWidget::render(const QByteArray &bytes, bool received) const
 {
+    // A CAN link's frame line is text that already shows its bytes in HEX.
+    if (context()->hub()->carriesCanText()) {
+        return QString::fromUtf8(bytes);
+    }
     if (m_hex->isChecked()) {
         return toHexString(bytes);
     }
@@ -1507,24 +1516,47 @@ void DataSendCardWidget::sendInput()
         flashTip(tr("请输入数据"));
         return;
     }
-    if (!context()->hub()->isConnected()) {
+    CommHub *hub = context()->hub();
+    if (!hub->isConnected()) {
         flashTip(tr("未连接"));
         return;
     }
-    EncodedCommand command;
-    if (m_hex->isChecked()) {
-        const auto bytes = parseHex(input);
-        if (!bytes || bytes->isEmpty()) {
-            flashTip(tr("HEX格式错误"));
+    // CAN links take cansend's ID#DATA; the other links get the text as always.
+    const bool can = !hub->connectedCanLinks().isEmpty();
+    std::optional<CanFrame> frame;
+    if (can) {
+        frame = Can::parseSendText(input);
+        if (!frame) {
+            flashTip(tr("CAN 链路请按 ID#数据 格式输入"));
             return;
         }
-        command.bytes = *bytes;
-    } else {
-        static const QStringList endings = {QString(), QStringLiteral("\r\n"), QStringLiteral("\n"),
-                                            QStringLiteral("\r")};
-        command.bytes = (input + endings.value(m_newline->currentIndex())).toUtf8();
     }
-    if (context()->send(CommandResult::ok(command))) {
+    bool sent = false;
+    if (hub->hasConnectedByteLink()) {
+        EncodedCommand command;
+        if (m_hex->isChecked()) {
+            const auto bytes = parseHex(input);
+            if (!bytes || bytes->isEmpty()) {
+                flashTip(tr("HEX格式错误"));
+                return;
+            }
+            command.bytes = *bytes;
+        } else {
+            static const QStringList endings = {QString(), QStringLiteral("\r\n"), QStringLiteral("\n"),
+                                                QStringLiteral("\r")};
+            command.bytes = (input + endings.value(m_newline->currentIndex())).toUtf8();
+        }
+        sent = context()->send(CommandResult::ok(command));
+    }
+    if (frame) {
+        QString error;
+        if (hub->sendCanFrame(*frame, &error) > 0) {
+            sent = true;
+        } else if (!error.isEmpty()) {
+            context()->notify(tr("提示"), error, NotifyType::Error);
+        }
+    }
+    if (sent) {
         m_input->selectAll();
     }
 }

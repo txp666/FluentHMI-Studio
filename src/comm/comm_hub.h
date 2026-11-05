@@ -11,7 +11,9 @@
 
 namespace fhmi {
 
+class CanLink;
 class ModbusSlave;
+struct CanFrame;
 
 // How sendModbus() queues a request on the links that parse Modbus.
 struct ModbusSend
@@ -44,14 +46,22 @@ class CommHub : public QObject
     void removeLink(Link *link);
     QList<Link *> connectedLinks() const;
     bool isConnected() const;
+    // The connected links of each kind: CAN links take CAN commands and frames, the others bytes and Modbus.
+    QList<CanLink *> connectedCanLinks() const;
+    bool hasConnectedByteLink() const;
 
-    // Returns how many links accepted the bytes; `sent` collects the frames they accepted.
+    // Returns how many links accepted the bytes; `sent` collects the frames they accepted. CAN links are left out.
     int send(const QByteArray &bytes, QList<QByteArray> *sent = nullptr);
     // A link that parses Modbus queues the request in its master (a write by default, with a 1000 ms
     // timeout), which frames it as MBAP, ASCII or RTU; a link that answers as a Modbus slave is left out; any
-    // other link is sent the RTU frame right away. A queued request counts as accepted.
+    // other link is sent the RTU frame right away. A queued request counts as accepted. CAN links are left out.
     int sendModbus(const ModbusRequest &request, QList<QByteArray> *sent = nullptr, const ModbusSend &how = {});
-    int send(const EncodedCommand &command, QList<QByteArray> *sent = nullptr);
+    // A CAN command goes to every connected CAN link, each resolving it with its own signals; when one cannot
+    // (an unknown signal, a value out of range), *error says why and no link sends anything.
+    int sendCan(const CanCommand &command, QList<QByteArray> *sent = nullptr, QString *error = nullptr);
+    // A frame typed in a DataSendCard, to every connected CAN link.
+    int sendCanFrame(const CanFrame &frame, QString *error = nullptr);
+    int send(const EncodedCommand &command, QList<QByteArray> *sent = nullptr, QString *error = nullptr);
 
     void disconnectAll();
 
@@ -68,6 +78,9 @@ class CommHub : public QObject
     // raw bytes carry no link, so the encoding of the link they came from rides alongside.
     QString rawEncoding() const { return m_rawEncoding; }
     QString decodeRaw(const QByteArray &bytes) const;
+    // Whether the bytes rawReceived() or bytesSent() carries right now are a CAN link's frame line (text, never
+    // device bytes: shown as it is, and no HEX binding reads it).
+    bool carriesCanText() const { return m_canText; }
 
   signals:
     void messageReceived(const fhmi::Message &message);
@@ -76,7 +89,10 @@ class CommHub : public QObject
     void linkConnected(const QString &description);
     void linkDisconnected(const QString &description);
     void linkError(const QString &message);
+    void linkWarning(const QString &message);
     void linkInfo(const QString &message);
+    // A CAN link's frames, received or sent, in batches: the monitor's feed.
+    void canFrames(fhmi::CanLink *link, const QList<fhmi::CanFrame> &frames, bool sent);
     void slaveLog(const QString &text, const QString &level);
     // A slave was added or removed.
     void slavesChanged();
@@ -95,6 +111,7 @@ class CommHub : public QObject
     QString m_parserType = QStringLiteral("line");
     QJsonObject m_parserConfig;
     QString m_rawEncoding = QStringLiteral("utf-8");
+    bool m_canText = false;
 };
 
 } // namespace fhmi

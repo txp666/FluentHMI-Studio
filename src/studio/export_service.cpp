@@ -115,26 +115,43 @@ QImage squared(const QImage &image, int side)
 }
 #endif
 
-// Copies every image the project uses into assets/ and points the widgets at the copies.
+// Copies every file the project's widgets use (an ImageDisplay's image, a CanConfigCard's DBC) into assets/ and
+// points the widgets at the copies.
 bool bundleImages(QJsonArray &widgets, const QDir &base, const QDir &assets, QSet<QString> &used, QString *error)
 {
+    struct Asset
+    {
+        const char *type;
+        const char *property;
+        const char *unreadable;
+        const char *uncopyable;
+    };
+    static constexpr Asset kinds[] = {
+        {"ImageDisplay", "imagePath", QT_TRANSLATE_NOOP("fhmi", "图片不存在或不可读: %1"),
+         QT_TRANSLATE_NOOP("fhmi", "无法复制图片: %1")},
+        {"CanConfigCard", "dbcFile", QT_TRANSLATE_NOOP("fhmi", "DBC 文件不存在或不可读: %1"),
+         QT_TRANSLATE_NOOP("fhmi", "无法复制 DBC 文件: %1")},
+    };
     for (int i = 0; i < widgets.size(); ++i) {
         QJsonObject widget = widgets.at(i).toObject();
         QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
-        const QString image = props.value(QStringLiteral("imagePath")).toString();
-        if (widget.value(QStringLiteral("type")).toString() == QLatin1String("ImageDisplay") && !image.isEmpty()) {
-            const QString source = QDir::isRelativePath(image) ? base.absoluteFilePath(image) : image;
+        for (const Asset &kind : kinds) {
+            const QString property = QLatin1String(kind.property);
+            const QString file = props.value(property).toString();
+            if (widget.value(QStringLiteral("type")).toString() != QLatin1String(kind.type) || file.isEmpty()) {
+                continue;
+            }
+            const QString source = QDir::isRelativePath(file) ? base.absoluteFilePath(file) : file;
             if (!QFileInfo(source).isReadable()) {
-                return fail(error, QCoreApplication::translate("fhmi", "图片不存在或不可读: %1")
+                return fail(error, QCoreApplication::translate("fhmi", kind.unreadable)
                                        .arg(QDir::toNativeSeparators(source)));
             }
             const QString name = assetName(source, used);
             if (!assets.mkpath(QStringLiteral(".")) || !QFile::copy(source, assets.filePath(name))) {
-                return fail(
-                    error,
-                    QCoreApplication::translate("fhmi", "无法复制图片: %1").arg(QDir::toNativeSeparators(source)));
+                return fail(error, QCoreApplication::translate("fhmi", kind.uncopyable)
+                                       .arg(QDir::toNativeSeparators(source)));
             }
-            props.insert(QStringLiteral("imagePath"), QStringLiteral("assets/") + name);
+            props.insert(property, QStringLiteral("assets/") + name);
             widget.insert(QStringLiteral("properties"), props);
         }
         QJsonArray children = widget.value(QStringLiteral("children")).toArray();

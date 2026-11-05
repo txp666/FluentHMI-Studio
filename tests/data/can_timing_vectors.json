@@ -1,0 +1,1849 @@
+{
+ "_about": "Bit timing for a bitrate and sample point: total TQ (at least minTq) = 1 + TSEG1 + TSEG2 = clock / (BRP * bitrate), sample point = (1 + TSEG1) / TQ. Among BRPs giving the bitrate exactly and TSEG1 placing the sample point at floor or ceil of samplePoint * TQ (within limits), the best has the smallest sample-point error, then TQ closest to preferredTq, then the smaller BRP, then the later sample point. SJW = min(TSEG2, sjw limit). expect null: no BRP gives the bitrate exactly. btr: SJA1000 BTR0/BTR1 (BTR0 = (SJW-1)<<6 | (BRP-1), BTR1 = (TSEG2-1)<<4 | (TSEG1-1), one sample).",
+ "limits": {
+  "fdNominal": {
+   "brp": [
+    1,
+    1024
+   ],
+   "tseg1": [
+    1,
+    256
+   ],
+   "tseg2": [
+    1,
+    128
+   ],
+   "sjw": 128,
+   "minTq": 8
+  },
+  "fdData": {
+   "brp": [
+    1,
+    1024
+   ],
+   "tseg1": [
+    1,
+    32
+   ],
+   "tseg2": [
+    1,
+    16
+   ],
+   "sjw": 16,
+   "minTq": 5
+  },
+  "sja1000": {
+   "brp": [
+    1,
+    64
+   ],
+   "tseg1": [
+    1,
+    16
+   ],
+   "tseg2": [
+    1,
+    8
+   ],
+   "sjw": 4,
+   "minTq": 8
+  }
+ },
+ "cases": [
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 40,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 40,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 32,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 40,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 20,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 20,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 16,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 20,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 10,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 10,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 8,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 10,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 4,
+    "tseg1": 21,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 25,
+    "samplePoint": 0.88
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 1,
+    "tseg1": 80,
+    "tseg2": 19,
+    "sjw": 19,
+    "tq": 100,
+    "samplePoint": 0.81
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 5,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 5,
+    "tseg1": 14,
+    "tseg2": 5,
+    "sjw": 5,
+    "tq": 20,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 5,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 5,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 4,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 5,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 30,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 30,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 32,
+    "tseg1": 11,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 15,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 30,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 15,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 15,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 16,
+    "tseg1": 11,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 15,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 15,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 5,
+    "tseg1": 20,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 24,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 2,
+    "tseg1": 48,
+    "tseg2": 11,
+    "sjw": 11,
+    "tq": 60,
+    "samplePoint": 0.8167
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 8,
+    "tseg1": 11,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 15,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 6,
+    "tseg1": 14,
+    "tseg2": 5,
+    "sjw": 5,
+    "tq": 20,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 3,
+    "tseg1": 21,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 25,
+    "samplePoint": 0.88
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 1,
+    "tseg1": 60,
+    "tseg2": 14,
+    "sjw": 14,
+    "tq": 75,
+    "samplePoint": 0.8133
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 5,
+    "tseg1": 11,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 15,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 55,
+    "tseg2": 19,
+    "sjw": 19,
+    "tq": 75,
+    "samplePoint": 0.7467
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 4,
+    "tseg1": 12,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 15,
+    "samplePoint": 0.8667
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 1,
+    "tseg1": 48,
+    "tseg2": 11,
+    "sjw": 11,
+    "tq": 60,
+    "samplePoint": 0.8167
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 4,
+    "tseg1": 11,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 15,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 3,
+    "tseg1": 14,
+    "tseg2": 5,
+    "sjw": 5,
+    "tq": 20,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 20,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 20,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 16,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 20,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 10,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 10,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 8,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 10,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 5,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 5,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 4,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 5,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 2,
+    "tseg1": 21,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 25,
+    "samplePoint": 0.88
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 1,
+    "tseg1": 40,
+    "tseg2": 9,
+    "sjw": 9,
+    "tq": 50,
+    "samplePoint": 0.82
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 5,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 2,
+    "tseg1": 18,
+    "tseg2": 6,
+    "sjw": 6,
+    "tq": 25,
+    "samplePoint": 0.76
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 5,
+    "tseg1": 6,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 8,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 2,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 2,
+    "tseg1": 15,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 20,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdNominal",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 2,
+    "tseg1": 14,
+    "tseg2": 5,
+    "sjw": 5,
+    "tq": 20,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 4,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 4,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 4,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 125000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 4,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 2,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 2,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 2,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 250000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 2,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 1,
+    "tseg1": 13,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 16,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 1,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 500000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 11,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 16,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 1,
+    "tseg1": 8,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 10,
+    "samplePoint": 0.9
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 1,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 800000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.875,
+   "expect": {
+    "brp": 1,
+    "tseg1": 6,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 8,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8125,
+   "expect": {
+    "brp": 1,
+    "tseg1": 6,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 8,
+    "samplePoint": 0.875
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 1000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 1000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 10,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 1000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 8,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 2000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 5,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 2000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 4,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 4000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 14,
+    "tseg2": 5,
+    "sjw": 5,
+    "tq": 20,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 4000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 2,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 5000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 2,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 5000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 12,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 16,
+    "samplePoint": 0.8125
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 8000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 80000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 8000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 1000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 5,
+    "tseg1": 8,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 12,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 1000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 6,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 2000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 2,
+    "tseg1": 10,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 15,
+    "samplePoint": 0.7333
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 2000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 3,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 4000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 10,
+    "tseg2": 4,
+    "sjw": 4,
+    "tq": 15,
+    "samplePoint": 0.7333
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 4000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 3,
+    "tseg1": 3,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 5,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 5000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 8,
+    "tseg2": 3,
+    "sjw": 3,
+    "tq": 12,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 5000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 2,
+    "tseg1": 4,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 6,
+    "samplePoint": 0.8333
+   }
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 8000000,
+   "samplePoint": 0.75,
+   "expect": null
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 8000000,
+   "samplePoint": 0.8,
+   "expect": null
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 1000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 5,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 1000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 4,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 2000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 14,
+    "tseg2": 5,
+    "sjw": 5,
+    "tq": 20,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 2000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 2,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 4000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 4000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 7,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 10,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 5000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 5000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 5,
+    "tseg2": 2,
+    "sjw": 2,
+    "tq": 8,
+    "samplePoint": 0.75
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 8000000,
+   "samplePoint": 0.75,
+   "expect": {
+    "brp": 1,
+    "tseg1": 3,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 5,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 40000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 8000000,
+   "samplePoint": 0.8,
+   "expect": {
+    "brp": 1,
+    "tseg1": 3,
+    "tseg2": 1,
+    "sjw": 1,
+    "tq": 5,
+    "samplePoint": 0.8
+   }
+  },
+  {
+   "clock": 8000000,
+   "limits": "sja1000",
+   "preferredTq": 16,
+   "bitrate": 33333,
+   "samplePoint": 0.875,
+   "expect": null
+  },
+  {
+   "clock": 60000000,
+   "limits": "fdData",
+   "preferredTq": 8,
+   "bitrate": 8000000,
+   "samplePoint": 0.875,
+   "expect": null
+  }
+ ],
+ "btr": [
+  {
+   "brp": 4,
+   "tseg1": 13,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "431C"
+  },
+  {
+   "brp": 4,
+   "tseg1": 12,
+   "tseg2": 3,
+   "sjw": 3,
+   "btr0btr1": "832B"
+  },
+  {
+   "brp": 4,
+   "tseg1": 12,
+   "tseg2": 3,
+   "sjw": 3,
+   "btr0btr1": "832B"
+  },
+  {
+   "brp": 4,
+   "tseg1": 11,
+   "tseg2": 4,
+   "sjw": 4,
+   "btr0btr1": "C33A"
+  },
+  {
+   "brp": 2,
+   "tseg1": 13,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "411C"
+  },
+  {
+   "brp": 2,
+   "tseg1": 12,
+   "tseg2": 3,
+   "sjw": 3,
+   "btr0btr1": "812B"
+  },
+  {
+   "brp": 2,
+   "tseg1": 12,
+   "tseg2": 3,
+   "sjw": 3,
+   "btr0btr1": "812B"
+  },
+  {
+   "brp": 2,
+   "tseg1": 11,
+   "tseg2": 4,
+   "sjw": 4,
+   "btr0btr1": "C13A"
+  },
+  {
+   "brp": 1,
+   "tseg1": 13,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "401C"
+  },
+  {
+   "brp": 1,
+   "tseg1": 12,
+   "tseg2": 3,
+   "sjw": 3,
+   "btr0btr1": "802B"
+  },
+  {
+   "brp": 1,
+   "tseg1": 12,
+   "tseg2": 3,
+   "sjw": 3,
+   "btr0btr1": "802B"
+  },
+  {
+   "brp": 1,
+   "tseg1": 11,
+   "tseg2": 4,
+   "sjw": 4,
+   "btr0btr1": "C03A"
+  },
+  {
+   "brp": 1,
+   "tseg1": 8,
+   "tseg2": 1,
+   "sjw": 1,
+   "btr0btr1": "0007"
+  },
+  {
+   "brp": 1,
+   "tseg1": 7,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "4016"
+  },
+  {
+   "brp": 1,
+   "tseg1": 7,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "4016"
+  },
+  {
+   "brp": 1,
+   "tseg1": 7,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "4016"
+  },
+  {
+   "brp": 1,
+   "tseg1": 6,
+   "tseg2": 1,
+   "sjw": 1,
+   "btr0btr1": "0005"
+  },
+  {
+   "brp": 1,
+   "tseg1": 6,
+   "tseg2": 1,
+   "sjw": 1,
+   "btr0btr1": "0005"
+  },
+  {
+   "brp": 1,
+   "tseg1": 5,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "4014"
+  },
+  {
+   "brp": 1,
+   "tseg1": 5,
+   "tseg2": 2,
+   "sjw": 2,
+   "btr0btr1": "4014"
+  }
+ ]
+}

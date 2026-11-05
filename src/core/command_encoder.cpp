@@ -638,6 +638,52 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
     return CommandResult::ok(command);
 }
 
+namespace {
+
+// HEX mode's command text: the template with {value} in, packed per dataType and byteOrder for a numeric type.
+std::optional<QString> hexCommandText(const QJsonObject &props, const QString &templ, const QString &value)
+{
+    const QString type = prop(props, "dataType", QStringLiteral("HEX字符串")); // i18n: value
+    if (type == QStringLiteral("HEX字符串")) {                                 // i18n: value
+        return templ.contains(QStringLiteral("{value}")) ? QString(templ).replace(QStringLiteral("{value}"), value)
+                                                          : templ;
+    }
+    const bool be = prop(props, "byteOrder", QStringLiteral("大端(BE)")) == QStringLiteral("大端(BE)"); // i18n: value
+    const auto payload = packedPayload(value, type, be);
+    if (!payload) {
+        return std::nullopt;
+    }
+    return QString(templ).replace(QStringLiteral("{value}"), QString::fromLatin1(payload->toHex()));
+}
+
+CommandResult canCommand(const QJsonObject &props, const QString &templ, const QString &value)
+{
+    EncodedCommand command;
+    command.kind = EncodedCommand::Kind::Can;
+    CanCommand &can = command.can;
+    can.target = prop(props, "canId", QString()).trimmed();
+    if (can.target.isEmpty()) {
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "CAN 模式请填写报文名或 CAN ID"));
+    }
+    const QJsonValue fd = props.value(QStringLiteral("canFd"));
+    can.fd = fd.isBool() ? fd.toBool() : fd.toDouble() != 0;
+    can.cycleMs = int(std::clamp<qint64>(integerProp(props, "canCycle", 0).value_or(0), 0, 60000));
+    can.assignments = templ.contains(QStringLiteral("{value}")) ? QString(templ).replace(QStringLiteral("{value}"), value)
+                                                                : templ;
+    // Whether the message has signals is up to each link; the raw bytes are ready for the links where it has none.
+    if (const auto text = hexCommandText(props, templ, value)) {
+        can.payload = parseHex(*text);
+        if (!can.payload) {
+            can.payloadError = QCoreApplication::translate("fhmi", "CAN 数据不是有效的 HEX: %1").arg(*text);
+        }
+    } else {
+        can.payloadError = QCoreApplication::translate("fhmi", "数值无效或超出数据类型范围");
+    }
+    return CommandResult::ok(command);
+}
+
+} // namespace
+
 CommandResult encode(const QJsonObject &props, const QString &value)
 {
     const QString mode = prop(props, "commandMode", QStringLiteral("文本")); // i18n: value
@@ -651,25 +697,17 @@ CommandResult encode(const QJsonObject &props, const QString &value)
     if (mode == QLatin1String("JSON")) {
         return jsonCommand(props, value);
     }
+    if (mode == QLatin1String("CAN")) {
+        return canCommand(props, templ, value);
+    }
 
     EncodedCommand command;
     if (mode == QLatin1String("HEX")) {
-        const QString type = prop(props, "dataType", QStringLiteral("HEX字符串")); // i18n: value
-        QString hexText;
-        if (type != QStringLiteral("HEX字符串")) { // i18n: value
-            const bool be =
-                prop(props, "byteOrder", QStringLiteral("大端(BE)")) == QStringLiteral("大端(BE)"); // i18n: value
-            const auto payload = packedPayload(value, type, be);
-            if (!payload) {
-                return CommandResult::failure(QCoreApplication::translate("fhmi", "数值无效或超出数据类型范围"));
-            }
-            hexText = templ;
-            hexText.replace(QStringLiteral("{value}"), QString::fromLatin1(payload->toHex()));
-        } else {
-            hexText = templ.contains(QStringLiteral("{value}")) ? QString(templ).replace(QStringLiteral("{value}"), value)
-                                                                : templ;
+        const auto hexText = hexCommandText(props, templ, value);
+        if (!hexText) {
+            return CommandResult::failure(QCoreApplication::translate("fhmi", "数值无效或超出数据类型范围"));
         }
-        const auto frame = hexFrame(hexText, header, tail);
+        const auto frame = hexFrame(*hexText, header, tail);
         if (!frame) {
             return CommandResult::failure(hexError());
         }

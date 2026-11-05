@@ -5,7 +5,7 @@
   <p align="center">English · <a href="README_zh.md">简体中文</a> · <a href="https://hmi.modusignal.cn/">Website</a> · <a href="https://hmi.modusignal.cn/guide/">User guide</a></p>
 </p>
 
-FluentHMI Studio is a C++/Qt 6 rewrite of [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer): drag widgets onto a canvas, set their properties, bind them to serial, TCP, MQTT or UDP data, then export the design as a standalone app, with **no compiler needed**. Compared with the Python version, the download is smaller, it starts about twice as fast, exports take under a second, and it can update itself from inside the app (see [Compared with the Python version](#compared-with-the-python-version)).
+FluentHMI Studio is a C++/Qt 6 rewrite of [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer): drag widgets onto a canvas, set their properties, bind them to serial, TCP, MQTT, UDP or CAN data, then export the design as a standalone app, with **no compiler needed**. Compared with the Python version, the download is smaller, it starts about twice as fast, exports take under a second, and it can update itself from inside the app (see [Compared with the Python version](#compared-with-the-python-version)).
 
 > **Language**: the interface is in English or Simplified Chinese (Settings → Language).
 
@@ -49,6 +49,7 @@ Both use the same project format, and their widget and protocol rules match:
 - **Same parsing and binding rules**: the five parsers (line text with key-value / JSON / CSV; binary HEX frames with header and footer, length field, checksum, fixed length or idle-gap framing; Modbus RTU; Modbus TCP; Modbus ASCII), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the four command encodings (text / HEX / JSON / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
 - **Same Modbus features for PLCs**: read requests sent from here are remembered, so the registers in a reply are also named by address (holding register 100 is `hr100`) and a binding picks a register table and an address; pick a Modbus parser on the link card and bind a register address, and it is read automatically: nearby addresses are merged into blocks read at their periods, one request at a time, only for the controls on screen, with writes sent ahead of queued reads; FC16 writes int16, 32-bit integers and float32 values by data type.
 - **Modbus RTU / TCP slave**: a serial, TCP or UDP card can act as a slave and answer an external master from its own data table; bindings, controls and write commands read and write that table, and the slave register table widget shows and edits it.
+- **CAN / CAN FD (Studio only)**: a CAN card connects to a PEAK, ZLG, SocketCAN or slcan adapter and decodes frames with a DBC file or signals written on the card, so the usual bindings, charts and tables show them; controls send DBC signals or raw frames, once or cyclically, and a monitor lists every ID with its period (see [CAN adapters](#can-adapters)). Projects that use it open in Studio only.
 
 The differences are in how they are built and how they export apps:
 
@@ -146,11 +147,24 @@ sudo usermod -aG dialout $USER
 - On Ubuntu 22.04, `brltty` (a braille display service) grabs CH340/CH341 USB serial adapters. If `/dev/ttyUSB0` appears and vanishes again, remove it: `sudo apt remove brltty`.
 - ModemManager probes a newly plugged `ttyACM` device for a few seconds; the port is busy until it has finished.
 
+## CAN adapters
+
+Nothing is bundled; what each adapter needs:
+
+| Adapter | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| PEAK (PCAN-USB, PCAN-USB FD) | PEAK's device driver, which installs `PCANBasic.dll` | the PCBUSB library from [mac-can.com](https://mac-can.github.io/drivers/libPCBUSB.html) (`libPCBUSB.dylib` in `/usr/local/lib`) | choose SocketCAN: the kernel's `peak_usb` driver |
+| ZLG (USBCAN-I/II, USBCAN-E-U family, USBCANFD) | ZLG's device driver, and from ZLG's 64-bit "CAN interface function library" `zlgcan.dll` with its `kerneldlls` folder, next to the program or in a `zlgcan` folder beside it | – | – |
+| SocketCAN | – | – | built in; the interface's bitrate is set with `ip link` (the card shows the command, e.g. `sudo ip link set can0 up type can bitrate 500000 sample-point 0.875`) |
+| slcan (CANable, CANUSB and other Lawicel-protocol adapters) | the adapter's serial port | the adapter's serial port | the adapter's serial port; classic CAN only, 10k–1M |
+
+How the card, DBC keys, inline signals and CAN commands are written in a `.uidp` is in [docs/uidp-format.md](docs/uidp-format.md#接-can-总线).
+
 ## Architecture
 
 ```
-src/core      fhmi_core     Project model, widget metadata, protocol parsing, data binding, command encoding (Qt Core only)
-src/comm      fhmi_comm     Link interface + serial / TCP client / TCP server / MQTT / UDP; CommHub gathers all links
+src/core      fhmi_core     Project model, widget metadata, protocol parsing, data binding, command encoding, CAN signals / DBC / bit timing (Qt Core only)
+src/comm      fhmi_comm     Link interface + serial / TCP client / TCP server / MQTT / UDP / CAN (src/comm/can: PCAN, ZLG, SocketCAN, slcan); CommHub gathers all links
 src/runtime   fhmi_runtime  Runtime widgets built on FluentQtWidgets, RuntimeSurface, binding engine
 src/designer  fhmi_designer Canvas (QGraphicsScene), widget panel, property editor, alignment and container nesting
 src/studio    FluentHMIStudio   The designer app: design / preview / settings pages, export service
@@ -219,11 +233,11 @@ To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`,
 
 ## Current status (0.4.0)
 
-Done: all 30 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows, macOS and Linux (x64 and arm64 .deb) packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
+Done: all 32 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP / CAN preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows, macOS and Linux (x64 and arm64 .deb) packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
 The MQTT link is a built-in MQTT 3.1.1 client (based on QSslSocket, so the Qt MQTT module isn't needed): it supports username and password, QoS 0/1/2, `+`/`#` wildcard subscriptions, and TLS with the system certificate store, and it reconnects automatically if a connection that succeeded drops. As in the Python version, each message is treated as one frame, and a payload that is a single plain number is also given with the topic name as its key.
 
-Tested end to end on macOS: data display, charts and commands with simulated TCP and MQTT devices, running exported apps, and unpacking and running a package built on the same machine. The Windows package runs an export self-check in the release workflow (Windows Server 2022), and unpacking and running it, exporting, and running the exported app have been checked in a Windows 11 ARM64 virtual machine (under x64 emulation). Not verified yet: connecting to a real MQTT broker, and TLS.
+Tested end to end on macOS: data display, charts and commands with simulated TCP and MQTT devices, running exported apps, and unpacking and running a package built on the same machine. The Windows package runs an export self-check in the release workflow (Windows Server 2022), and unpacking and running it, exporting, and running the exported app have been checked in a Windows 11 ARM64 virtual machine (under x64 emulation). Not verified yet: connecting to a real MQTT broker, and TLS. CAN has been checked end to end with a simulated slcan adapter only; the PEAK, ZLG and SocketCAN adapters have not been tried on hardware yet.
 
 Roadmap:
 

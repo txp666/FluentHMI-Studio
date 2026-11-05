@@ -4,6 +4,7 @@
 
 #include "runtime/runtime_context.h"
 #include "runtime/widgets/basic_widgets.h"
+#include "runtime/widgets/can_widgets.h"
 #include "runtime/widgets/container_widgets.h"
 #include "runtime/widgets/data_widgets.h"
 #include "runtime/widgets/display_widgets.h"
@@ -178,6 +179,8 @@ const QHash<QString, Factory> &factories()
         {QStringLiteral("TcpConfigCard"), make<TcpConfigCardWidget>()},
         {QStringLiteral("MqttConfigCard"), make<MqttConfigCardWidget>()},
         {QStringLiteral("UdpConfigCard"), make<UdpConfigCardWidget>()},
+        {QStringLiteral("CanConfigCard"), make<CanConfigCardWidget>()},
+        {QStringLiteral("CanMonitor"), make<CanMonitorWidget>()},
     };
     return table;
 }

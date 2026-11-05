@@ -1,0 +1,733 @@
+{
+ "_about": "Expected values from cantools 45.1.2 decoding/encoding tests/data/can_vectors.dbc. decode: frame data (HEX) -> physical values per signal; text: value descriptions (VAL_) of the signals that have one for that raw value. encode: physical values (or value-description text) -> frame data, unused bits 0. Compare doubles with a relative tolerance of 1e-12.",
+ "dbc": "can_vectors.dbc",
+ "messages": [
+  {
+   "name": "VehicleData",
+   "id": 168,
+   "extended": false,
+   "fd": false,
+   "length": 6,
+   "cycleTime": 50,
+   "signals": [
+    {
+     "name": "VehicleSpeed",
+     "start": 0,
+     "length": 10,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 0.5,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 300,
+     "unit": "km/h"
+    },
+    {
+     "name": "Diagnostics",
+     "start": 16,
+     "length": 8,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 255,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "EngineData",
+   "id": 258,
+   "extended": false,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "EngTemp",
+     "start": 0,
+     "length": 7,
+     "byteOrder": "intel",
+     "signed": true,
+     "valueType": "integer",
+     "factor": 2,
+     "offset": 0,
+     "minimum": -50,
+     "maximum": 150,
+     "unit": "DegC"
+    },
+    {
+     "name": "PetrolLevel",
+     "start": 8,
+     "length": 8,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 255,
+     "unit": ""
+    },
+    {
+     "name": "EngSpeed",
+     "start": 16,
+     "length": 16,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 8000,
+     "unit": "rpm"
+    }
+   ]
+  },
+  {
+   "name": "Gear_Info",
+   "id": 715,
+   "extended": false,
+   "fd": false,
+   "length": 1,
+   "cycleTime": 100,
+   "signals": [
+    {
+     "name": "Gear",
+     "start": 0,
+     "length": 3,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 5,
+     "unit": "",
+     "values": {
+      "0": "Parking",
+      "1": "Reverse",
+      "2": "Neutral",
+      "3": "Drive",
+      "4": "Reverve"
+     }
+    },
+    {
+     "name": "GearLock",
+     "start": 3,
+     "length": 1,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 1,
+     "unit": "",
+     "values": {
+      "0": "Gear_Lock_Off",
+      "1": "Gear_Lock_On"
+     }
+    }
+   ]
+  },
+  {
+   "name": "PC2BLDC",
+   "id": 193,
+   "extended": false,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "SetMotorSpeed",
+     "start": 0,
+     "length": 12,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 4095,
+     "unit": "RPM"
+    },
+    {
+     "name": "SetDerect",
+     "start": 14,
+     "length": 1,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 1,
+     "unit": ""
+    },
+    {
+     "name": "SetP",
+     "start": 16,
+     "length": 8,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 255,
+     "unit": ""
+    },
+    {
+     "name": "Angel",
+     "start": 40,
+     "length": 4,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 15,
+     "unit": "*30"
+    },
+    {
+     "name": "RunMode",
+     "start": 48,
+     "length": 4,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 5,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "MotorolaMix",
+   "id": 513,
+   "extended": false,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "BeU16",
+     "start": 7,
+     "length": 16,
+     "byteOrder": "motorola",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "unit": ""
+    },
+    {
+     "name": "BeS12",
+     "start": 23,
+     "length": 12,
+     "byteOrder": "motorola",
+     "signed": true,
+     "valueType": "integer",
+     "factor": 0.1,
+     "offset": -10,
+     "minimum": -214.8,
+     "maximum": 194.7,
+     "unit": "V"
+    },
+    {
+     "name": "BeOdd",
+     "start": 27,
+     "length": 5,
+     "byteOrder": "motorola",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 31,
+     "unit": ""
+    },
+    {
+     "name": "BeCross",
+     "start": 37,
+     "length": 10,
+     "byteOrder": "motorola",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 1023,
+     "unit": ""
+    },
+    {
+     "name": "LeTail",
+     "start": 56,
+     "length": 8,
+     "byteOrder": "intel",
+     "signed": true,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": -128,
+     "maximum": 127,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "Wide",
+   "id": 514,
+   "extended": false,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "LeU32",
+     "start": 0,
+     "length": 32,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 0.001,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 4294967.295,
+     "unit": ""
+    },
+    {
+     "name": "BeS32",
+     "start": 39,
+     "length": 32,
+     "byteOrder": "motorola",
+     "signed": true,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 100,
+     "minimum": -2147483548,
+     "maximum": 2147483747,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "FloatData",
+   "id": 515,
+   "extended": false,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "LeFloat",
+     "start": 0,
+     "length": 32,
+     "byteOrder": "intel",
+     "signed": true,
+     "valueType": "float",
+     "factor": 1,
+     "offset": 0,
+     "minimum": -1e+30,
+     "maximum": 1e+30,
+     "unit": ""
+    },
+    {
+     "name": "BeFloat",
+     "start": 39,
+     "length": 32,
+     "byteOrder": "motorola",
+     "signed": true,
+     "valueType": "float",
+     "factor": 2,
+     "offset": 1,
+     "minimum": -1e+30,
+     "maximum": 1e+30,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "DoubleData",
+   "id": 516,
+   "extended": false,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "LeDouble",
+     "start": 0,
+     "length": 64,
+     "byteOrder": "intel",
+     "signed": true,
+     "valueType": "double",
+     "factor": 1,
+     "offset": 0,
+     "minimum": -1e+300,
+     "maximum": 1e+300,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "Full64",
+   "id": 517,
+   "extended": false,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "LeU64",
+     "start": 0,
+     "length": 64,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 9007199254740991,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "ExtendedMsg",
+   "id": 419385573,
+   "extended": true,
+   "fd": false,
+   "length": 8,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "ExtValue",
+     "start": 0,
+     "length": 16,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 0.01,
+     "offset": -50,
+     "minimum": -50,
+     "maximum": 605.35,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "name": "FdFrame",
+   "id": 1536,
+   "extended": false,
+   "fd": true,
+   "length": 64,
+   "cycleTime": 0,
+   "signals": [
+    {
+     "name": "FdFirst",
+     "start": 0,
+     "length": 16,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 65535,
+     "unit": ""
+    },
+    {
+     "name": "FdBig",
+     "start": 439,
+     "length": 24,
+     "byteOrder": "motorola",
+     "signed": true,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": -8388608,
+     "maximum": 8388607,
+     "unit": ""
+    },
+    {
+     "name": "FdLast",
+     "start": 504,
+     "length": 8,
+     "byteOrder": "intel",
+     "signed": false,
+     "valueType": "integer",
+     "factor": 1,
+     "offset": 0,
+     "minimum": 0,
+     "maximum": 255,
+     "unit": ""
+    }
+   ]
+  }
+ ],
+ "decode": [
+  {
+   "message": "VehicleData",
+   "id": 168,
+   "extended": false,
+   "data": "C8 01 7F 00 00 00",
+   "expect": {
+    "VehicleSpeed": 228,
+    "Diagnostics": 127
+   },
+   "text": {}
+  },
+  {
+   "message": "EngineData",
+   "id": 258,
+   "extended": false,
+   "data": "75 40 B8 0B 00 00 00 00",
+   "expect": {
+    "EngTemp": -22,
+    "PetrolLevel": 64,
+    "EngSpeed": 3000
+   },
+   "text": {}
+  },
+  {
+   "message": "Gear_Info",
+   "id": 715,
+   "extended": false,
+   "data": "0B",
+   "expect": {
+    "Gear": 3,
+    "GearLock": 1
+   },
+   "text": {
+    "Gear": "Drive",
+    "GearLock": "Gear_Lock_On"
+   }
+  },
+  {
+   "message": "Gear_Info",
+   "id": 715,
+   "extended": false,
+   "data": "06",
+   "expect": {
+    "Gear": 6,
+    "GearLock": 0
+   },
+   "text": {
+    "GearLock": "Gear_Lock_Off"
+   }
+  },
+  {
+   "message": "PC2BLDC",
+   "id": 193,
+   "extended": false,
+   "data": "DC 45 32 00 00 0A 03 00",
+   "expect": {
+    "SetMotorSpeed": 1500,
+    "SetDerect": 1,
+    "SetP": 50,
+    "Angel": 10,
+    "RunMode": 3
+   },
+   "text": {}
+  },
+  {
+   "message": "MotorolaMix",
+   "id": 513,
+   "extended": false,
+   "data": "12 34 F5 6A C3 9E 00 81",
+   "expect": {
+    "BeU16": 4660,
+    "BeS12": -27,
+    "BeOdd": 21,
+    "BeCross": 57,
+    "LeTail": -127
+   },
+   "text": {}
+  },
+  {
+   "message": "MotorolaMix",
+   "id": 513,
+   "extended": false,
+   "data": "FF FF 80 0F FF FF FF 7F",
+   "expect": {
+    "BeU16": 65535,
+    "BeS12": -214.8,
+    "BeOdd": 31,
+    "BeCross": 1023,
+    "LeTail": 127
+   },
+   "text": {}
+  },
+  {
+   "message": "Wide",
+   "id": 514,
+   "extended": false,
+   "data": "7B 28 6B EE 88 CA 6B 9C",
+   "expect": {
+    "LeU32": 4000000.123,
+    "BeS32": -2000000000
+   },
+   "text": {}
+  },
+  {
+   "message": "FloatData",
+   "id": 515,
+   "extended": false,
+   "data": "00 00 60 40 BF A0 00 00",
+   "expect": {
+    "LeFloat": 3.5,
+    "BeFloat": -1.5
+   },
+   "text": {}
+  },
+  {
+   "message": "DoubleData",
+   "id": 516,
+   "extended": false,
+   "data": "C9 76 BE 9F 0C 24 FE 40",
+   "expect": {
+    "LeDouble": 123456.789
+   },
+   "text": {}
+  },
+  {
+   "message": "Full64",
+   "id": 517,
+   "extended": false,
+   "data": "FF FF FF FF FF FF 1F 00",
+   "expect": {
+    "LeU64": 9007199254740991
+   },
+   "text": {}
+  },
+  {
+   "message": "ExtendedMsg",
+   "id": 419385573,
+   "extended": true,
+   "data": "C1 43 00 00 00 00 00 00",
+   "expect": {
+    "ExtValue": 123.45000000000002
+   },
+   "text": {}
+  },
+  {
+   "message": "FdFrame",
+   "id": 1536,
+   "extended": false,
+   "data": "EF BE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ED 29 79 00 00 00 00 00 00 5A",
+   "expect": {
+    "FdFirst": 48879,
+    "FdBig": -1234567,
+    "FdLast": 90
+   },
+   "text": {}
+  }
+ ],
+ "encode": [
+  {
+   "message": "VehicleData",
+   "values": {
+    "VehicleSpeed": 120.5,
+    "Diagnostics": 200
+   },
+   "data": "F1 00 C8 00 00 00"
+  },
+  {
+   "message": "EngineData",
+   "values": {
+    "EngTemp": -22,
+    "PetrolLevel": 64,
+    "EngSpeed": 3000
+   },
+   "data": "75 40 B8 0B 00 00 00 00"
+  },
+  {
+   "message": "Gear_Info",
+   "values": {
+    "Gear": 3,
+    "GearLock": 1
+   },
+   "data": "0B"
+  },
+  {
+   "message": "PC2BLDC",
+   "values": {
+    "SetMotorSpeed": 1500,
+    "SetDerect": 1,
+    "SetP": 50,
+    "Angel": 10,
+    "RunMode": 3
+   },
+   "data": "DC 45 32 00 00 0A 03 00"
+  },
+  {
+   "message": "MotorolaMix",
+   "values": {
+    "BeU16": 4660,
+    "BeS12": -50.3,
+    "BeOdd": 21,
+    "BeCross": 777,
+    "LeTail": -2
+   },
+   "data": "12 34 E6 DA B0 90 00 FE"
+  },
+  {
+   "message": "Wide",
+   "values": {
+    "LeU32": 1.234,
+    "BeS32": 99
+   },
+   "data": "D2 04 00 00 FF FF FF FF"
+  },
+  {
+   "message": "FloatData",
+   "values": {
+    "LeFloat": -0.25,
+    "BeFloat": 7
+   },
+   "data": "00 00 80 BE 40 40 00 00"
+  },
+  {
+   "message": "ExtendedMsg",
+   "values": {
+    "ExtValue": -12.34
+   },
+   "data": "B6 0E 00 00 00 00 00 00"
+  },
+  {
+   "message": "FdFrame",
+   "values": {
+    "FdFirst": 1,
+    "FdLast": 255,
+    "FdBig": 8388607
+   },
+   "data": "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 7F FF FF 00 00 00 00 00 00 FF"
+  },
+  {
+   "message": "VehicleData",
+   "values": {
+    "VehicleSpeed": 120.6,
+    "Diagnostics": 1
+   },
+   "data": "F1 00 01 00 00 00"
+  },
+  {
+   "message": "Gear_Info",
+   "values": {
+    "Gear": "Drive",
+    "GearLock": "Gear_Lock_Off"
+   },
+   "data": "03"
+  }
+ ]
+}

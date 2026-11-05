@@ -12,7 +12,7 @@
 
 - `text`（文本，文本）默认 `"按钮"`
 - `enabled`（启用，true/false）默认 `true`
-- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"`
+- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"` `"CAN"`
 - `command`（发送内容，命令）默认 `""`
 - `commandTemplate`（发送模板，文本）默认 `"{value}"`
 - `commandJsonNewline`（换行符，选项）默认 `"无"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
@@ -27,6 +27,9 @@
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
 - `mbValue`（值/数量，整数）默认 `1`，范围 -2147483648–2147483647
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
+- `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 - `notify`（按下通知，true/false）默认 `false`
 - `notifyTitle`（通知标题，文本）默认 `"提示"`
 - `notifyContent`（通知内容，文本）默认 `"按钮已按下"`
@@ -52,7 +55,7 @@
 - `text`（默认值，文本）默认 `""`
 - `readOnly`（只读，true/false）默认 `false`
 - `sendOnEnter`（回车发送，true/false）默认 `false`
-- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"`
+- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"` `"CAN"`
 - `commandTemplate`（发送模板，文本）默认 `"{value}"`
 - `commandJsonNewline`（换行符，选项）默认 `"无"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
 - `frameHeader`（帧头(HEX)，文本）默认 `""`
@@ -65,6 +68,9 @@
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
+- `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 
 #### `ComboBox` 下拉框
 
@@ -74,7 +80,7 @@
 - `currentIndex`（默认选项，整数）默认 `0`，范围 0–99
 - `sendOnSelect`（选中发送，true/false）默认 `false`
 - `commands`（发送命令表，多行文本）默认 `""`
-- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"`
+- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"` `"CAN"`
 - `commandTemplate`（发送模板，文本）默认 `"{value}"`
 - `commandJsonNewline`（换行符，选项）默认 `"无"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
 - `frameHeader`（帧头(HEX)，文本）默认 `""`
@@ -88,6 +94,9 @@
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
 - `mbValue`（值/数量，整数）默认 `1`，范围 -2147483648–2147483647
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
+- `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 
 #### `ToggleSwitch` 开关
 
@@ -95,7 +104,7 @@
 
 - `label`（标签，文本）默认 `"开关"`
 - `checked`（默认开启，true/false）默认 `false`
-- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"`
+- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"` `"CAN"`
 - `onCommand`（开启命令，命令）默认 `""`
 - `offCommand`（关闭命令，命令）默认 `""`
 - `commandTemplate`（发送模板，文本）默认 `"{value}"`
@@ -107,6 +116,9 @@
 - `commandNewline`（换行符，选项）默认 `"\\r\\n"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
 - `mbSlave`（从站地址，整数）默认 `1`，范围 1–247
 - `mbAddress`（线圈地址，整数）默认 `0`，范围 0–65535
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
+- `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 - `notify`（切换通知，true/false）默认 `false`
 - `notifyTitle`（通知标题，文本）默认 `"提示"`
 - `notifyContent`（通知内容，文本）默认 `"开关已切换"`
@@ -121,7 +133,7 @@
 - `maximum`（最大值，整数）默认 `100`，范围 -99999–99999
 - `value`（默认值，整数）默认 `50`，范围 -99999–99999
 - `sendOnChange`（变化发送，true/false）默认 `false`
-- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"`
+- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"` `"CAN"`
 - `commandTemplate`（发送模板，文本）默认 `"{value}"`
 - `commandJsonNewline`（换行符，选项）默认 `"无"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
 - `frameHeader`（帧头(HEX)，文本）默认 `""`
@@ -134,6 +146,9 @@
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
+- `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 
 #### `SpinBox` 数值框
 
@@ -144,7 +159,7 @@
 - `value`（默认值，整数）默认 `0`，范围 -99999–99999
 - `suffix`（后缀，文本）默认 `""`
 - `sendOnChange`（变化发送，true/false）默认 `false`
-- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"`
+- `commandMode`（发送模式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"JSON"` `"Modbus"` `"CAN"`
 - `commandTemplate`（发送模板，文本）默认 `"{value}"`
 - `commandJsonNewline`（换行符，选项）默认 `"无"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
 - `frameHeader`（帧头(HEX)，文本）默认 `""`
@@ -157,6 +172,9 @@
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
+- `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 
 ### 布局容器
 
@@ -408,6 +426,29 @@
 - `modbusSlave`（默认从站，整数）默认 `1`，范围 1–247
 - `parserConfig`（帧格式，对象）默认 `{}`，帧格式设置，键同工程的 serial.parserConfig；默认解析模式不是「项目设置」时生效，空对象表示沿用工程设置（模式相同时）或默认值
 
+#### `CanConfigCard` CAN 配置卡片
+
+默认尺寸 380×330，最小 240×50
+
+- `title`（标题，文本）默认 `"CAN 连接"`
+- `displayMode`（显示模式，选项）默认 `"完整"`，可选 `"完整"` `"简洁"`
+- `defaultAdapter`（默认适配器，选项）默认 `"PCAN"`，可选 `"PCAN"` `"ZLG"` `"SocketCAN"` `"slcan"`，PCAN：Windows、macOS；ZLG：Windows；SocketCAN：Linux；slcan：所有系统
+- `zlgModel`（ZLG 型号，选项）默认 `"USBCANFD-200U"`，可选 `"USBCAN-I"` `"USBCAN-I+"` `"USBCAN-I-mini"` `"USBCAN-II"` `"USBCAN-II+"` `"USBCAN-E-U"` `"USBCAN-2E-U"` `"USBCAN-4E-U"` `"USBCAN-8E-U"` `"USBCANFD-100U-mini"` `"USBCANFD-100U"` `"USBCANFD-200U"` `"USBCANFD-400U"` `"USBCANFD-800U"`
+- `defaultDeviceIndex`（ZLG 设备索引，整数）默认 `0`，范围 0–15，同型号插了多个时的序号，从 0 开始
+- `defaultChannel`（ZLG 通道，整数）默认 `0`，范围 0–7，设备上的第几路 CAN，从 0 开始
+- `defaultBitrate`（默认波特率，选项）默认 `"500k"`，可选 `"10k"` `"20k"` `"50k"` `"100k"` `"125k"` `"250k"` `"500k"` `"800k"` `"1M"`
+- `defaultSamplePoint`（默认采样点，选项）默认 `"87.5%"`，可选 `"87.5%"` `"81.25%"` `"80%"` `"75%"`
+- `canFd`（CAN FD，true/false）默认 `false`
+- `defaultDataBitrate`（数据域波特率，选项）默认 `"2M"`，可选 `"1M"` `"2M"` `"4M"` `"5M"` `"8M"`
+- `defaultDataSamplePoint`（数据域采样点，选项）默认 `"75%"`，可选 `"75%"` `"80%"`
+- `canBrs`（加速 (BRS)，true/false）默认 `true`，CAN FD 报文的数据段用数据域波特率发送
+- `customTiming`（自定义位时序，文本）默认 `""`，`BRP,TSEG1,TSEG2,SJW`，CAN FD 再加 `;BRP,TSEG1,TSEG2,SJW`（数据域），按适配器时钟（PCAN 经典 CAN 8 MHz、CAN FD 80 MHz）；留空则按波特率和采样点计算
+- `listenOnly`（只听模式，true/false）默认 `false`
+- `termination`（终端电阻，true/false）默认 `false`，ZLG USBCANFD 系列可由软件开关，其他适配器忽略
+- `dbcFile`（DBC 文件，文本）默认 `""`，相对 .uidp 所在文件夹的路径；导出时复制进应用
+- `canSignals`（CAN 信号，多行文本）默认 `""`，DBC 之外的信号，每行一个：`ID 名字 : 起始位|长度@1+ (因子,偏移) [最小|最大] "单位"`，ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号
+- `canFilter`（接收过滤，文本）默认 `""`，留空收全部；否则只收这些 ID，如 `100-1FF, 18FF50E5`
+
 #### `DataSendCard` 数据发送卡片
 
 默认尺寸 350×140，最小 240×100
@@ -427,6 +468,12 @@
 默认尺寸 400×200，最小 200×80
 
 - `maxLines`（最大行数，整数）默认 `500`，范围 50–50000
+
+#### `CanMonitor` 报文监视
+
+默认尺寸 560×280，最小 240×100
+
+- `showSignals`（显示信号，true/false）默认 `false`，多一列，列出 DBC 和 canSignals 解出的信号值
 
 #### `ModbusSlaveTable` 从站寄存器表
 
