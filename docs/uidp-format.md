@@ -117,6 +117,7 @@ FluentHMIStudio --export <输出目录> motor.uidp
 | `TcpConfigCard` TCP | `defaultMode`（`"客户端"` / `"服务端"`）、`defaultHost`、`defaultPort` |
 | `UdpConfigCard` UDP | `defaultLocalPort`（`0` 由系统选端口）、`defaultHost`（远程地址）、`defaultPort` |
 | `MqttConfigCard` MQTT | `defaultHost`、`defaultPort`、`defaultSubscribe`（可用 `+` `#` 通配）、`defaultPublish`、`defaultUsername`、`defaultPassword`、`defaultQos`（`"0"` `"1"` `"2"`） |
+| `CanConfigCard` CAN | `defaultAdapter`、`defaultBitrate`、`canFd`、`dbcFile`，见「接 CAN 总线」 |
 
 - `displayMode` 为 `"完整"`（默认）时，卡片不要比默认尺寸矮：串口 360×320、TCP 360×250、UDP 360×220、MQTT 380×390；地方不够就设成 `"简洁"`。控件参考里的「最小」尺寸是串口 `"单行"` 模式的下限。
 - `defaultParser`：`"项目设置"`（默认，用工程的 `serial.parser`）、`"line"`、`"hex"`、`"modbus"`、`"modbus_tcp"`、`"modbus_ascii"`，设备帧格式不同时在卡片上分别设。卡片的 `parserConfig`（键同 `serial.parserConfig`）在 `defaultParser` 不是 `"项目设置"` 时生效；不写或写 `{}` 时，解析模式和工程相同就沿用工程的，不同就用默认值。
@@ -135,6 +136,24 @@ FluentHMIStudio --export <输出目录> motor.uidp
 - `ModbusSlaveTable` 列出第一张从站卡片一个区（`mbArea`）的全部地址，运行时双击「值」可以改。
 
 功能码、广播、日志和状态栏的规则见 [protocol.md](https://github.com/txp666/PyQt-UI-Designer/blob/main/docs/protocol.md#七modbus-从站)。
+
+## 接 CAN 总线
+
+只有 FluentHMI Studio 支持 CAN，PyQt UI Designer 打不开含 `CanConfigCard` 或 `CanMonitor` 的工程。
+
+- `CanConfigCard` 连一路 CAN：`defaultAdapter` 是 `"PCAN"`（默认）、`"ZLG"`（再设 `zlgModel`）、`"SocketCAN"` 或 `"slcan"`；`defaultBitrate` 如 `"500k"`；`canFd` 为 `true` 时用 CAN FD，数据域是 `defaultDataBitrate`。`dbcFile` 是 DBC 文件，路径相对 .uidp，导出时一起复制。
+- 收到的报文按 DBC 解成键 `报文名.信号名` 和 `信号名`，信号有值描述（VAL_）时还有 `.text` 结尾的键，值是描述文字。用 `"键值匹配"` 绑定；几个报文有同名信号时绑定带报文名的键。
+- 没有 DBC 时在 `canSignals` 里写信号，每行一个，如 `102 EngSpeed : 16|16@1+ (1,0) [0|8000] "rpm"`：ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号；键是信号名。
+- 发命令：`commandMode` 设成 `"CAN"`，`canId` 填 DBC 报文名或 ID，`commandTemplate` 写 `信号=值`，逗号分隔，`{value}` 换成控件的值，值也可以是值描述文字。`canCycle`（ms）大于 0 时连接期间按周期重发，为 0 时用 DBC 的 GenMsgCycleTime。没有信号的 ID 按 HEX 模式组数据。
+- `CanMonitor` 按 ID 列出收发的报文；`DataSendCard` 在 CAN 链路上发 `ID#数据`，如 `102#11223344`。
+
+例：电机驱动器的 DBC 里 `PC2BLDC` 发给它，`BLDC2PC` 是它的回报（绑定 `BLDC2PC.信号名`）。滑块设转速，每 100 ms 发一次：
+
+```json
+{"type": "Slider", "id": "speed", "geometry": {"x": 420, "y": 60, "w": 260, "h": 36},
+ "properties": {"maximum": 4000, "sendOnChange": true, "commandMode": "CAN", "canId": "PC2BLDC",
+                "commandTemplate": "SetMotorSpeed={value}, SetDerect=1", "canCycle": 100}}
+```
 
 ## 解析收到的数据
 
@@ -180,6 +199,7 @@ FluentHMIStudio --export <输出目录> motor.uidp
 - **`"HEX"`**：`dataType` 为 `"HEX字符串"` 时，值本身就是 HEX 文本（如 `"01 03 00 00"`）；为数值类型时，按 `dataType` 和 `byteOrder` 打包后放进模板。可加 `frameHeader` / `frameTail`。
 - **`"JSON"`**：`commandTemplate` 里的 `{value}` 换成值的 JSON：值本身是合法 JSON（`1`、`true`、`{"a":1}`）就照用，否则当字符串、自动转义，输入框也一样。如 `{"cmd":"setSpeed","value":{value}}` 发 `{"cmd":"setSpeed","value":75}`。整条须是合法 JSON（`{value}` 不能在引号里），去掉空白后发，末尾加 `commandJsonNewline`（默认 `"无"`）。
 - **`"Modbus"`**：用 `mbSlave`、`mbFunc`（如 `"06 写单寄存器"`）、`mbAddress` 组请求；连接的链路解析模式是 `modbus_tcp` 时自动用 MBAP 帧，`modbus_ascii` 时用 ASCII 帧，否则用 RTU 帧加 CRC。`mbDataType`（默认 `"uint16"`）和 `mbRegOrder` 决定写入的值怎么放进寄存器：`"06 写单寄存器"` 可用 `"uint16"`、`"int16"`；`"16 写多个寄存器"` 还可用 `"uint32"`、`"int32"`、`"float32"`，32 位类型写两个寄存器。按钮写的值是 `mbValue`，只能是整数（int16、int32 可以是负数）；写小数用输入框。
+- **`"CAN"`**：见「接 CAN 总线」。
 
 每种控件发什么值：
 
@@ -234,4 +254,4 @@ FluentHMIStudio --export <输出目录> motor.uidp
 - 布局容器：`HBoxLayout` 水平布局（300×80）、`VBoxLayout` 垂直布局（200×200）、`FlexLayout` 弹性布局（400×200）、`GroupBox` 分组框（280×180）、`TabWidget` 选项卡（350×250）、`Separator` 分割线（200×2）、`CardContainer` 卡片容器（300×200）
 - 显示控件：`LEDIndicator` LED指示灯（140×30）、`NumericDisplay` 数值显示（160×90）、`ProgressBar` 进度条（250×20）、`ProgressRingDisplay` 进度环（120×130）、`ImageDisplay` 图片显示（200×150）
 - 图表控件：`RealtimeChart` 实时曲线（400×280）、`GaugeMeter` 仪表盘（180×180）、`DataTable` 数据表格（350×250）
-- 通信控件：`SerialConfigCard` 串口配置卡片（360×320）、`TcpConfigCard` TCP 配置卡片（360×250）、`UdpConfigCard` UDP 配置卡片（360×220）、`MqttConfigCard` MQTT 配置卡片（380×390）、`DataSendCard` 数据发送卡片（350×140）、`DataRecvCard` 数据接收卡片（350×250）、`LogBox` 日志显示框（400×200）、`ModbusSlaveTable` 从站寄存器表（260×300）
+- 通信控件：`SerialConfigCard` 串口配置卡片（360×320）、`TcpConfigCard` TCP 配置卡片（360×250）、`UdpConfigCard` UDP 配置卡片（360×220）、`MqttConfigCard` MQTT 配置卡片（380×390）、`CanConfigCard` CAN 配置卡片（380×330）、`DataSendCard` 数据发送卡片（350×140）、`DataRecvCard` 数据接收卡片（350×250）、`LogBox` 日志显示框（400×200）、`CanMonitor` 报文监视（560×280）、`ModbusSlaveTable` 从站寄存器表（260×300）

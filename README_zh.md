@@ -5,7 +5,7 @@
   <p align="center"><a href="README.md">English</a> · 简体中文 · <a href="https://hmi.modusignal.cn/">官网</a> · <a href="https://hmi.modusignal.cn/guide/">使用说明</a></p>
 </p>
 
-FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 的 C++/Qt 6 重写版：拖拽控件、配置属性、绑定串口、TCP、MQTT 或 UDP 数据，然后把设计导出成一个**不需要编译器**就能运行的独立应用。和 Python 版相比，安装包更小，启动约快一倍，导出不到一秒，还能在应用内更新（见[与 Python 版相比](#与-python-版相比)）。
+FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 的 C++/Qt 6 重写版：拖拽控件、配置属性、绑定串口、TCP、MQTT、UDP 或 CAN 数据，然后把设计导出成一个**不需要编译器**就能运行的独立应用。和 Python 版相比，安装包更小，启动约快一倍，导出不到一秒，还能在应用内更新（见[与 Python 版相比](#与-python-版相比)）。
 
 ## 界面预览
 
@@ -47,6 +47,7 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 - **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 二进制帧（帧头帧尾、长度字段、校验、定长、空闲分帧）、Modbus RTU、Modbus TCP、Modbus ASCII 五种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / JSON / Modbus 四种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
 - **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定选寄存器区和地址；链路卡片选 Modbus 解析、控件绑定寄存器地址即可自动读取：相近的地址合并成块按周期读，一次一条，只读界面上看得见的控件，写命令排在读请求前面；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 - **Modbus RTU / TCP 从站**：串口、TCP、UDP 卡片可以当从站，用自己的数据表应答外部主站，绑定、控件和写命令直接读写这张表，从站寄存器表控件可以查看和修改。
+- **CAN / CAN FD（仅 Studio）**：CAN 卡片连接 PEAK、ZLG、SocketCAN 或 slcan 适配器，用 DBC 文件或卡片上写的信号解码，绑定、曲线和表格照常显示；控件可以发 DBC 信号或原始报文，单次或周期发送，报文监视按 ID 列出每个报文和它的周期（见 [CAN 适配器](#can-适配器)）。用到 CAN 的工程只能在 Studio 里打开。
 
 不同之处在实现和导出方式：
 
@@ -144,11 +145,24 @@ sudo usermod -aG dialout $USER
 - Ubuntu 22.04 上的 `brltty`（盲文显示器服务）会抢占 CH340/CH341 USB 串口。如果 `/dev/ttyUSB0` 出现后又消失，卸载它：`sudo apt remove brltty`。
 - ModemManager 会对新插入的 `ttyACM` 设备探测几秒钟，这期间串口处于占用状态。
 
+## CAN 适配器
+
+程序不附带任何驱动，各适配器需要：
+
+| 适配器 | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| PEAK（PCAN-USB、PCAN-USB FD） | PEAK 的设备驱动（会装好 `PCANBasic.dll`） | [mac-can.com](https://mac-can.github.io/drivers/libPCBUSB.html) 的 PCBUSB 库（`libPCBUSB.dylib` 装在 `/usr/local/lib`） | 选 SocketCAN：内核自带 `peak_usb` 驱动 |
+| ZLG（USBCAN-I/II、USBCAN-E-U 系列、USBCANFD） | 致远的设备驱动，以及致远“CAN 接口卡二次开发接口函数库”（64 位）里的 `zlgcan.dll` 和 `kerneldlls` 文件夹，放在程序旁边或旁边的 `zlgcan` 文件夹里 | – | – |
+| SocketCAN | – | – | 系统自带；接口的波特率用 `ip link` 设置（卡片上会给出命令，如 `sudo ip link set can0 up type can bitrate 500000 sample-point 0.875`） |
+| slcan（CANable、CANUSB 等 Lawicel 协议的适配器） | 适配器的串口 | 适配器的串口 | 适配器的串口；只支持经典 CAN，10k–1M |
+
+`.uidp` 里卡片、DBC 键、卡片上的信号和 CAN 命令怎么写，见 [docs/uidp-format.md](docs/uidp-format.md#接-can-总线)。
+
 ## 架构
 
 ```
-src/core      fhmi_core     工程模型、控件元数据、协议解析、数据绑定、命令编码（只依赖 Qt Core）
-src/comm      fhmi_comm     Link 接口 + 串口 / TCP 客户端 / TCP 服务端 / MQTT / UDP，CommHub 汇总所有链路
+src/core      fhmi_core     工程模型、控件元数据、协议解析、数据绑定、命令编码、CAN 信号 / DBC / 位时序（只依赖 Qt Core）
+src/comm      fhmi_comm     Link 接口 + 串口 / TCP 客户端 / TCP 服务端 / MQTT / UDP / CAN（src/comm/can：PCAN、ZLG、SocketCAN、slcan），CommHub 汇总所有链路
 src/runtime   fhmi_runtime  基于 FluentQtWidgets 的运行时控件、RuntimeSurface、绑定引擎
 src/designer  fhmi_designer 画布（QGraphicsScene）、控件面板、属性编辑器、对齐与容器嵌套
 src/studio    FluentHMIStudio   设计器应用：界面设计 / 预览运行 / 设置，导出服务
@@ -217,11 +231,11 @@ macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHM
 
 ## 当前状态（0.4.0）
 
-已完成：全部 30 种控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
+已完成：全部 32 种控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
 
 MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQTT 模块）：支持用户名密码、QoS 0/1/2、`+`/`#` 通配符订阅，TLS 使用系统证书库；连接成功后若断开会自动重连。与 Python 版一致，每条消息视为一帧，纯数值载荷还会以主题名为键再给出一份。
 
-已在 macOS 上做过端到端验证：TCP 和 MQTT 模拟设备的数据显示、曲线和命令下发，导出应用的运行，以及在本机打包后解压运行。Windows 包在发布工作流（Windows Server 2022）中做导出自检，并在 Windows 11 ARM64 虚拟机上（x64 仿真）验证过解压运行、导出和导出应用的运行。尚未验证的：连接真实 MQTT broker 和 TLS。
+已在 macOS 上做过端到端验证：TCP 和 MQTT 模拟设备的数据显示、曲线和命令下发，导出应用的运行，以及在本机打包后解压运行。Windows 包在发布工作流（Windows Server 2022）中做导出自检，并在 Windows 11 ARM64 虚拟机上（x64 仿真）验证过解压运行、导出和导出应用的运行。尚未验证的：连接真实 MQTT broker 和 TLS。CAN 只用模拟的 slcan 适配器做过端到端验证，PEAK、ZLG 和 SocketCAN 适配器还没有接真实硬件试过。
 
 路线图：
 
