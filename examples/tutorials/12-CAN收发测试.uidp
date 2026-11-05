@@ -1,0 +1,437 @@
+{
+  "version": "1.0",
+  "appName": "CAN 收发测试",
+  "canvas": {
+    "width": 1280,
+    "height": 830,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line",
+    "parserConfig": {
+      "separator": ","
+    }
+  },
+  "widgets": [
+    {
+      "type": "Label",
+      "id": "title",
+      "geometry": {
+        "x": 20,
+        "y": 10,
+        "w": 700,
+        "h": 36
+      },
+      "properties": {
+        "text": "CAN 收发测试",
+        "fontSize": 22,
+        "bold": true
+      }
+    },
+    {
+      "type": "Label",
+      "id": "help1",
+      "geometry": {
+        "x": 20,
+        "y": 52,
+        "w": 1240,
+        "h": 22
+      },
+      "properties": {
+        "text": "两张卡接同一条总线（两端各一个 120Ω）：CAN 1 选 PCAN、CAN 2 选 ZLG；或两张都选 ZLG 同一台设备，通道 0 和 1，把两路接在一起。",
+        "fontSize": 12
+      }
+    },
+    {
+      "type": "Label",
+      "id": "help2",
+      "geometry": {
+        "x": 20,
+        "y": 76,
+        "w": 1240,
+        "h": 22
+      },
+      "properties": {
+        "text": "两张卡都连上时，右上的控件发的报文两张卡各发一次、各自收到对方发的；只连一张卡时，另一端用 PCAN-View 或 ZCANPRO 收发。",
+        "fontSize": 12
+      }
+    },
+    {
+      "type": "Label",
+      "id": "help3",
+      "geometry": {
+        "x": 20,
+        "y": 100,
+        "w": 1240,
+        "h": 22
+      },
+      "properties": {
+        "text": "CAN FD 报文 0x200 要两张卡都打开 FD。DBC 是同目录的 12-CAN收发测试.dbc，可以在卡片属性「DBC 文件」里换成自己的。",
+        "fontSize": 12
+      }
+    },
+    {
+      "type": "CanConfigCard",
+      "id": "can1",
+      "geometry": {
+        "x": 20,
+        "y": 134,
+        "w": 380,
+        "h": 330
+      },
+      "properties": {
+        "title": "CAN 1",
+        "defaultAdapter": "PCAN",
+        "defaultBitrate": "500k",
+        "defaultSamplePoint": "87.5%",
+        "dbcFile": "12-CAN收发测试.dbc"
+      }
+    },
+    {
+      "type": "CanConfigCard",
+      "id": "can2",
+      "geometry": {
+        "x": 410,
+        "y": 134,
+        "w": 380,
+        "h": 330
+      },
+      "properties": {
+        "title": "CAN 2",
+        "defaultAdapter": "ZLG",
+        "zlgModel": "USBCAN-II",
+        "defaultBitrate": "500k",
+        "defaultSamplePoint": "87.5%",
+        "dbcFile": "12-CAN收发测试.dbc"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "send_title",
+      "geometry": {
+        "x": 810,
+        "y": 134,
+        "w": 450,
+        "h": 28
+      },
+      "properties": {
+        "text": "发送",
+        "fontSize": 16,
+        "bold": true
+      }
+    },
+    {
+      "type": "Label",
+      "id": "speed_label",
+      "geometry": {
+        "x": 810,
+        "y": 166,
+        "w": 450,
+        "h": 24
+      },
+      "properties": {
+        "text": "转速 Speed：标准帧 0x100，连接期间每 100 ms 发一次",
+        "fontSize": 12
+      }
+    },
+    {
+      "type": "Slider",
+      "id": "speed",
+      "geometry": {
+        "x": 810,
+        "y": 192,
+        "w": 450,
+        "h": 36
+      },
+      "properties": {
+        "minimum": 0,
+        "maximum": 3000,
+        "value": 0,
+        "sendOnChange": true,
+        "commandMode": "CAN",
+        "canId": "Command",
+        "commandTemplate": "Speed={value}"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "mode_label",
+      "geometry": {
+        "x": 810,
+        "y": 240,
+        "w": 110,
+        "h": 30
+      },
+      "properties": {
+        "text": "模式 Mode"
+      }
+    },
+    {
+      "type": "ComboBox",
+      "id": "mode",
+      "geometry": {
+        "x": 920,
+        "y": 236,
+        "w": 160,
+        "h": 36
+      },
+      "properties": {
+        "items": "Stop\nRun\nReverse",
+        "sendOnSelect": true,
+        "commandMode": "CAN",
+        "canId": "Command",
+        "commandTemplate": "Mode={value}"
+      }
+    },
+    {
+      "type": "ToggleSwitch",
+      "id": "enable",
+      "geometry": {
+        "x": 1100,
+        "y": 239,
+        "w": 160,
+        "h": 30
+      },
+      "properties": {
+        "label": "使能 Enable",
+        "onCommand": "1",
+        "offCommand": "0",
+        "commandMode": "CAN",
+        "canId": "Command",
+        "commandTemplate": "Enable={value}"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "setpoint_label",
+      "geometry": {
+        "x": 810,
+        "y": 284,
+        "w": 450,
+        "h": 24
+      },
+      "properties": {
+        "text": "设定值 Setpoint：扩展帧 0x18FF1001，Motorola 字节序",
+        "fontSize": 12
+      }
+    },
+    {
+      "type": "SpinBox",
+      "id": "setpoint",
+      "geometry": {
+        "x": 810,
+        "y": 310,
+        "w": 200,
+        "h": 36
+      },
+      "properties": {
+        "minimum": 0,
+        "maximum": 1000,
+        "value": 0,
+        "sendOnChange": true,
+        "commandMode": "CAN",
+        "canId": "ExtCommand",
+        "commandTemplate": "Setpoint={value}"
+      }
+    },
+    {
+      "type": "PushButton",
+      "id": "fd",
+      "geometry": {
+        "x": 1030,
+        "y": 310,
+        "w": 230,
+        "h": 36
+      },
+      "properties": {
+        "text": "发 CAN FD 报文 0x200",
+        "command": "4660",
+        "commandMode": "CAN",
+        "canId": "FdData",
+        "commandTemplate": "FdFirst={value}, FdLast=200"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "recv_title",
+      "geometry": {
+        "x": 810,
+        "y": 362,
+        "w": 450,
+        "h": 28
+      },
+      "properties": {
+        "text": "收到的值",
+        "fontSize": 16,
+        "bold": true
+      }
+    },
+    {
+      "type": "GaugeMeter",
+      "id": "speed_gauge",
+      "geometry": {
+        "x": 810,
+        "y": 394,
+        "w": 200,
+        "h": 200
+      },
+      "properties": {
+        "title": "转速",
+        "unit": "rpm",
+        "maximum": 3000
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "key": "Command.Speed"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "mode_caption",
+      "geometry": {
+        "x": 1030,
+        "y": 400,
+        "w": 60,
+        "h": 32
+      },
+      "properties": {
+        "text": "模式"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "mode_value",
+      "geometry": {
+        "x": 1090,
+        "y": 396,
+        "w": 170,
+        "h": 38
+      },
+      "properties": {
+        "text": "-",
+        "fontSize": 20,
+        "bold": true
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "key": "Command.Mode.text"
+      }
+    },
+    {
+      "type": "LEDIndicator",
+      "id": "enable_led",
+      "geometry": {
+        "x": 1030,
+        "y": 444,
+        "w": 230,
+        "h": 30
+      },
+      "properties": {
+        "label": "使能",
+        "on": false
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "key": "Command.Enable"
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "setpoint_value",
+      "geometry": {
+        "x": 1030,
+        "y": 484,
+        "w": 230,
+        "h": 90
+      },
+      "properties": {
+        "title": "设定值",
+        "unit": "℃",
+        "decimals": "1",
+        "value": "0.0"
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "key": "ExtCommand.Setpoint"
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "fd_first",
+      "geometry": {
+        "x": 810,
+        "y": 604,
+        "w": 200,
+        "h": 90
+      },
+      "properties": {
+        "title": "FD 首字段 FdFirst",
+        "decimals": "0",
+        "value": "0",
+        "unit": ""
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "key": "FdData.FdFirst"
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "fd_last",
+      "geometry": {
+        "x": 1030,
+        "y": 604,
+        "w": 230,
+        "h": 90
+      },
+      "properties": {
+        "title": "FD 末字节 FdLast",
+        "decimals": "0",
+        "value": "0",
+        "unit": ""
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "key": "FdData.FdLast"
+      }
+    },
+    {
+      "type": "CanMonitor",
+      "id": "monitor",
+      "geometry": {
+        "x": 20,
+        "y": 474,
+        "w": 770,
+        "h": 200
+      },
+      "properties": {
+        "showSignals": true
+      }
+    },
+    {
+      "type": "LogBox",
+      "id": "log",
+      "geometry": {
+        "x": 20,
+        "y": 684,
+        "w": 380,
+        "h": 136
+      },
+      "properties": {}
+    },
+    {
+      "type": "DataSendCard",
+      "id": "raw",
+      "geometry": {
+        "x": 410,
+        "y": 684,
+        "w": 380,
+        "h": 136
+      },
+      "properties": {
+        "title": "发原始报文",
+        "placeholder": "如 123#11223344"
+      }
+    }
+  ]
+}
