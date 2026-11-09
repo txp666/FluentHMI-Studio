@@ -288,7 +288,7 @@
 - `curveCount`（曲线数量，整数）默认 `1`，范围 1–8
 - `currentCurve`（当前编辑曲线，整数）默认 `0`，范围 0–7
 - `curveName`（曲线名称，文本）默认 `"曲线1"`
-- `curveParseMode`（解析模式，选项）默认 `"键值匹配"`，可选 `"键值匹配"` `"JSON路径"` `"HEX字节提取"` `"Modbus"`
+- `curveParseMode`（解析模式，选项）默认 `"键值匹配"`，可选 `"键值匹配"` `"JSON路径"` `"HEX字节提取"` `"Modbus"` `"CAN信号"`
 - `curveKey`（匹配键，文本）默认 `""`
 - `curveJsonPath`（JSON路径，文本）默认 `""`
 - `curveByteOffset`（字节偏移，整数）默认 `0`，范围 0–9999
@@ -302,6 +302,13 @@
 - `curveMbRegOrder`（寄存器序(MB)，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
 - `curveMbFcFilter`（功能码过滤，整数）默认 `-1`，范围 -1–255
 - `curveMbSlaveFilter`（从站过滤，整数）默认 `-1`，范围 -1–255
+- `curveCanId`（CAN ID，文本）默认 `""`
+- `curveCanStartBit`（起始位，整数）默认 `0`，范围 0–511
+- `curveCanBitLength`（长度，整数）默认 `8`，范围 1–64
+- `curveCanByteOrder`（字节序(CAN)，选项）默认 `"Intel"`，可选 `"Intel"` `"Motorola MSB"` `"Motorola LSB"`
+- `curveCanSigned`（有符号，true/false）默认 `false`
+- `curveCanFactor`（因子，小数）默认 `1`
+- `curveCanOffset`（偏移，小数）默认 `0`
 
 #### `GaugeMeter` 仪表盘
 

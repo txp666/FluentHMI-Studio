@@ -39,6 +39,10 @@ inline QStringList options() { return {Intel, MotorolaMsb, MotorolaLsb}; }
 // unknown, or its signal does not fit a frame. Empty when it is fine.
 QString canSignalProblem(const QJsonObject &binding);
 
+// The synthetic binding a RealtimeChart's curve describes with its _curve_{curve}_* properties, defaults filled in.
+// The runtime builds the curve from it and the property panel judges it (canSignalProblem).
+QJsonObject chartCurveBinding(const QJsonObject &props, int curve);
+
 // Python str() of a decoded value, so displays read the same as in PyQt UI Designer
 // (25.0 shows as "25.0", True as "True").
 QString displayString(const QVariant &value);

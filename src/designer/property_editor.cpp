@@ -189,6 +189,10 @@ const QHash<QString, QSet<QString>> &chartParseVisibility()
         {ParseMode::Modbus,
          {QStringLiteral("curveMbArea"), QStringLiteral("curveRegIndex"), QStringLiteral("curveMbDataType"),
           QStringLiteral("curveMbRegOrder"), QStringLiteral("curveMbFcFilter"), QStringLiteral("curveMbSlaveFilter")}},
+        {ParseMode::CanSignal,
+         {QStringLiteral("curveCanId"), QStringLiteral("curveCanStartBit"), QStringLiteral("curveCanBitLength"),
+          QStringLiteral("curveCanByteOrder"), QStringLiteral("curveCanSigned"), QStringLiteral("curveCanFactor"),
+          QStringLiteral("curveCanOffset")}},
     };
     return table;
 }
@@ -212,8 +216,31 @@ const QHash<QString, QString> &curveFields()
         {QStringLiteral("curveMbFcFilter"), QStringLiteral("mbFcFilter")},
         {QStringLiteral("curveMbSlaveFilter"), QStringLiteral("mbSlaveFilter")},
         {QStringLiteral("curveMbArea"), QStringLiteral("mbArea")},
+        {QStringLiteral("curveCanId"), QStringLiteral("canId")},
+        {QStringLiteral("curveCanStartBit"), QStringLiteral("canStartBit")},
+        {QStringLiteral("curveCanBitLength"), QStringLiteral("canBitLength")},
+        {QStringLiteral("curveCanByteOrder"), QStringLiteral("canByteOrder")},
+        {QStringLiteral("curveCanSigned"), QStringLiteral("canSigned")},
+        {QStringLiteral("curveCanFactor"), QStringLiteral("canFactor")},
+        {QStringLiteral("curveCanOffset"), QStringLiteral("canOffset")},
     };
     return table;
+}
+
+// What a factor or offset field accepts. Empty is the default, shown as the placeholder.
+const QRegularExpression &numberPattern()
+{
+    static const QRegularExpression number(QStringLiteral("[-+]?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?"));
+    return number;
+}
+
+// The red caption that says why a CAN信号 setup reads nothing; its text is set by updateVisibility.
+FluentQt::CaptionLabel *newProblemLabel(QWidget *parent)
+{
+    auto *problem = new FluentQt::CaptionLabel(parent);
+    problem->setWordWrap(true);
+    problem->setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4)); // Fluent's critical colours
+    return problem;
 }
 
 // The send switch each widget type has; while it is off, no command fields apply.
@@ -468,6 +495,20 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     switch (def.type) {
     case PropType::Int:
     case PropType::Float: {
+        if (def.name == QLatin1String("curveCanFactor") || def.name == QLatin1String("curveCanOffset")) {
+            // A spin box rounds to its decimals, and a DBC's factor can be 0.0001 or finer: a text field keeps
+            // what is typed. Empty is the default, which is not stored.
+            auto *edit = new FluentQt::LineEdit(m_content);
+            edit->setText(QString::number(value.toDouble(), 'g', QLocale::FloatingPointShortest));
+            edit->setPlaceholderText(QString::number(def.defaultValue.toDouble()));
+            edit->setValidator(new QRegularExpressionValidator(numberPattern(), edit));
+            connect(edit, &QLineEdit::textChanged, this, [commit](const QString &text) {
+                bool ok = false;
+                const double number = text.toDouble(&ok);
+                commit(ok ? QJsonValue(number) : QJsonValue(QJsonValue::Undefined));
+            });
+            return edit;
+        }
         const bool integral = def.type == PropType::Int;
         QAbstractSpinBox *box = nullptr;
         if (integral) {
@@ -499,7 +540,12 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     }
     case PropType::Enum: {
         auto *combo = new FluentQt::ComboBox(m_content);
-        addValueItems(combo, def.options);
+        QStringList options = def.options;
+        if (def.name == QLatin1String("curveParseMode") && !hasCanCard(m_project) &&
+            value.toVariant().toString() != ParseMode::CanSignal) {
+            options.removeAll(ParseMode::CanSignal); // offered where there is a CAN card, as for a binding
+        }
+        addValueItems(combo, options);
         if (!selectValue(combo, value.toVariant().toString())) {
             combo->setCurrentIndex(0);
         }
@@ -967,6 +1013,10 @@ void PropertyEditor::buildItemForm()
             });
             addRow(props, name, translated(def.label), editor);
         }
+        if (meta.typeName == QLatin1String("RealtimeChart")) {
+            // Under the last curve field; updateVisibility fills it for the current curve.
+            addRow(props, QStringLiteral("curveCanProblem"), QString(), newProblemLabel(m_content));
+        }
     }
     // A link card with a mode of its own frames with its own settings, edited like the project's.
     const PropDef *frame = meta.prop(QStringLiteral("parserConfig"));
@@ -1079,22 +1129,18 @@ void PropertyEditor::buildBindingForm()
     sign->setCurrentIndex(value("canSigned", false).toBool() ? 1 : 0);
     add("canSigned", tr("有无符号"), sign);
     // Empty is the default, shown as the placeholder; only numbers can be typed, so none is lost on commit.
-    static const QRegularExpression number(QStringLiteral("[-+]?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?"));
     const auto numberLine = [&](const char *key, const QString &fallback) {
         const QJsonValue current = value(key, QJsonValue());
         auto *edit = line(current.isDouble() ? QString::number(current.toDouble(), 'g', QLocale::FloatingPointShortest)
                                              : QString(),
                           fallback);
-        edit->setValidator(new QRegularExpressionValidator(number, edit));
+        edit->setValidator(new QRegularExpressionValidator(numberPattern(), edit));
         return edit;
     };
     add("canFactor", tr("因子"), numberLine("canFactor", QStringLiteral("1")));
     add("canOffset", tr("偏移"), numberLine("canOffset", QStringLiteral("0")));
     // Why the signal as set up reads nothing (updateVisibility fills it): the binding is kept while it is typed.
-    auto *problem = new FluentQt::CaptionLabel(m_content);
-    problem->setWordWrap(true);
-    problem->setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4)); // Fluent's critical colours
-    add("canProblem", QString(), problem);
+    add("canProblem", QString(), newProblemLabel(m_content));
     add("expression", tr("转换表达式"), line(value("expression", QString()).toString(), tr("如 value * 0.1")));
 }
 
@@ -1253,6 +1299,19 @@ void PropertyEditor::updateVisibility()
                 setRowVisible(field, shown.contains(field));
             }
         }
+        // Only once the curve has an ID to judge: an empty one is a field still to fill, not a mistake.
+        QString problem;
+        if (mode == ParseMode::CanSignal &&
+            !m_item->properties().value(storageKey(QStringLiteral("curveCanId"))).toString().isEmpty()) {
+            problem = canSignalProblem(chartCurveBinding(
+                m_item->properties(), m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0)));
+        }
+        if (const auto row = m_rows.constFind(QStringLiteral("curveCanProblem")); row != m_rows.constEnd()) {
+            if (auto *label = qobject_cast<QLabel *>(row->second)) {
+                label->setText(problem);
+            }
+        }
+        setRowVisible(QStringLiteral("curveCanProblem"), !problem.isEmpty());
     }
     if (!m_bindingEditors.isEmpty()) {
         const auto *combo = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("parseMode")));

@@ -179,6 +179,39 @@ QString canSignalProblem(const QJsonObject &binding)
     return canSignalOf(binding, &error) ? QString() : error;
 }
 
+QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
+{
+    const auto field = [&props, curve](const char *name, const QJsonValue &fallback) {
+        const QJsonValue value = props.value(QStringLiteral("_curve_%1_%2").arg(curve).arg(QLatin1String(name)));
+        return value.isUndefined() || value.isNull() ? fallback : value;
+    };
+    QJsonObject binding{
+        {QStringLiteral("parseMode"), field("parseMode", ParseMode::KeyValue)},
+        {QStringLiteral("key"), field("key", QString())},
+        {QStringLiteral("jsonPath"), field("jsonPath", QString())},
+        {QStringLiteral("byteOffset"), field("byteOffset", 0)},
+        {QStringLiteral("dataType"), field("dataType", QStringLiteral("float32"))},
+        {QStringLiteral("byteOrder"), field("byteOrder", QStringLiteral("大端(BE)"))}, // i18n: value
+        {QStringLiteral("frameHeader"), field("frameHeader", QString())},
+        {QStringLiteral("frameTail"), field("frameTail", QString())},
+        {QStringLiteral("mbRegIndex"), field("regIndex", 0)},
+        {QStringLiteral("mbDataType"), field("mbDataType", QStringLiteral("uint16"))},
+        {QStringLiteral("mbRegOrder"), field("mbRegOrder", QStringLiteral("大端(AB CD)"))}, // i18n: value
+        {QStringLiteral("mbFcFilter"), field("mbFcFilter", -1)},
+        {QStringLiteral("mbSlaveFilter"), field("mbSlaveFilter", -1)},
+        {QStringLiteral("mbArea"), field("mbArea", ModbusArea::HoldingRegisters)},
+        {QStringLiteral("canId"), field("canId", QString())},
+        {QStringLiteral("canStartBit"), field("canStartBit", 0)},
+        {QStringLiteral("canBitLength"), field("canBitLength", 8)},
+        {QStringLiteral("canByteOrder"), field("canByteOrder", CanByteOrder::Intel)},
+        {QStringLiteral("canSigned"), field("canSigned", false)},
+    };
+    // Factor and offset are left out when unset (Undefined removes the key), so the signal's 1 and 0 apply.
+    binding.insert(QStringLiteral("canFactor"), field("canFactor", QJsonValue(QJsonValue::Undefined)));
+    binding.insert(QStringLiteral("canOffset"), field("canOffset", QJsonValue(QJsonValue::Undefined)));
+    return binding;
+}
+
 QString displayString(const QVariant &value)
 {
     if (!value.isValid() || value.isNull()) {

@@ -352,6 +352,7 @@
  "字符串里有控制字符": "Control character in string",
  "字节偏移": "Byte offset",
  "字节序": "Byte order",
+ "字节序(CAN)": "Byte order (CAN)",
  "字节序(HEX)": "Byte order (HEX)",
  "安装包校验失败：SHA-256 与发布的校验文件不一致": "Package verification failed: SHA-256 doesn't match the published checksum file",
  "安装包里没有找到 FluentHMI Studio": "FluentHMI Studio not found in the package",

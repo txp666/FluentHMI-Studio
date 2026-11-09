@@ -89,6 +89,7 @@ class RealtimeChartWidget : public HmiWidget
     FluentQt::ToolButton *m_clearReference = nullptr;
     QTimer *m_refreshTimer = nullptr;
     std::vector<Curve> m_curves;
+    bool m_hasCanCurves = false; // any curve in CAN信号 mode, so a frame batch is skipped at once when none is
     std::vector<std::unique_ptr<ChartHistory>> m_histories;
     QList<Reference> m_references;
     int m_displayPoints = 200;

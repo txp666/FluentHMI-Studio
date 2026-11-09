@@ -35,6 +35,12 @@ PropDef real(const QString &name, const QString &label, double def, double lo, d
     return PropDef{name, label, PropType::Float, def, {}, lo, hi, bindable, {}};
 }
 
+// A number the panel edits as text, so it is not rounded to spin-box decimals and has no range.
+PropDef unranged(const QString &name, const QString &label, double def)
+{
+    return PropDef{name, label, PropType::Float, def, {}, std::nullopt, std::nullopt, false, {}};
+}
+
 PropDef boolean(const QString &name, const QString &label, bool def, bool bindable = false)
 {
     return PropDef{name, label, PropType::Bool, def, {}, std::nullopt, std::nullopt, bindable, {}};
@@ -419,8 +425,9 @@ QList<WidgetMeta> displayWidgets()
 
 QList<WidgetMeta> chartWidgets()
 {
-    const QStringList parseModes = {QStringLiteral("键值匹配"), QStringLiteral("JSON路径"),   // i18n: value
-                                    QStringLiteral("HEX字节提取"), QStringLiteral("Modbus")}; // i18n: value
+    const QStringList parseModes = {QStringLiteral("键值匹配"), QStringLiteral("JSON路径"),  // i18n: value
+                                    QStringLiteral("HEX字节提取"), QStringLiteral("Modbus"), // i18n: value
+                                    ParseMode::CanSignal};
     const QStringList mbTypes = {QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"),
                                  QStringLiteral("int32"), QStringLiteral("float32")};
     return {
@@ -453,7 +460,17 @@ QList<WidgetMeta> chartWidgets()
                     QStringLiteral("大端(AB CD)"),                                   // i18n: value
                     {QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")}), // i18n: value
              integer(QStringLiteral("curveMbFcFilter"), QT_TR_NOOP("功能码过滤"), -1, -1, 255),
-             integer(QStringLiteral("curveMbSlaveFilter"), QT_TR_NOOP("从站过滤"), -1, -1, 255)},
+             integer(QStringLiteral("curveMbSlaveFilter"), QT_TR_NOOP("从站过滤"), -1, -1, 255),
+             // CAN信号, as a control's binding. The panel edits factor and offset as text, so none is rounded and empty
+             // keeps the default.
+             str(QStringLiteral("curveCanId"), QT_TR_NOOP("CAN ID"), QString()),
+             integer(QStringLiteral("curveCanStartBit"), QT_TR_NOOP("起始位"), 0, 0, 511),
+             integer(QStringLiteral("curveCanBitLength"), QT_TR_NOOP("长度"), 8, 1, 64),
+             choice(QStringLiteral("curveCanByteOrder"), QT_TR_NOOP("字节序(CAN)"), CanByteOrder::Intel,
+                    CanByteOrder::options()),
+             boolean(QStringLiteral("curveCanSigned"), QT_TR_NOOP("有符号"), false),
+             unranged(QStringLiteral("curveCanFactor"), QT_TR_NOOP("因子"), 1),
+             unranged(QStringLiteral("curveCanOffset"), QT_TR_NOOP("偏移"), 0)},
             200, 150),
         meta(QStringLiteral("GaugeMeter"), QT_TR_NOOP("仪表盘"), WidgetCategory::Chart, QStringLiteral("speed_high"),
              180, 180,
