@@ -25,9 +25,12 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIconEngine>
 #include <QtGui/QPainter>
+#include <QtGui/QContextMenuEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QGraphicsView>
+#include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QVBoxLayout>
 
@@ -41,13 +44,85 @@ namespace {
 
 using FluentQt::FluentIcon;
 
-// Ctrl/⌘ + wheel zooms; plain wheel and trackpad gestures scroll.
+// Ctrl/⌘ + wheel zooms; plain wheel and trackpad gestures scroll; the middle button drags the canvas.
 class DesignView : public QGraphicsView
 {
   public:
     using QGraphicsView::QGraphicsView;
 
   protected:
+    // A middle press is taken here, before the scene sees it, so it never selects, moves, rubber-bands or reaches a
+    // widget, whatever is under the pointer. The content follows the mouse 1:1 in screen pixels through the scroll
+    // bars (the same ones the wheel moves); a canvas that fits has nothing to scroll and stays put.
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::MiddleButton) {
+            // Not in the middle of a left drag: that drag would never see its release.
+            if (!m_panning && event->buttons() == Qt::MiddleButton) {
+                m_panning = true;
+                m_panLast = event->position().toPoint();
+                m_hadCursor = viewport()->testAttribute(Qt::WA_SetCursor);
+                m_savedCursor = viewport()->cursor();
+                viewport()->setCursor(Qt::ClosedHandCursor);
+            }
+            event->accept();
+            return;
+        }
+        if (m_panning) { // another button while panning: ignore it
+            event->accept();
+            return;
+        }
+        QGraphicsView::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (m_panning) {
+            if (!(event->buttons() & Qt::MiddleButton)) { // the release was lost
+                endPan();
+                return;
+            }
+            const QPoint pos = event->position().toPoint();
+            const QPoint delta = pos - m_panLast;
+            m_panLast = pos;
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
+            verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
+            event->accept();
+            return;
+        }
+        QGraphicsView::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (m_panning) {
+            if (event->button() == Qt::MiddleButton) {
+                endPan();
+            }
+            event->accept();
+            return;
+        }
+        QGraphicsView::mouseReleaseEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::MiddleButton || m_panning) {
+            event->accept();
+            return;
+        }
+        QGraphicsView::mouseDoubleClickEvent(event);
+    }
+
+    void contextMenuEvent(QContextMenuEvent *event) override
+    {
+        if (m_panning) {
+            event->accept();
+            return;
+        }
+        QGraphicsView::contextMenuEvent(event);
+    }
+
     void wheelEvent(QWheelEvent *event) override
     {
         if (event->modifiers() & Qt::ControlModifier) {
@@ -61,6 +136,22 @@ class DesignView : public QGraphicsView
         }
         QGraphicsView::wheelEvent(event);
     }
+
+  private:
+    void endPan()
+    {
+        m_panning = false;
+        if (m_hadCursor) {
+            viewport()->setCursor(m_savedCursor);
+        } else {
+            viewport()->unsetCursor();
+        }
+    }
+
+    bool m_panning = false;
+    bool m_hadCursor = false;
+    QPoint m_panLast;
+    QCursor m_savedCursor;
 };
 
 // 重做 is 撤销's arrow turned left to right, as Fluent has no redo icon. It paints through the Fluent icon, so it
