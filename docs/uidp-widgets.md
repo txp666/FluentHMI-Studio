@@ -482,6 +482,7 @@
 默认尺寸 560×280，最小 240×100
 
 - `showSignals`（显示信号，true/false）默认 `false`，多一列，列出 DBC 和 canSignals 解出的信号值
+- `showFilter`（显示筛选，true/false）默认 `true`，在表格上方显示按 ID 和类型筛选
 
 #### `ModbusSlaveTable` 从站寄存器表
 
