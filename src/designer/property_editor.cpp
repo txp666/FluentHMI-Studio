@@ -388,6 +388,10 @@ void PropertyEditor::rebuild()
     m_layout->addStretch();
     updateVisibility();
     m_loading = false;
+    // setText leaves the cursor at the end, which scrolls a text longer than its field to its tail ("…ssure pump station")
+    for (QLineEdit *edit : m_content->findChildren<QLineEdit *>()) {
+        edit->setCursorPosition(0);
+    }
 }
 
 QFormLayout *PropertyEditor::addSection(const QString &title)
@@ -408,6 +412,8 @@ QFormLayout *PropertyEditor::addSection(const QString &title)
 void PropertyEditor::addRow(QFormLayout *form, const QString &key, const QString &label, QWidget *editor)
 {
     auto *caption = new FluentQt::BodyLabel(label, m_content);
+    // A long label (English "Transform expression") wraps instead of widening the panel past its dock
+    caption->setWordWrap(true);
     form->addRow(caption, editor);
     if (!key.isEmpty()) {
         m_rows.insert(key, {caption, editor});
