@@ -141,18 +141,18 @@ FluentHMIStudio --export <输出目录> motor.uidp
 
 只有 FluentHMI Studio 支持 CAN，PyQt UI Designer 打不开含 `CanConfigCard` 或 `CanMonitor` 的工程。
 
-- `CanConfigCard` 连一路 CAN：`defaultAdapter` 是 `"PCAN"`（默认）、`"ZLG"`（再设 `zlgModel`）、`"SocketCAN"` 或 `"slcan"`；`defaultBitrate` 如 `"500k"`；`canFd` 为 `true` 时用 CAN FD，数据域是 `defaultDataBitrate`。`dbcFile` 是 DBC 文件，路径相对 .uidp，导出时一起复制。
-- 收到的报文按 DBC 解成键 `报文名.信号名` 和 `信号名`，信号有值描述（VAL_）时还有 `.text` 结尾的键，值是描述文字。用 `"键值匹配"` 绑定；几个报文有同名信号时绑定带报文名的键。
-- 没有 DBC 时在 `canSignals` 里写信号，每行一个，如 `102 EngSpeed : 16|16@1+ (1,0) [0|8000] "rpm"`：ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号；键是信号名。
-- 发命令：`commandMode` 设成 `"CAN"`，`canId` 填 DBC 报文名或 ID，`commandTemplate` 写 `信号=值`，逗号分隔，`{value}` 换成控件的值。值是十进制物理值或值描述文字，`0x` 开头的是原始值（不经因子和偏移）。`canCycle`（ms）大于 0 时连接期间按周期重发，为 0 时用 DBC 的 GenMsgCycleTime。没有信号的 ID 按 HEX 模式组数据。
+- `CanConfigCard` 连一路 CAN：`defaultAdapter` 为 `"PCAN"`（默认）、`"ZLG"`（再设 `zlgModel`）、`"SocketCAN"`、`"slcan"`；`defaultBitrate` 如 `"500k"`；`canFd: true` 用 CAN FD，数据域 `defaultDataBitrate`；`dbcFile`：DBC 文件，相对 .uidp，导出时复制。
+- 收到的报文按 DBC 解成键 `报文名.信号名` 和 `信号名`（有值描述 VAL_ 的另有 `.text` 结尾的键，值是描述文字），用 `"键值匹配"` 绑定，重名信号用带报文名的键。
+- 没有 DBC 时在 `canSignals` 里每行写一个信号，如 `102 EngSpeed : 16|16@1+ (1,0) [0|8000] "rpm"`（ID 十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号），键是信号名。
+- 发命令：`commandMode` 为 `"CAN"`，`canId` 填 DBC 报文名或 ID，`commandTemplate` 写逗号分隔的 `信号=值`，`{value}` 换成控件的值；值是十进制物理值、值描述或 `0x` 开头的原始值（不经因子、偏移）。`canCycle`（ms）> 0 时连接期间周期重发，0 用 DBC 的 GenMsgCycleTime。无信号的 ID 按 HEX 模式组数据。
 - `CanMonitor` 按 ID 列出收发的报文；`DataSendCard` 在 CAN 链路上发 `ID#数据`，如 `102#11223344`。
 
-例：电机驱动器的 DBC 里 `PC2BLDC` 发给它，`BLDC2PC` 是它的回报（绑定 `BLDC2PC.信号名`）。滑块设转速，每 100 ms 发一次：
+例：电机驱动器的 DBC 里 `PC2BLDC` 发给它，`BLDC2PC` 是回报（绑定 `BLDC2PC.信号名`）。滑块设转速，每 100 ms 发一次：
 
 ```json
 {"type": "Slider", "id": "speed", "geometry": {"x": 420, "y": 60, "w": 260, "h": 36},
  "properties": {"maximum": 4000, "sendOnChange": true, "commandMode": "CAN", "canId": "PC2BLDC",
-                "commandTemplate": "SetMotorSpeed={value}, SetDerect=1", "canCycle": 100}}
+  "commandTemplate": "SetMotorSpeed={value}, SetDerect=1", "canCycle": 100}}
 ```
 
 ## 解析收到的数据
@@ -176,7 +176,7 @@ FluentHMIStudio --export <输出目录> motor.uidp
 | --- | --- |
 | `Label` | `text` |
 | `NumericDisplay`、`GaugeMeter`、`ProgressBar`、`ProgressRingDisplay` | `value` |
-| `LEDIndicator` | `on`：值等于属性 `onValue`（默认 `"1"`）时亮，等于 `offValue`（默认 `"0"`）时灭 |
+| `LEDIndicator` | `on`：值等于 `onValue`（默认 `"1"`）时亮，等于 `offValue`（默认 `"0"`）时灭 |
 | `ToggleSwitch` | `checked`：设备状态拨动开关，不会因此发命令 |
 | `Slider`、`SpinBox` | `value`：同上，不会因此发命令 |
 
@@ -186,10 +186,11 @@ FluentHMIStudio --export <输出目录> motor.uidp
 | --- | --- |
 | `"键值匹配"` | `key`：键名，如 `"rpm"` |
 | `"JSON路径"` | `jsonPath`：用点分隔，数组用下标，如 `"data.sensors.0.temp"`（负数从末尾数） |
-| `"HEX字节提取"` | 直接从原始字节取：`byteOffset`、`dataType`（`"uint8"` … `"float32"`）、`byteOrder`（`"大端(BE)"` / `"小端(LE)"`），可选 `frameHeader` / `frameTail`（HEX 文本，如 `"AA55"`） |
-| `"Modbus"` | `mbArea`：`"保持寄存器"`（默认）、`"输入寄存器"`、`"线圈"`、`"离散输入"`；`mbRegIndex`：寄存器地址；`mbDataType`（`"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`）、`mbRegOrder`（`"大端(AB CD)"` / `"小端(CD AB)"`），可选过滤 `mbSlaveFilter`、`mbFcFilter`（-1 表示不过滤）；`mbPeriod` 是自动轮询的采集周期（毫秒，0–60000，默认 `0` 表示用链路卡片的默认轮询 ms，即 `modbusPeriod`，见上文"连接设备：链路卡片"） |
+| `"HEX字节提取"` | 从原始字节取：`byteOffset`、`dataType`（`"uint8"` … `"float32"`）、`byteOrder`（`"大端(BE)"` / `"小端(LE)"`），可选 `frameHeader` / `frameTail`（HEX 文本，如 `"AA55"`） |
+| `"Modbus"` | `mbArea`：`"保持寄存器"`（默认）、`"输入寄存器"`、`"线圈"`、`"离散输入"`；`mbRegIndex`：寄存器地址；`mbDataType`（`"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`）、`mbRegOrder`（`"大端(AB CD)"` / `"小端(CD AB)"`），可选过滤 `mbSlaveFilter`、`mbFcFilter`（-1 不过滤）；`mbPeriod` 是自动轮询的采集周期（毫秒，0–60000，默认 `0` 用卡片的 `modbusPeriod`） |
+| `"CAN信号"` | 按位读收到的 CAN 报文：`canId`（如 `"18FF50E5"`）、`canStartBit`、`canBitLength`（1–64）、`canByteOrder`（`"Intel"` 默认，`"Motorola MSB"` 即 DBC 的 `@0`，`"Motorola LSB"` 起始位是最低位），可选 `canSigned`、`canFactor`、`canOffset`（默认 `false`、1、0） |
 
-所有模式都可以加 `expression` 做换算，变量是 `value`，如 `"value * 0.1"`。支持 Python 的算术 `+ - * / // % **`、位运算 `& | ^ ~ << >>`（只对整数）、比较 `< <= > >= == !=`（可以连写，如 `"0 < value < 40"`）和 `and` / `or` / `not`，可以加括号；比较的结果是 `True` / `False`，给指示灯用时 `onValue` 填 `1` 即可，如 `"(value >> 1) & 1"` 取第 1 位、`"value * 3.3 / 4095 < 1"` 判断电压。算不出来（除以零、位运算碰到小数）就按原值显示。
+所有模式都可加 `expression` 换算，变量是 `value`，如 `"value * 0.1"`。支持 Python 的算术 `+ - * / // % **`、位运算 `& | ^ ~ << >>`（只对整数）、比较 `< <= > >= == !=`（可连写，如 `"0 < value < 40"`）和 `and` / `or` / `not`，可加括号；比较结果是 `True` / `False`，给指示灯用时 `onValue` 填 `1`，如 `"(value >> 1) & 1"` 取第 1 位、`"value * 3.3 / 4095 < 1"` 判断电压。算不出来（除以零、位运算碰到小数）按原值显示。
 
 ## 发送命令
 
