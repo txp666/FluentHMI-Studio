@@ -610,7 +610,9 @@ QList<WidgetMeta> commWidgets()
         meta(QStringLiteral("CanMonitor"), QT_TR_NOOP("报文监视"), WidgetCategory::Comm, QStringLiteral("view"), 560,
              280,
              {described(boolean(QStringLiteral("showSignals"), QT_TR_NOOP("显示信号"), false),
-                        QStringLiteral("多一列，列出 DBC 和 canSignals 解出的信号值"))}, // i18n: ignore
+                        QStringLiteral("多一列，列出 DBC 和 canSignals 解出的信号值")), // i18n: ignore
+              described(boolean(QStringLiteral("showFilter"), QT_TR_NOOP("显示筛选"), true),
+                        QStringLiteral("在表格上方显示按 ID 和类型筛选"))}, // i18n: ignore
              240, 100),
         // The data table of the first link card whose modbusRole is 从站, one area of it.
         meta(QStringLiteral("ModbusSlaveTable"), QT_TR_NOOP("从站寄存器表"), WidgetCategory::Comm,

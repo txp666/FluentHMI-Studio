@@ -11,6 +11,7 @@
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
+#include <FluentQtWidgets/Widgets/LineEdit.h>
 #include <FluentQtWidgets/Widgets/Menu.h>
 #include <FluentQtWidgets/Widgets/Selection.h>
 
@@ -451,8 +452,39 @@ class CanMonitorModel : public QAbstractTableModel
     static constexpr int SortRole = Qt::UserRole;
     static constexpr int LinesRole = Qt::UserRole + 1;
     static constexpr int BytesPerLine = 8;
+    // The type choices of the filter row; FD takes FD BRS frames too.
+    enum class TypeFilter
+    {
+        All,
+        Data,
+        Rtr,
+        Fd,
+    };
 
     using QAbstractTableModel::QAbstractTableModel;
+
+    // Whether row `row` passes the filter row; an empty ID filter takes every ID.
+    bool matches(int row, const CanFilter &idFilter, TypeFilter type) const
+    {
+        if (row < 0 || row >= m_rows.size()) {
+            return false;
+        }
+        const Row &r = m_rows.at(row);
+        if (!idFilter.accepts(r.id.id, r.id.extended)) {
+            return false;
+        }
+        switch (type) {
+        case TypeFilter::Data:
+            return !r.frame.rtr && !r.frame.fd;
+        case TypeFilter::Rtr:
+            return r.frame.rtr;
+        case TypeFilter::Fd:
+            return r.frame.fd;
+        case TypeFilter::All:
+            break;
+        }
+        return true;
+    }
 
     void setShowSignals(bool show)
     {
@@ -699,12 +731,53 @@ class CanMonitorModel : public QAbstractTableModel
     bool m_dirty = false;
 };
 
+// Sorts the rows and hides those the filter row rules out. It is a dynamic sort/filter proxy, so a row that
+// arrives or changes its frame type is judged again as it comes, and nothing else has to know about the filter.
+class CanMonitorProxy : public QSortFilterProxyModel
+{
+  public:
+    using QSortFilterProxyModel::QSortFilterProxyModel;
+
+    void setFilter(const CanFilter &idFilter, CanMonitorModel::TypeFilter type)
+    {
+        beginFilterChange();
+        m_idFilter = idFilter;
+        m_type = type;
+        endFilterChange();
+    }
+
+  protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override
+    {
+        if (sourceParent.isValid()) {
+            return false;
+        }
+        return static_cast<const CanMonitorModel *>(sourceModel())->matches(sourceRow, m_idFilter, m_type);
+    }
+
+  private:
+    CanFilter m_idFilter; // empty: every ID
+    CanMonitorModel::TypeFilter m_type = CanMonitorModel::TypeFilter::All;
+};
+
 CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(2, 2, 2, 2);
+    m_filterRow = new QWidget(this);
+    auto *filterLayout = new QHBoxLayout(m_filterRow);
+    filterLayout->setContentsMargins(0, 0, 0, 0);
+    m_idFilter = new FluentQt::LineEdit(m_filterRow);
+    m_idFilter->setPlaceholderText(tr("筛选 ID，如 100-1FF, 18FF50E5"));
+    m_idFilter->setClearButtonEnabled(true);
+    m_typeFilter = new FluentQt::ComboBox(m_filterRow);
+    // Not translated: these are the names of the type column.
+    m_typeFilter->addItems({tr("全部类型"), QStringLiteral("Data"), QStringLiteral("RTR"), QStringLiteral("FD")});
+    filterLayout->addWidget(m_idFilter, 1);
+    filterLayout->addWidget(m_typeFilter);
+    layout->addWidget(m_filterRow);
     m_model = new CanMonitorModel(this);
-    m_sorted = new QSortFilterProxyModel(this);
+    m_sorted = new CanMonitorProxy(this);
     m_sorted->setSourceModel(m_model);
     m_sorted->setSortRole(CanMonitorModel::SortRole);
     // Rows are updated ten times a second; with this the proxy keeps the sort as they change.
@@ -727,6 +800,8 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
                 [this]() { m_model->clear(); });
         menu->exec(m_view->viewport()->mapToGlobal(position), true);
     });
+    connect(m_idFilter, &FluentQt::LineEdit::textChanged, this, [this]() { updateFilter(); });
+    connect(m_typeFilter, &FluentQt::ComboBox::currentIndexChanged, this, [this]() { updateFilter(); });
     m_refresh = new QTimer(this);
     m_refresh->setInterval(kMonitorRefreshMs);
     connect(m_refresh, &QTimer::timeout, m_model, [this]() { m_model->refresh(); });
@@ -737,6 +812,16 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     connect(m_sorted, &QAbstractItemModel::dataChanged, this, [this]() { fitRowHeights(); });
     connect(m_sorted, &QAbstractItemModel::layoutChanged, this, [this]() { fitRowHeights(); });
     connect(m_sorted, &QAbstractItemModel::modelReset, this, [this]() { fitRowHeights(); });
+}
+
+void CanMonitorWidget::updateFilter()
+{
+    QString error;
+    const std::optional<CanFilter> parsed = CanFilter::parse(m_idFilter->text(), &error);
+    m_idFilter->setError(!parsed);
+    m_idFilter->setToolTip(parsed ? QString() : error);
+    // Hiding rows removes and re-adds them in the proxy, which fitRowHeights() hears of like any other row change.
+    m_sorted->setFilter(parsed.value_or(CanFilter()), CanMonitorModel::TypeFilter(m_typeFilter->currentIndex()));
 }
 
 void CanMonitorWidget::fitRowHeights()
@@ -766,6 +851,13 @@ void CanMonitorWidget::fitRowHeights()
 void CanMonitorWidget::apply()
 {
     m_model->setShowSignals(flag("showSignals"));
+    const bool showFilter = flag("showFilter");
+    m_filterRow->setVisible(showFilter);
+    if (!showFilter) {
+        // A filter nobody can see would leave the table looking empty for no reason.
+        m_idFilter->clear();
+        m_typeFilter->setCurrentIndex(0);
+    }
     QHeaderView *header = m_view->horizontalHeader();
     header->setStretchLastSection(true);
     // Wide enough for the widest thing a column holds, and for its header with the sort arrow.

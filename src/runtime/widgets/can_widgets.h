@@ -5,11 +5,11 @@
 
 #include <QtCore/QElapsedTimer>
 
-class QSortFilterProxyModel;
 class QTimer;
 
 namespace FluentQt {
 class EditableComboBox;
+class LineEdit;
 class TableView;
 } // namespace FluentQt
 
@@ -17,6 +17,7 @@ namespace fhmi {
 
 class CanLink;
 class CanMonitorModel;
+class CanMonitorProxy;
 
 // The CAN card: adapter, channel (or a ZLG model, device and channel), bitrate and sample point, CAN FD and its
 // data phase. Fields the adapter cannot set are disabled with a tooltip saying why; SocketCAN shows the ip command
@@ -82,7 +83,8 @@ class CanConfigCardWidget : public LinkCardBase
 
 // 报文监视: one row per (direction, ID) seen on the project's CAN links, updated in place; the table repaints
 // about ten times a second however many frames arrive. It starts afresh when a CAN link connects while no other
-// one is connected, and sorts by any column (ID ascending at first).
+// one is connected, and sorts by any column (ID ascending at first). A row above the table filters by ID (the CAN
+// card's 接收过滤 syntax) and by frame type; the filter is a runtime control and is not saved with the project.
 class CanMonitorWidget : public HmiWidget
 {
   public:
@@ -96,10 +98,15 @@ class CanMonitorWidget : public HmiWidget
   private:
     // A row is as tall as the lines of its data; only rows whose line count changed are resized.
     void fitRowHeights();
+    // Reads the filter row into the proxy; a filter that does not parse filters nothing and says why.
+    void updateFilter();
 
+    QWidget *m_filterRow = nullptr;
+    FluentQt::LineEdit *m_idFilter = nullptr;
+    FluentQt::ComboBox *m_typeFilter = nullptr;
     FluentQt::TableView *m_view = nullptr;
     CanMonitorModel *m_model = nullptr;
-    QSortFilterProxyModel *m_sorted = nullptr;
+    CanMonitorProxy *m_sorted = nullptr;
     bool m_heightsQueued = false;
     QTimer *m_refresh = nullptr;
 };
