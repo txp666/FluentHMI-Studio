@@ -13,21 +13,21 @@ FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Design
 
 拖拽控件到画布，在右侧编辑属性和数据绑定：
 
-![设计器](docs/images/designer.jpg)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/designer-zh-dark.jpg"><img src="docs/images/designer-zh-light.jpg" alt="设计器"></picture>
 
 ### 预览运行
 
 同一份工程连上设备即可实时运行，导出的应用也用同一个运行时（图中为 MQTT 模拟设备的数据）：
 
-![预览运行](docs/images/preview.jpg)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/preview-zh-dark.jpg"><img src="docs/images/preview-zh-light.jpg" alt="预览运行"></picture>
 
 ### 全部控件
 
 28 种控件在浅色和深色主题下的样子：
 
-![控件一览（浅色）](docs/images/widgets-light.jpg)
+![控件一览（浅色）](docs/images/widgets-zh-light.jpg)
 
-![控件一览（深色）](docs/images/widgets-dark.jpg)
+![控件一览（深色）](docs/images/widgets-zh-dark.jpg)
 
 ## 让 AI 写工程
 

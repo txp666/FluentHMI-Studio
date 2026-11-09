@@ -15,21 +15,21 @@ FluentHMI Studio is a C++/Qt 6 rewrite of [PyQt UI Designer](https://github.com/
 
 Drag widgets onto the canvas, and edit their properties and data bindings on the right:
 
-![Designer](docs/images/designer.jpg)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/designer-en-dark.jpg"><img src="docs/images/designer-en-light.jpg" alt="Designer"></picture>
 
 ### Live preview
 
 The same project runs live once it is connected to a device, and exported apps use the same runtime (the data in the screenshot comes from a simulated MQTT device):
 
-![Live preview](docs/images/preview.jpg)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/preview-en-dark.jpg"><img src="docs/images/preview-en-light.jpg" alt="Live preview"></picture>
 
 ### All widgets
 
 The 28 widgets in the light and dark themes:
 
-![All widgets (light)](docs/images/widgets-light.jpg)
+![All widgets (light)](docs/images/widgets-en-light.jpg)
 
-![All widgets (dark)](docs/images/widgets-dark.jpg)
+![All widgets (dark)](docs/images/widgets-en-dark.jpg)
 
 ## Let AI write the project
 
