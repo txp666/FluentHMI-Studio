@@ -98,16 +98,24 @@ void collectCanCards(const QJsonArray &widgets, QList<QJsonObject> &out)
     }
 }
 
-bool hasCanCard(const Project *project)
+// The widgets as they are now. In the designer that is the scene: the project's list is brought up to date only
+// when the project is saved, so a CAN card dropped since would offer no DBC names and no CAN信号 mode.
+QJsonArray currentWidgets(const Project *project, const DesignScene *scene)
+{
+    if (scene) {
+        return scene->widgetsJson();
+    }
+    return project ? project->widgets : QJsonArray();
+}
+
+bool hasCanCard(const QJsonArray &widgets)
 {
     QList<QJsonObject> cards;
-    if (project) {
-        collectCanCards(project->widgets, cards);
-    }
+    collectCanCards(widgets, cards);
     return !cards.isEmpty();
 }
 
-CanNames canNames(const Project *project)
+CanNames canNames(const Project *project, const QJsonArray &widgets)
 {
     CanNames names;
     if (!project) {
@@ -120,7 +128,7 @@ CanNames canNames(const Project *project)
     };
     static QHash<QString, Cached> cache;
     QList<QJsonObject> cards;
-    collectCanCards(project->widgets, cards);
+    collectCanCards(widgets, cards);
     for (const QJsonObject &card : std::as_const(cards)) {
         std::shared_ptr<const CanDatabase> dbc;
         const QString file = card.value(QStringLiteral("dbcFile")).toString().trimmed();
@@ -541,7 +549,7 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     case PropType::Enum: {
         auto *combo = new FluentQt::ComboBox(m_content);
         QStringList options = def.options;
-        if (def.name == QLatin1String("curveParseMode") && !hasCanCard(m_project) &&
+        if (def.name == QLatin1String("curveParseMode") && !hasCanCard(currentWidgets(m_project, m_scene)) &&
             value.toVariant().toString() != ParseMode::CanSignal) {
             options.removeAll(ParseMode::CanSignal); // offered where there is a CAN card, as for a binding
         }
@@ -578,7 +586,7 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     edit->setText(value.toVariant().toString());
     connect(edit, &QLineEdit::textChanged, this, [commit](const QString &t) { commit(t); });
     if (def.name == QLatin1String("canId")) {
-        complete(edit, canNames(m_project).messages);
+        complete(edit, canNames(m_project, currentWidgets(m_project, m_scene)).messages);
     }
     const bool dbc = def.name == QLatin1String("dbcFile");
     if (def.name != QLatin1String("imagePath") && !dbc) {
@@ -1083,13 +1091,14 @@ void PropertyEditor::buildBindingForm()
     QStringList modes{ParseMode::KeyValue, ParseMode::JsonPath, ParseMode::HexBytes, ParseMode::Modbus};
     // CAN信号 reads the frames of a CAN card's links, so it is offered only where there is one, and kept where a
     // binding already uses it.
-    if (mode == ParseMode::CanSignal || hasCanCard(m_project)) {
+    if (mode == ParseMode::CanSignal || hasCanCard(currentWidgets(m_project, m_scene))) {
         modes.append(ParseMode::CanSignal);
     }
     add("parseMode", tr("解析模式"), combo(modes, mode));
     add("key", tr("绑定字段"), line(value("key", QString()).toString(), tr("字段名 (如 temperature)")));
     // The signal keys of the project's CAN cards, so a DBC's names need not be typed out.
-    complete(static_cast<FluentQt::LineEdit *>(m_bindingEditors.value(QStringLiteral("key"))), canNames(m_project).keys);
+    complete(static_cast<FluentQt::LineEdit *>(m_bindingEditors.value(QStringLiteral("key"))),
+             canNames(m_project, currentWidgets(m_project, m_scene)).keys);
     add("jsonPath", tr("JSON路径"), line(value("jsonPath", QString()).toString(), tr("路径 (如 data.sensors.0.temp)")));
     add("byteOffset", tr("字节偏移"), spin(0, 9999, value("byteOffset", 0).toInt()));
     add("dataType", tr("数据类型"),
@@ -1254,8 +1263,8 @@ void PropertyEditor::updateVisibility()
         }
         if (mode == QLatin1String("CAN")) {
             // The link ignores these for a message with signals; show them only where they still matter.
-            const CanTargetKind kind =
-                canTargetKind(canNames(m_project), m_item->propertyValue(QStringLiteral("canId")).toString());
+            const CanTargetKind kind = canTargetKind(canNames(m_project, currentWidgets(m_project, m_scene)),
+                                                     m_item->propertyValue(QStringLiteral("canId")).toString());
             setRowVisible(QStringLiteral("dataType"), !kind.hasSignals);
             setRowVisible(QStringLiteral("byteOrder"), !kind.hasSignals);
             setRowVisible(QStringLiteral("canFd"), !kind.fromDbc);

@@ -1120,6 +1120,31 @@ class TestRuntime : public QObject
         QVERIFY(found);
     }
 
+    // A CAN card dropped since the project was last saved is on the page but not yet in the project's widget list:
+    // a binding offers CAN信号 for it all the same.
+    void bindingSeesUnsavedCanCard()
+    {
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets(
+                     QJsonArray{QJsonObject{{"id", "can"},
+                                            {"type", "CanConfigCard"},
+                                            {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 380}, {"h", 270}}}},
+                                QJsonObject{{"id", "volt"},
+                                            {"type", "NumericDisplay"},
+                                            {"geometry", QJsonObject{{"x", 400}, {"y", 0}, {"w", 170}, {"h", 90}}}}},
+                     &error),
+                 qPrintable(error));
+        Project project; // saved before the card was there
+        PropertyEditor editor;
+        editor.setProject(&project);
+        editor.setScene(&scene);
+        editor.showItem(scene.findItem(QStringLiteral("volt")));
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("解析模式")));
+        QVERIFY(mode);
+        QVERIFY(mode->findText(QStringLiteral("CAN信号")) >= 0);
+    }
+
     // A link reports each whole frame of a hex parser as one raw unit, followed by its
     // messages, and a frame ended by silence the same way; line and Modbus parsers buffer by
     // themselves, so their units are the chunks as they came.
