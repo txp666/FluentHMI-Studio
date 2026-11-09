@@ -27,12 +27,14 @@
 #include <QtCore/QSet>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QRegularExpressionValidator>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QCompleter>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 
 namespace fhmi {
@@ -184,6 +186,12 @@ void complete(FluentQt::LineEdit *edit, const QStringList &words)
     completer->setFilterMode(Qt::MatchContains);
     completer->setMaxVisibleItems(12);
     edit->setCompleter(completer);
+    // Leaving the field (Tab, a click elsewhere) also closes the list, so it never outlives the edit.
+    QObject::connect(edit, &QLineEdit::editingFinished, completer, [completer]() {
+        if (QAbstractItemView *popup = completer->popup()) {
+            popup->hide();
+        }
+    });
 }
 
 const QHash<QString, QSet<QString>> &chartParseVisibility()
@@ -242,14 +250,48 @@ const QRegularExpression &numberPattern()
     return number;
 }
 
-// The red caption that says why a CAN信号 setup reads nothing; its text is set by updateVisibility.
-FluentQt::CaptionLabel *newProblemLabel(QWidget *parent)
+// The red caption that says why a CAN信号 setup reads nothing; its text is set by updateVisibility. It fixes its own
+// height to what its wrapped lines need at its width. Left to the form, a note that appears after an edit can be
+// laid out at a wider width's height and lose lines: QFormLayout keeps one table of wrapped heights for two widths.
+class ProblemLabel : public FluentQt::CaptionLabel
 {
-    auto *problem = new FluentQt::CaptionLabel(parent);
-    problem->setWordWrap(true);
-    problem->setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4)); // Fluent's critical colours
-    return problem;
-}
+  public:
+    explicit ProblemLabel(QWidget *parent) : FluentQt::CaptionLabel(parent)
+    {
+        setWordWrap(true);
+        setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4)); // Fluent's critical colours
+    }
+
+    void setProblem(const QString &problem)
+    {
+        setText(problem);
+        fitHeight();
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        FluentQt::CaptionLabel::resizeEvent(event);
+        fitHeight();
+    }
+
+  private:
+    // Measured from the font, not heightForWidth(), which never goes below the fixed height already set.
+    void fitHeight()
+    {
+        if (text().isEmpty()) {
+            return;
+        }
+        const QMargins margins = contentsMargins();
+        const int extra = 2 * margin();
+        const int textWidth = std::max(1, width() - margins.left() - margins.right() - extra);
+        const QRect lines = fontMetrics().boundingRect(QRect(0, 0, textWidth, QWIDGETSIZE_MAX),
+                                                       int(alignment() | Qt::TextWordWrap), text());
+        setFixedHeight(lines.height() + margins.top() + margins.bottom() + extra);
+    }
+};
+
+ProblemLabel *newProblemLabel(QWidget *parent) { return new ProblemLabel(parent); }
 
 // The send switch each widget type has; while it is off, no command fields apply.
 QString sendToggle(const QString &type)
@@ -1316,8 +1358,8 @@ void PropertyEditor::updateVisibility()
                 m_item->properties(), m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0)));
         }
         if (const auto row = m_rows.constFind(QStringLiteral("curveCanProblem")); row != m_rows.constEnd()) {
-            if (auto *label = qobject_cast<QLabel *>(row->second)) {
-                label->setText(problem);
+            if (auto *label = dynamic_cast<ProblemLabel *>(row->second)) {
+                label->setProblem(problem);
             }
         }
         setRowVisible(QStringLiteral("curveCanProblem"), !problem.isEmpty());
@@ -1342,8 +1384,8 @@ void PropertyEditor::updateVisibility()
         const QJsonObject binding = m_item ? m_item->binding() : QJsonObject();
         const QString problem =
             mode == ParseMode::CanSignal && !binding.isEmpty() ? canSignalProblem(binding) : QString();
-        if (auto *label = qobject_cast<QLabel *>(m_bindingEditors.value(QStringLiteral("canProblem")))) {
-            label->setText(problem);
+        if (auto *label = dynamic_cast<ProblemLabel *>(m_bindingEditors.value(QStringLiteral("canProblem")))) {
+            label->setProblem(problem);
         }
         setRowVisible(QStringLiteral("binding.canProblem"), !problem.isEmpty());
     }
