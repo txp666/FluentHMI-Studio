@@ -90,6 +90,11 @@ DesignScene::DesignScene(QObject *parent) : QGraphicsScene(parent)
     connect(this, &DesignScene::modified, this, &DesignScene::refreshSlaveTables);
 }
 
+DesignScene::~DesignScene()
+{
+    blockSignals(true);
+}
+
 void DesignScene::setCanvasSize(const QSize &size)
 {
     m_canvasSize = size;

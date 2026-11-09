@@ -32,6 +32,9 @@ class DesignScene : public QGraphicsScene
 
   public:
     explicit DesignScene(QObject *parent = nullptr);
+    // Blocks its signals first: QGraphicsScene's destructor removes the items and would announce the selection
+    // change, and the designer page that owns the scene is already half destroyed by then.
+    ~DesignScene() override;
 
     void setCanvasSize(const QSize &size);
     QSize canvasSize() const { return m_canvasSize; }

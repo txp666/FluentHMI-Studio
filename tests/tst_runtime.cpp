@@ -1040,6 +1040,25 @@ class TestRuntime : public QObject
     // The designer keeps a link card at least as tall as its rows: a smaller height takes the minimum,
     // fewer rows (简洁) lower the minimum and keep the height, more rows raise it, and a card saved shorter
     // grows on opening. The single-row serial strip of the examples keeps its 50 px.
+    // Closing Studio with a widget selected crashed: the scene, deleted with its page, emitted selectionChanged for
+    // the item it took away, and the page rebuilt the property panel from a project already destroyed. A scene
+    // going away tells nobody.
+    void destroyedSceneEmitsNothing()
+    {
+        auto *scene = new DesignScene;
+        QString error;
+        QVERIFY2(scene->loadWidgets(QJsonArray{QJsonObject{
+                                        {"id", "label"},
+                                        {"type", "Label"},
+                                        {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 120}, {"h", 30}}}}},
+                                    &error),
+                 qPrintable(error));
+        scene->findItem(QStringLiteral("label"))->setSelected(true);
+        QSignalSpy selection(scene, &QGraphicsScene::selectionChanged);
+        delete scene;
+        QCOMPARE(selection.count(), 0);
+    }
+
     void designerKeepsLinkCardsTallEnough()
     {
         DesignScene scene;
