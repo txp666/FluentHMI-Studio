@@ -12,6 +12,8 @@ RuntimeContext::RuntimeContext(QObject *parent) : QObject(parent), m_hub(new Com
     m_steady.start();
     connect(m_hub, &CommHub::messageReceived, this, &RuntimeContext::onMessage);
     connect(m_hub, &CommHub::rawReceived, this, &RuntimeContext::onRaw);
+    connect(m_hub, &CommHub::canFrames, this,
+            [this](CanLink *, const QList<CanFrame> &frames, bool sent) { onCanFrames(frames, sent); });
     connect(m_hub, &CommHub::linkDisconnected, this, [this]() {
         for (BindingEntry &binding : m_bindings) {
             binding.resetStream();
@@ -28,6 +30,9 @@ void RuntimeContext::registerWidget(const QString &id, HmiWidget *widget)
 
 void RuntimeContext::addBinding(BindingEntry binding)
 {
+    if (binding.parseMode == ParseMode::CanSignal) {
+        m_canBindings[binding.canId.key()].append(m_bindings.size());
+    }
     m_bindings.push_back(std::move(binding));
 }
 
@@ -35,6 +40,7 @@ void RuntimeContext::clear()
 {
     m_widgets.clear();
     m_bindings.clear();
+    m_canBindings.clear();
     m_curveNeeds.clear();
     m_poller->reset();
 }
@@ -188,11 +194,32 @@ void RuntimeContext::onRaw(const QByteArray &bytes)
         return;
     }
     for (BindingEntry &binding : m_bindings) {
-        if (binding.usesParsedData()) {
+        if (!binding.usesRawData()) {
             continue;
         }
         for (const QVariant &value : binding.extractAllFromRaw(bytes)) {
             push(binding, value);
+        }
+    }
+}
+
+void RuntimeContext::onCanFrames(const QList<CanFrame> &frames, bool sent)
+{
+    // Only what the bus brought in shows: a frame this program sent is its own command, not the device's state.
+    if (!m_active || sent || m_canBindings.isEmpty()) {
+        return;
+    }
+    for (const CanFrame &frame : frames) {
+        const auto it = m_canBindings.constFind(CanId{frame.id, frame.extended}.key());
+        if (it == m_canBindings.constEnd()) {
+            continue;
+        }
+        for (const size_t index : *it) {
+            const BindingEntry &binding = m_bindings[index];
+            const QVariant value = binding.extractFromCan(frame);
+            if (value.isValid()) {
+                push(binding, value);
+            }
         }
     }
 }

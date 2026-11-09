@@ -714,25 +714,10 @@ std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromPropertie
     const int count = std::clamp(props.value(QStringLiteral("curveCount")).toInt(1), 1, 8);
     std::vector<Curve> curves;
     for (int i = 0; i < count; ++i) {
+        const QJsonObject binding = chartCurveBinding(props, i);
         const auto field = [&props, i](const char *name, const QJsonValue &fallback) {
             const QJsonValue value = props.value(QStringLiteral("_curve_%1_%2").arg(i).arg(QLatin1String(name)));
             return value.isUndefined() || value.isNull() ? fallback : value;
-        };
-        const QJsonObject binding{
-            {QStringLiteral("parseMode"), field("parseMode", ParseMode::KeyValue)},
-            {QStringLiteral("key"), field("key", QString())},
-            {QStringLiteral("jsonPath"), field("jsonPath", QString())},
-            {QStringLiteral("byteOffset"), field("byteOffset", 0)},
-            {QStringLiteral("dataType"), field("dataType", QStringLiteral("float32"))},
-            {QStringLiteral("byteOrder"), field("byteOrder", QStringLiteral("大端(BE)"))}, // i18n: value
-            {QStringLiteral("frameHeader"), field("frameHeader", QString())},
-            {QStringLiteral("frameTail"), field("frameTail", QString())},
-            {QStringLiteral("mbRegIndex"), field("regIndex", 0)},
-            {QStringLiteral("mbDataType"), field("mbDataType", QStringLiteral("uint16"))},
-            {QStringLiteral("mbRegOrder"), field("mbRegOrder", QStringLiteral("大端(AB CD)"))}, // i18n: value
-            {QStringLiteral("mbFcFilter"), field("mbFcFilter", -1)},
-            {QStringLiteral("mbSlaveFilter"), field("mbSlaveFilter", -1)},
-            {QStringLiteral("mbArea"), field("mbArea", ModbusArea::HoldingRegisters)},
         };
         const QString name = field("name", QStringLiteral("曲线%1").arg(i + 1)).toString(); // i18n: value
         auto entry = BindingEntry::fromWidget(
@@ -764,6 +749,8 @@ void RealtimeChartWidget::rebuildCurves()
     while (m_histories.size() < m_curves.size()) {
         m_histories.push_back(std::make_unique<ChartHistory>(kHistoryLimit));
     }
+    m_hasCanCurves = std::any_of(m_curves.begin(), m_curves.end(),
+                                 [](const Curve &curve) { return curve.binding.parseMode == ParseMode::CanSignal; });
     m_plot->clearSeries();
     for (size_t i = 0; i < m_curves.size(); ++i) {
         m_plot->addSeries(m_curves[i].name, curveColor(int(i)));
@@ -986,11 +973,32 @@ void RealtimeChartWidget::onAttached()
         }
         for (size_t i = 0; i < m_curves.size(); ++i) {
             BindingEntry &binding = m_curves[i].binding;
-            if (binding.usesParsedData()) {
+            if (!binding.usesRawData()) {
                 continue;
             }
             for (const QVariant &value : binding.extractAllFromRaw(bytes)) {
                 if (const auto y = bindingFloat(value)) {
+                    appendSample(int(i), *y);
+                }
+            }
+        }
+    }));
+    live(connect(hub, &CommHub::canFrames, this, [this](CanLink *, const QList<CanFrame> &frames, bool sent) {
+        // Only what the bus brought in, as for a control's CAN信号 binding.
+        if (!m_hasCanCurves || sent || !context()->isActive()) {
+            return;
+        }
+        for (const CanFrame &frame : frames) {
+            for (size_t i = 0; i < m_curves.size(); ++i) {
+                const BindingEntry &binding = m_curves[i].binding;
+                if (binding.parseMode != ParseMode::CanSignal) {
+                    continue;
+                }
+                const QVariant raw = binding.extractFromCan(frame);
+                if (!raw.isValid()) {
+                    continue;
+                }
+                if (const auto y = bindingFloat(binding.evaluate(raw))) {
                     appendSample(int(i), *y);
                 }
             }

@@ -76,12 +76,14 @@ class RuntimeContext : public QObject
   private:
     void onMessage(const Message &message);
     void onRaw(const QByteArray &bytes);
+    void onCanFrames(const QList<CanFrame> &frames, bool sent);
     void push(const BindingEntry &binding, const QVariant &raw);
 
     CommHub *m_hub = nullptr;
     ModbusPoller *m_poller = nullptr;
     QHash<QString, QPointer<HmiWidget>> m_widgets;
     std::vector<BindingEntry> m_bindings;
+    QHash<quint64, QList<size_t>> m_canBindings; // CanId::key() -> the CAN信号 bindings' indices in m_bindings
     QList<QPair<const QObject *, QList<ModbusNeed>>> m_curveNeeds; // in the order charts registered
     bool m_active = false;
     QElapsedTimer m_steady;

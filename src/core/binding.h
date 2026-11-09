@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/can_signal.h"
 #include "core/protocol_parser.h"
 
 #include <QtCore/QJsonObject>
@@ -23,7 +24,24 @@ inline const QString KeyValue = QStringLiteral("键值匹配");    // i18n: valu
 inline const QString JsonPath = QStringLiteral("JSON路径");    // i18n: value
 inline const QString HexBytes = QStringLiteral("HEX字节提取"); // i18n: value
 inline const QString Modbus = QStringLiteral("Modbus");
+inline const QString CanSignal = QStringLiteral("CAN信号"); // i18n: value
 } // namespace ParseMode
+
+// Which bit a CAN信号 binding's canStartBit names. Fixed values in the file, not translated.
+namespace CanByteOrder {
+inline const QString Intel = QStringLiteral("Intel");              // the LSB, as DBC @1
+inline const QString MotorolaMsb = QStringLiteral("Motorola MSB"); // the MSB in sawtooth numbering, as DBC @0
+inline const QString MotorolaLsb = QStringLiteral("Motorola LSB"); // the LSB in the same numbering
+inline QStringList options() { return {Intel, MotorolaMsb, MotorolaLsb}; }
+} // namespace CanByteOrder
+
+// Why a CAN信号 binding (the widget's "binding" object) reads nothing: its ID does not parse, its byte order is
+// unknown, or its signal does not fit a frame. Empty when it is fine.
+QString canSignalProblem(const QJsonObject &binding);
+
+// The synthetic binding a RealtimeChart's curve describes with its _curve_{curve}_* properties, defaults filled in.
+// The runtime builds the curve from it and the property panel judges it (canSignalProblem).
+QJsonObject chartCurveBinding(const QJsonObject &props, int curve);
 
 // Python str() of a decoded value, so displays read the same as in PyQt UI Designer
 // (25.0 shows as "25.0", True as "True").
@@ -69,13 +87,22 @@ class BindingEntry
     QString decimals = QStringLiteral("自动");      // i18n: value
     QString ledOnValue = QStringLiteral("1");
     QString ledOffValue = QStringLiteral("0");
+    // CAN信号: the frames it reads and its signal in them, built once here so a busy bus costs a lookup per
+    // frame. A Motorola LSB start is already turned into the DBC (MSB) one.
+    CanId canId;
+    CanSignalDef canSignal;
 
-    bool usesParsedData() const { return parseMode != ParseMode::HexBytes; }
+    // Which feed a binding reads: parsed messages, the bytes of a byte link, or CAN frames (extractFromCan).
+    bool usesParsedData() const { return parseMode != ParseMode::HexBytes && parseMode != ParseMode::CanSignal; }
+    bool usesRawData() const { return parseMode == ParseMode::HexBytes; }
 
     // An invalid QVariant means "no value in this message".
     QVariant extractFromParsed(const Message &data) const;
     QVariant extractFromRaw(const QByteArray &raw) const;
     QList<QVariant> extractAllFromRaw(const QByteArray &raw);
+    // A CAN信号 binding's physical value (raw × factor + offset) in a received frame; invalid for another ID, a
+    // remote or error frame, or data too short for the signal.
+    QVariant extractFromCan(const CanFrame &frame) const;
     void resetStream();
 
     QVariant evaluate(const QVariant &raw) const;
