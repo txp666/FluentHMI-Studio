@@ -165,7 +165,7 @@ QList<PropDef> canCommand()
 {
     return {described(str(QStringLiteral("canId"), QT_TR_NOOP("CAN 报文"), QString()),
                       QStringLiteral("DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 " // i18n: ignore
-                                     "`信号=值`，原始 ID 按 HEX 模式组字节")),                                // i18n: ignore
+                                     "`信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节")),                                // i18n: ignore
             described(boolean(QStringLiteral("canFd"), QT_TR_NOOP("CAN FD 帧"), false),
                       QStringLiteral("只用于原始 ID；DBC 报文是否 FD 由 DBC 决定")), // i18n: ignore
             described(integer(QStringLiteral("canCycle"), QT_TR_NOOP("循环周期(ms)"), 0, 0, 60000),
@@ -303,6 +303,11 @@ QList<WidgetMeta> basicWidgets()
         return props;
     };
 
+    // Only the slider can show its limits: they sit at the ends of its row, which a spin box has no use for.
+    QList<PropDef> sliderProps = ranged(50, false);
+    sliderProps.insert(3, described(boolean(QStringLiteral("showRange"), QT_TR_NOOP("显示上下限"), false),
+                                    QStringLiteral("在滑块两端显示最小值和最大值"))); // i18n: ignore
+
     return {meta(QStringLiteral("PushButton"), QT_TR_NOOP("按钮"), WidgetCategory::Basic, QStringLiteral("button"), 120,
                  36, button),
             meta(QStringLiteral("Label"), QT_TR_NOOP("标签"), WidgetCategory::Basic, QStringLiteral("font"), 120, 30,
@@ -314,7 +319,7 @@ QList<WidgetMeta> basicWidgets()
             meta(QStringLiteral("ToggleSwitch"), QT_TR_NOOP("开关"), WidgetCategory::Basic, QStringLiteral("toggle"),
                  140, 30, toggle),
             meta(QStringLiteral("Slider"), QT_TR_NOOP("滑块"), WidgetCategory::Basic, QStringLiteral("slider"), 200, 30,
-                 ranged(50, false)),
+                 sliderProps),
             meta(QStringLiteral("SpinBox"), QT_TR_NOOP("数值框"), WidgetCategory::Basic, QStringLiteral("spin_box"),
                  140, 36, ranged(0, true))};
 }

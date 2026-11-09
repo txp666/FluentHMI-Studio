@@ -4,6 +4,7 @@
 
 namespace FluentQt {
 class BodyLabel;
+class CaptionLabel;
 class ComboBox;
 class LineEdit;
 class PushButton;
@@ -97,6 +98,8 @@ class SliderWidget : public HmiWidget
     void sendValue(int value);
 
     FluentQt::Slider *m_slider = nullptr;
+    FluentQt::CaptionLabel *m_minLabel = nullptr; // showRange: the minimum at the left end
+    FluentQt::CaptionLabel *m_maxLabel = nullptr; // showRange: the maximum at the right end
     bool m_sends = false; // sendOnChange, or a Modbus command
     bool m_quiet = false;
     bool m_held = false; // the mouse is down on the slider: a drag sends once, on release

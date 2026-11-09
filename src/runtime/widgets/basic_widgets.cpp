@@ -254,7 +254,18 @@ void ToggleSwitchWidget::onAttached()
 SliderWidget::SliderWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {
     m_slider = new FluentQt::Slider(Qt::Horizontal, this);
-    fill(this, m_slider);
+    m_minLabel = new FluentQt::CaptionLabel(this);
+    m_maxLabel = new FluentQt::CaptionLabel(this);
+    m_minLabel->hide();
+    m_maxLabel->hide();
+    // The labels are in the row from the start, so a hidden one takes no room: with showRange off the
+    // slider fills the widget as it did before the labels existed.
+    auto *row = new QHBoxLayout(this);
+    row->setContentsMargins(QMargins());
+    row->setSpacing(6);
+    row->addWidget(m_minLabel, 0, Qt::AlignVCenter);
+    row->addWidget(m_slider, 1);
+    row->addWidget(m_maxLabel, 0, Qt::AlignVCenter);
 }
 
 // The Fluent slider moves its handle in valueChanged, so the signal stays connected and
@@ -265,6 +276,12 @@ void SliderWidget::apply()
     m_slider->setRange(integer("minimum"), integer("maximum"));
     m_slider->setValue(integer("value"));
     m_quiet = false;
+    // Read back from the slider, so the labels show the range it actually has after normalizing.
+    m_minLabel->setText(QString::number(m_slider->minimum()));
+    m_maxLabel->setText(QString::number(m_slider->maximum()));
+    const bool showRange = flag("showRange");
+    m_minLabel->setVisible(showRange);
+    m_maxLabel->setVisible(showRange);
 }
 
 void SliderWidget::applyBoundValue(const QVariant &value, const BindingEntry &)

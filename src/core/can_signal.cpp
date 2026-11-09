@@ -195,6 +195,23 @@ QString CanSignalDef::valueText(const QByteArray &data) const
 std::optional<quint64> CanSignalDef::encode(const QString &value, QString *error) const
 {
     const QString text = value.trimmed();
+    if (text.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+        // 0x…: the raw bits, taken as they are. Factor, offset and the physical limits are for decimal values; a
+        // hex value is what a tester reads off the bus, so it must not be scaled behind their back.
+        bool ok = false;
+        const quint64 bits = text.mid(2).toULongLong(&ok, 16);
+        // toULongLong accepts a sign and spaces, which a bit pattern has no use for.
+        const bool digitsOnly = ok && text.size() > 2 && text.at(2).isLetterOrNumber();
+        if (!digitsOnly) {
+            fail(error, QCoreApplication::translate("fhmi", "信号 %1 的值无效: %2").arg(name, text));
+            return std::nullopt;
+        }
+        if (bits > mask(length)) {
+            fail(error, outOfRange(*this, text));
+            return std::nullopt;
+        }
+        return bits;
+    }
     if (valueType == ValueType::Integer && factor == 1 && integral(offset)) {
         // Whole numbers are worked exactly, so 64-bit raw values do not go through a double.
         bool ok = false;

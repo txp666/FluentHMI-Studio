@@ -93,6 +93,9 @@ class CommHub : public QObject
     void linkInfo(const QString &message);
     // A CAN link's frames, received or sent, in batches: the monitor's feed.
     void canFrames(fhmi::CanLink *link, const QList<fhmi::CanFrame> &frames, bool sent);
+    // A CAN link connected; the monitor starts afresh when it is the only one connected. Raised here so that a
+    // monitor attached before or after the card that creates the link hears it alike.
+    void canLinkConnected(fhmi::CanLink *link);
     void slaveLog(const QString &text, const QString &level);
     // A slave was added or removed.
     void slavesChanged();

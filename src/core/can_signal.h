@@ -53,8 +53,10 @@ struct CanSignalDef
     QVariant decode(const QByteArray &data) const;
     // The value description of the raw value in the data, or an empty string.
     QString valueText(const QByteArray &data) const;
-    // The raw bits for a physical value written as text: a number, or one of the value descriptions. A value
-    // outside the signal's bit range, or not a number, is an error naming the signal; nothing wraps.
+    // The raw bits for a value written as text: a decimal physical value, one of the value descriptions, or a
+    // 0x… hex number, which is the raw value itself (no factor, offset or physical limits; for a float signal the
+    // IEEE bits, for a signed one the two's complement bits). A value outside the signal's bit range, or not a
+    // number, is an error naming the signal; nothing wraps.
     std::optional<quint64> encode(const QString &value, QString *error = nullptr) const;
     std::optional<quint64> encode(double physical, QString *error = nullptr) const;
     // The raw bits GenSigStartValue stands for, or 0.

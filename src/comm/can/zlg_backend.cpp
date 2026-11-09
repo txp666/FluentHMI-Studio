@@ -2,12 +2,18 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
 #include <QtCore/QLibrary>
 
+#ifdef Q_OS_WIN
+#include <QtCore/qt_windows.h>
+#endif
+
 #include <algorithm>
 #include <cstring>
+#include <optional>
 
 namespace fhmi {
 
@@ -45,6 +51,273 @@ Api &api()
     return instance;
 }
 
+// What a PE file says about itself: the CPU it is built for and the DLLs it imports.
+struct PeInfo
+{
+    quint16 machine = 0;
+    QStringList imports;
+};
+
+constexpr quint16 kMachineX86 = 0x014C;
+constexpr quint16 kMachineX64 = 0x8664;
+constexpr quint16 kMachineArm64 = 0xAA64;
+
+// The machine this build expects of ZLG's DLLs; 0 skips the check (ZLG ships x86 and x64 only, so on any other
+// build there is nothing to compare with).
+#if defined(Q_PROCESSOR_X86_64)
+constexpr quint16 kBuildMachine = kMachineX64;
+#else
+constexpr quint16 kBuildMachine = 0;
+#endif
+
+quint32 readLe(const QByteArray &data, qsizetype offset, int size)
+{
+    if (offset < 0 || offset + size > data.size()) {
+        return 0;
+    }
+    quint32 value = 0;
+    for (int i = size - 1; i >= 0; --i) {
+        value = (value << 8) | quint8(data[offset + i]);
+    }
+    return value;
+}
+
+// Reads the PE header and the import table by hand: this must work on a DLL that Windows refuses to load, and
+// on the platforms where the checks are developed. Anything that does not fit the file gives std::nullopt, or
+// an empty import list.
+std::optional<PeInfo> readPe(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return std::nullopt;
+    }
+    const QByteArray data = file.readAll();
+    if (data.size() < 0x40 || data[0] != 'M' || data[1] != 'Z') {
+        return std::nullopt;
+    }
+    const qsizetype pe = readLe(data, 0x3C, 4);
+    if (pe <= 0 || pe + 24 > data.size() || data.mid(pe, 4) != QByteArray("PE\0\0", 4)) {
+        return std::nullopt;
+    }
+    PeInfo info;
+    info.machine = quint16(readLe(data, pe + 4, 2));
+
+    const int sectionCount = int(readLe(data, pe + 6, 2));
+    const int optionalSize = int(readLe(data, pe + 20, 2));
+    const qsizetype optional = pe + 24;
+    const quint32 magic = readLe(data, optional, 2);
+    // The import directory is the second data directory, after the optional header's fixed fields.
+    const qsizetype directory = optional + (magic == 0x20B ? 112 : 96) + 8;
+    if ((magic != 0x10B && magic != 0x20B) || directory + 8 > optional + optionalSize) {
+        return info;
+    }
+    const quint32 importRva = readLe(data, directory, 4);
+    if (importRva == 0) {
+        return info;
+    }
+    const qsizetype sections = optional + optionalSize;
+    const auto toOffset = [&](quint32 rva) -> qsizetype {
+        for (int i = 0; i < sectionCount; ++i) {
+            const qsizetype header = sections + qsizetype(i) * 40;
+            const quint32 virtualSize = readLe(data, header + 8, 4);
+            const quint32 virtualAddress = readLe(data, header + 12, 4);
+            const quint32 rawSize = readLe(data, header + 16, 4);
+            const quint32 rawPointer = readLe(data, header + 20, 4);
+            if (rva >= virtualAddress && rva < virtualAddress + std::max(virtualSize, rawSize)) {
+                return qsizetype(rawPointer) + (rva - virtualAddress);
+            }
+        }
+        return -1;
+    };
+    const qsizetype table = toOffset(importRva);
+    for (qsizetype entry = table; table >= 0 && entry + 20 <= data.size(); entry += 20) {
+        const quint32 nameRva = readLe(data, entry + 12, 4);
+        if (nameRva == 0) {
+            break;
+        }
+        const qsizetype name = toOffset(nameRva);
+        if (name < 0 || name >= data.size()) {
+            break;
+        }
+        const qsizetype end = data.indexOf('\0', name);
+        info.imports << QString::fromLatin1(data.mid(name, (end < 0 ? data.size() : end) - name));
+    }
+    return info;
+}
+
+// How a message names a file: relative to the program's folder (kerneldlls\USBCANFD.dll, zlgcan.dll), since the
+// card shows the message in a few wrapped lines; a file elsewhere keeps its whole path.
+QString shownPath(const QString &path)
+{
+    const QString relative = QDir(QCoreApplication::applicationDirPath()).relativeFilePath(path);
+    return QDir::toNativeSeparators(relative.startsWith(QLatin1String("..")) ? path : relative);
+}
+
+QString machineText(quint16 machine)
+{
+    switch (machine) {
+    case kMachineX86:
+        return ZlgBackend::tr("32 位");
+    case kMachineX64:
+        return ZlgBackend::tr("64 位 x64");
+    case kMachineArm64:
+        return ZlgBackend::tr("64 位 ARM64");
+    default:
+        return ZlgBackend::tr("未知架构 0x%1").arg(machine, 4, 16, QLatin1Char('0'));
+    }
+}
+
+// The runtime an imported DLL name points at, empty when it is not one ZLG's DLLs need.
+QString runtimeHint(const QStringList &imports)
+{
+    for (const QString &name : imports) {
+        const QString lower = name.toLower();
+        if (lower.startsWith(QLatin1String("msvcr120")) || lower.startsWith(QLatin1String("msvcp120"))) {
+            return ZlgBackend::tr("Visual C++ 2013 运行库 (x64)");
+        }
+        if (lower.startsWith(QLatin1String("msvcr90")) || lower.startsWith(QLatin1String("msvcp90")) ||
+            lower.startsWith(QLatin1String("mfc90"))) {
+            return ZlgBackend::tr("Visual C++ 2008 SP1 运行库 (x64，含 MFC)");
+        }
+    }
+    return {};
+}
+
+// The kernel DLL file name that kerneldlls/dll_cfg.ini gives a device type, empty when none does. Lines look like
+// "2=USBCANFD.dll 41 32 1" (index, dll, device type, max devices, flag) and may sit in any section.
+QString kernelDllFor(const QString &iniPath, quint32 deviceType)
+{
+    QFile file(iniPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QStringList lines = QString::fromLocal8Bit(file.readAll()).split(QLatin1Char('\n'));
+    for (const QString &raw : lines) {
+        const QString line = raw.trimmed();
+        const qsizetype equals = line.indexOf(QLatin1Char('='));
+        if (equals < 0 || line.startsWith(QLatin1Char(';')) || line.startsWith(QLatin1Char('#'))) {
+            continue;
+        }
+        const QStringList fields = line.mid(equals + 1).simplified().split(QLatin1Char(' '));
+        bool numeric = false;
+        if (fields.size() >= 2 && fields[1].toUInt(&numeric) == deviceType && numeric) {
+            return fields[0];
+        }
+    }
+    return {};
+}
+
+// What kerneldlls/dll_cfg.ini of the loaded zlgcan.dll says about a model, looked at before ZCAN_OpenDevice
+// reports only a null handle. Needs no Windows API.
+struct KernelDll
+{
+    QString problem; // the first problem found, empty when there is none
+    QString name;    // the kernel DLL the ini gives the model's device type
+    QString path;    // that DLL in kerneldlls, empty when it is not there
+};
+
+KernelDll findKernelDll(const QString &folder, const QString &model, quint32 deviceType)
+{
+    KernelDll dll;
+    const QDir kernelDir(QDir(folder).filePath(QStringLiteral("kerneldlls")));
+    const QString ini = kernelDir.filePath(QStringLiteral("dll_cfg.ini"));
+    if (!QFileInfo::exists(ini)) {
+        // clang-format off
+        dll.problem = ZlgBackend::tr("zlgcan.dll 旁边没有 kerneldlls\\dll_cfg.ini：请把接口函数库 zlgcan_x64 文件夹里的整个 kerneldlls 文件夹放到 %1")
+            .arg(QDir::toNativeSeparators(folder));
+        // clang-format on
+        return dll;
+    }
+    dll.name = kernelDllFor(ini, deviceType);
+    if (dll.name.isEmpty()) {
+        // clang-format off
+        dll.problem = ZlgBackend::tr("这版 zlgcan.dll 不认识 %1（设备类型 %2）：kerneldlls\\dll_cfg.ini 里没有它，请换用新版接口函数库")
+            .arg(model)
+            .arg(deviceType);
+        // clang-format on
+        return dll;
+    }
+    const QStringList files = kernelDir.entryList(QDir::Files);
+    for (const QString &file : files) {
+        if (file.compare(dll.name, Qt::CaseInsensitive) == 0) {
+            dll.path = kernelDir.filePath(file);
+            break;
+        }
+    }
+    return dll;
+}
+
+// Why the kerneldlls copy of a kernel DLL cannot load here: it is built for another CPU. Empty when it is not;
+// expectedMachine 0 skips the check.
+QString machineProblem(const QString &path, quint16 expectedMachine)
+{
+    const std::optional<PeInfo> pe = readPe(path);
+    if (expectedMachine == 0 || !pe || pe->machine == expectedMachine) {
+        return {};
+    }
+    return ZlgBackend::tr("%1 为 %2，本程序为 %3：kerneldlls 里的文件必须来自接口函数库的 zlgcan_x64 文件夹")
+        .arg(shownPath(path), machineText(pe->machine), machineText(expectedMachine));
+}
+
+#ifdef Q_OS_WIN
+QString modulePath(HMODULE module)
+{
+    wchar_t buffer[4096];
+    const DWORD length = GetModuleFileNameW(module, buffer, DWORD(std::size(buffer)));
+    return QDir::fromNativeSeparators(QString::fromWCharArray(buffer, int(length)));
+}
+
+// Loads the model's kernel DLL as zlgcan.dll does (read off its code): LoadLibraryA with the bare name first,
+// which finds a DLL a device driver installed in System32 or one beside the program, then the kerneldlls copy.
+// Returns the problem, or empty with *used set to the file that loaded. The module stays loaded, so zlgcan.dll's
+// own LoadLibraryA gets this same one.
+QString loadKernelDll(const KernelDll &dll, const QString &model, QString *used)
+{
+    if (HMODULE module = LoadLibraryA(dll.name.toLocal8Bit().constData())) {
+        *used = modulePath(module);
+        return {};
+    }
+    if (dll.path.isEmpty()) {
+        // clang-format off
+        return ZlgBackend::tr("找不到 %1，%2 需要它：接口函数库里没有这个文件，系统里也没有。请确认已安装 %2 的设备驱动，或把它放进 kerneldlls 文件夹")
+            .arg(dll.name, model);
+        // clang-format on
+    }
+    if (const QString problem = machineProblem(dll.path, kBuildMachine); !problem.isEmpty()) {
+        return problem;
+    }
+    if (HMODULE module = LoadLibraryA(QDir::toNativeSeparators(dll.path).toLocal8Bit().constData())) {
+        *used = modulePath(module);
+        return {};
+    }
+    const QString reason = qt_error_string(int(GetLastError()));
+    const std::optional<PeInfo> pe = readPe(dll.path);
+    const QString runtime = pe ? runtimeHint(pe->imports) : QString();
+    if (!runtime.isEmpty()) {
+        return ZlgBackend::tr("无法加载 %1：电脑缺少 %2，请从微软官网安装后重试").arg(shownPath(dll.path), runtime);
+    }
+    return ZlgBackend::tr("无法加载 %1：%2").arg(shownPath(dll.path), reason);
+}
+#endif
+
+// Why a zlgcan.dll that is there will not load, from its own header.
+QString loadFailure(const QString &path, const QString &reason)
+{
+    const std::optional<PeInfo> pe = readPe(path);
+    if (pe && kBuildMachine != 0 && pe->machine != kBuildMachine) {
+        // clang-format off
+        return ZlgBackend::tr("找到了 %1 但无法加载：它为 %2，本程序为 %3，请换用接口函数库 zlgcan_x64 文件夹里的 zlgcan.dll 和 kerneldlls")
+            .arg(shownPath(path), machineText(pe->machine), machineText(kBuildMachine));
+        // clang-format on
+    }
+    const QString runtime = pe ? runtimeHint(pe->imports) : QString();
+    if (!runtime.isEmpty()) {
+        return ZlgBackend::tr("找到了 %1 但无法加载：电脑缺少 %2，请从微软官网安装后重试")
+            .arg(shownPath(path), runtime);
+    }
+    return ZlgBackend::tr("找到了 %1 但无法加载：%2").arg(shownPath(path), reason);
+}
+
 bool loadApi(QString *error)
 {
     Api &a = api();
@@ -56,14 +329,26 @@ bool loadApi(QString *error)
                                  QDir(appDir).filePath(QStringLiteral("zlgcan/zlgcan.dll")),
                                  QStringLiteral("zlgcan")};
     bool loaded = false;
+    QString present;       // the first candidate that is a file, which then failed to load
+    QString presentReason; // and what QLibrary said about it
     for (const QString &candidate : candidates) {
         a.library.setFileName(candidate);
         if (a.library.load()) {
             loaded = true;
             break;
         }
+        if (present.isEmpty() && QFileInfo::exists(candidate)) {
+            present = candidate;
+            presentReason = a.library.errorString();
+        }
     }
     if (!loaded) {
+        if (!present.isEmpty()) {
+            if (error) {
+                *error = loadFailure(present, presentReason);
+            }
+            return false;
+        }
         if (error) {
             // clang-format off
             *error = ZlgBackend::tr("找不到 zlgcan.dll：请从致远电子官网下载 64 位的 CAN 接口卡二次开发接口函数库，把 zlgcan.dll 和 kerneldlls 文件夹放到 %1 或其中的 zlgcan 文件夹")
@@ -199,17 +484,34 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
     const quint64 key = deviceKey(model->deviceType, settings.deviceIndex);
     SharedDevice &shared = openDevices()[key];
     if (!shared.handle) {
-        // zlgcan.dll loads the kernel DLL of the device from its kerneldlls folder; ZLG's demos run from the folder
-        // that holds both, and the manuals do not say whether it looks beside itself or in the working directory.
-        const QString previous = QDir::currentPath();
-        QDir::setCurrent(a.folder);
+        // zlgcan.dll finds kerneldlls beside itself (GetModuleFileNameA on its own module), whatever the working
+        // directory is. ZCAN_OpenDevice only returns null when something goes wrong, so look first and name the cause.
+        const KernelDll dll = findKernelDll(a.folder, settings.zlgModel, model->deviceType);
+        QString problem = dll.problem;
+        QString used = dll.path.isEmpty() ? dll.name : dll.path; // the kernel DLL that will be used
+#ifdef Q_OS_WIN
+        if (problem.isEmpty()) {
+            problem = loadKernelDll(dll, settings.zlgModel, &used);
+        }
+#else
+        if (problem.isEmpty() && !dll.path.isEmpty()) {
+            problem = machineProblem(dll.path, kBuildMachine);
+        }
+#endif
+        if (!problem.isEmpty()) {
+            openDevices().remove(key);
+            return fail(problem);
+        }
         shared.handle = a.openDevice(model->deviceType, UINT(settings.deviceIndex), 0);
-        QDir::setCurrent(previous);
         if (!shared.handle) {
             openDevices().remove(key);
-            return fail(tr("无法打开 %1（设备 %2）：设备未连接、驱动未装或被其他程序占用")
+            // clang-format off
+            // The kernel DLL that loaded is named: an old one in System32 is used before the kerneldlls copy.
+            return fail(tr("无法打开 %1（设备 %2）：zlgcan.dll 和 %3 都已加载，请检查设备是否已连接、是否被 ZCANPRO 等其他程序占用、驱动是否与这版接口函数库匹配")
                             .arg(settings.zlgModel)
-                            .arg(settings.deviceIndex));
+                            .arg(settings.deviceIndex)
+                            .arg(shownPath(used)));
+            // clang-format on
         }
     }
     ++shared.users;

@@ -82,6 +82,7 @@ struct CanNames
 {
     QStringList keys;
     QStringList messages;
+    QList<CanSignalSet> sets; // one per CAN card, to resolve a canId as the link does
 };
 
 void collectCanCards(const QJsonArray &widgets, QList<QJsonObject> &out)
@@ -125,11 +126,33 @@ CanNames canNames(const Project *project)
         if (const auto set = CanSignalSet::build(dbc, card.value(QStringLiteral("canSignals")).toString())) {
             names.keys += set->signalKeys();
             names.messages += set->messageNames();
+            names.sets.append(*set);
         }
     }
     names.keys.removeDuplicates();
     names.messages.removeDuplicates();
     return names;
+}
+
+// What a canId stands for on the project's CAN cards, resolved as CanLink::prepare does. A message with signals
+// takes dataType and byteOrder from nowhere (its bytes come from the signals); a DBC message also takes its FD
+// from the DBC, while an ID with inline signals still honours the command's canFd.
+struct CanTargetKind
+{
+    bool hasSignals = false;
+    bool fromDbc = false;
+};
+
+CanTargetKind canTargetKind(const CanNames &names, const QString &canId)
+{
+    CanTargetKind kind;
+    for (const CanSignalSet &set : names.sets) {
+        if (const auto target = set.target(canId); target && target->hasSignals) {
+            kind.hasSignals = true;
+            kind.fromDbc = kind.fromDbc || !target->name.isEmpty();
+        }
+    }
+    return kind;
 }
 
 void complete(FluentQt::LineEdit *edit, const QStringList &words)
@@ -1120,6 +1143,14 @@ void PropertyEditor::updateVisibility()
         const QSet<QString> shown = modeVisibility().value(mode);
         for (const QString &field : modeFields()) {
             setRowVisible(field, shown.contains(field));
+        }
+        if (mode == QLatin1String("CAN")) {
+            // The link ignores these for a message with signals; show them only where they still matter.
+            const CanTargetKind kind =
+                canTargetKind(canNames(m_project), m_item->propertyValue(QStringLiteral("canId")).toString());
+            setRowVisible(QStringLiteral("dataType"), !kind.hasSignals);
+            setRowVisible(QStringLiteral("byteOrder"), !kind.hasSignals);
+            setRowVisible(QStringLiteral("canFd"), !kind.fromDbc);
         }
         const QString toggle = sendToggle(meta.typeName);
         // A Modbus-mode control sends whether or not its toggle is on, so its settings stay visible.
