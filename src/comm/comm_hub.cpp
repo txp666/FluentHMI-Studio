@@ -48,6 +48,11 @@ void CommHub::addLink(Link *link)
     if (auto *can = qobject_cast<CanLink *>(link)) {
         connect(can, &CanLink::canFrames, this,
                 [this, can](const QList<CanFrame> &frames, bool sent) { emit canFrames(can, frames, sent); });
+        connect(can, &Link::connectedChanged, this, [this, can](bool connected) {
+            if (connected) {
+                emit canLinkConnected(can);
+            }
+        });
     }
     connect(link, &Link::connectedChanged, this, [this, link](bool connected) {
         if (connected) {

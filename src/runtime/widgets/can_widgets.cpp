@@ -17,6 +17,7 @@
 #include <QtCore/QAbstractTableModel>
 #include <QtCore/QDir>
 #include <QtCore/QLocale>
+#include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QTimer>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
@@ -128,6 +129,13 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_hint->setWordWrap(true);
     m_hint->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_hint->hide();
+
+    // Under the fields, in the room the card has there (the base layout is header, fields, stretch).
+    m_detail = new FluentQt::CaptionLabel(this);
+    m_detail->setWordWrap(true);
+    m_detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_detail->hide();
+    static_cast<QVBoxLayout *>(layout())->insertWidget(2, m_detail);
 
     m_statusTimer = new QTimer(this);
     m_statusTimer->setInterval(kStatusRefreshMs);
@@ -276,21 +284,31 @@ void CanConfigCardWidget::refreshChannels(bool announce)
     if (adapter == CanAdapter::Zlg) {
         return;
     }
-    const QString current = m_channel->currentText();
+    QString current = m_channel->currentText();
+    // A listed entry (it carries a handle) that is gone from the new list is stale; a typed channel is kept.
+    const int listed = m_channel->findText(current);
+    const bool wasListed = listed >= 0 && m_channel->itemData(listed).isValid();
     QString error;
     const QList<CanChannel> channels = CanAdapter::channels(adapter, &error);
     m_channel->clear();
     for (const CanChannel &channel : channels) {
         m_channel->addItem(channel.label, QIcon(), channel.id);
     }
-    if (m_channel->findText(current) >= 0 || !current.isEmpty()) {
+    if (wasListed && m_channel->findText(current) < 0) {
+        current.clear();
+    }
+    if (!current.isEmpty()) {
         m_channel->setCurrentText(current);
-    } else if (!channels.isEmpty()) {
-        m_channel->setCurrentText(channels.first().label);
+    } else {
+        m_channel->setCurrentText(channels.isEmpty() ? QString() : channels.first().label);
     }
     // Only when asked: a project for a PEAK adapter also opens where its library is not installed.
-    if (announce && !error.isEmpty() && isLive()) {
-        context()->notify(tr("CAN"), error, NotifyType::Warning, 4000);
+    if (announce && isLive()) {
+        if (!error.isEmpty()) {
+            context()->notify(tr("CAN"), error, NotifyType::Warning, 4000);
+        } else if (channels.isEmpty()) {
+            context()->notify(tr("CAN"), tr("没有找到 %1 通道").arg(adapter), NotifyType::Warning, 4000);
+        }
     }
 }
 
@@ -307,11 +325,21 @@ void CanConfigCardWidget::onAttached()
         } else {
             m_statusTimer->stop();
             setConnectedUi(false, tr("未连接"));
+            showDetail(QString(), false);
         }
         showConnection();
     }));
     live(connect(m_link, &CanLink::busStateChanged, this, &CanConfigCardWidget::showConnection));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
+        // A refused or dropped connection stays explained on the card; errors while connected are toasts only.
+        if (!m_link->isConnected()) {
+            showFailure(message);
+        }
+        if (message == m_lastError && m_lastErrorAt.isValid() && m_lastErrorAt.elapsed() < 4000) {
+            return;
+        }
+        m_lastError = message;
+        m_lastErrorAt.start();
         context()->notify(tr("CAN 错误"), message, NotifyType::Error, 4000);
     }));
     LinkCardBase::onAttached();
@@ -333,6 +361,7 @@ void CanConfigCardWidget::onDetached()
     }
     LinkCardBase::onDetached();
     m_shownStatus.clear();
+    showDetail(QString(), false);
     setFieldsEnabled(true);
 }
 
@@ -353,10 +382,27 @@ void CanConfigCardWidget::toggleConnection()
     }
     QString error;
     if (!m_link->open(settings(), dbc, text("canSignals"), text("canFilter"), &error)) {
-        // The reason stays on the status line; the link has logged it and the card shown it.
-        setConnectedUi(false, error, error);
-        m_shownStatus.clear();
+        showFailure(error); // the link has logged it and toasted it too
     }
+}
+
+void CanConfigCardWidget::showFailure(const QString &reason)
+{
+    setConnectedUi(false, tr("连接失败"), reason);
+    m_shownStatus.clear();
+    showDetail(reason, true);
+}
+
+void CanConfigCardWidget::showDetail(const QString &text, bool error)
+{
+    m_detail->setText(text);
+    // Fluent's text and critical colours.
+    if (error) {
+        m_detail->setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4));
+    } else {
+        m_detail->setTextColor(QColor(0, 0, 0, 228), QColor(255, 255, 255));
+    }
+    m_detail->setVisible(!text.isEmpty());
 }
 
 void CanConfigCardWidget::showConnection()
@@ -364,15 +410,19 @@ void CanConfigCardWidget::showConnection()
     if (!m_link || !m_link->isConnected()) {
         return;
     }
-    QString status = QStringLiteral("%1 · %2 · %3")
-                         .arg(m_link->description(), tr("收 %1").arg(count(m_link->receivedCount())),
-                              tr("发 %1").arg(count(m_link->sentCount())));
+    // The header says connected (and how the bus is when not normally); the counters go below the fields. The
+    // adapter, channel and bitrate are in the fields; the tooltip has them with the rest.
+    QString state = tr("已连接");
     if (m_link->busState() != CanBusState::Normal) {
-        status += QStringLiteral(" · ") + canBusStateText(m_link->busState());
+        state += QStringLiteral(" · ") + canBusStateText(m_link->busState());
     }
-    if (status != m_shownStatus) {
-        m_shownStatus = status;
-        setConnectedUi(true, status, status);
+    const QString counters = QStringLiteral("%1 · %2").arg(tr("收 %1").arg(count(m_link->receivedCount())),
+                                                           tr("发 %1").arg(count(m_link->sentCount())));
+    const QString tip = m_link->description() + QStringLiteral(" · ") + state + QStringLiteral(" · ") + counters;
+    if (tip != m_shownStatus) {
+        m_shownStatus = tip;
+        setConnectedUi(true, state, tip);
+        showDetail(counters, false);
     }
 }
 
@@ -387,15 +437,20 @@ class CanMonitorModel : public QAbstractTableModel
   public:
     enum Column
     {
-        Direction,
         Id,
-        Name,
+        Direction,
+        Type,
         Length,
         Data,
         Period,
         Count,
+        Name,
         Signals,
     };
+    // What a header click sorts by (the numbers as numbers), and how many lines a row's data takes.
+    static constexpr int SortRole = Qt::UserRole;
+    static constexpr int LinesRole = Qt::UserRole + 1;
+    static constexpr int BytesPerLine = 8;
 
     using QAbstractTableModel::QAbstractTableModel;
 
@@ -453,7 +508,7 @@ class CanMonitorModel : public QAbstractTableModel
         }
     }
 
-    // New rows go in at their place in ID order; the rest repaint once.
+    // New rows go in at their place in ID order (the view sorts them as it is asked to); the rest repaint once.
     void refresh()
     {
         if (!m_dirty) {
@@ -490,7 +545,7 @@ class CanMonitorModel : public QAbstractTableModel
             last = i;
         }
         if (first >= 0) {
-            emit dataChanged(index(first, 0), index(last, columnCount() - 1), {Qt::DisplayRole});
+            emit dataChanged(index(first, 0), index(last, columnCount() - 1), {Qt::DisplayRole, SortRole, LinesRole});
         }
     }
 
@@ -515,25 +570,45 @@ class CanMonitorModel : public QAbstractTableModel
                        ? QVariant(Qt::AlignRight | Qt::AlignVCenter)
                        : QVariant(Qt::AlignLeft | Qt::AlignVCenter);
         }
+        if (role == LinesRole) {
+            return row.lines();
+        }
+        if (role == SortRole) {
+            switch (index.column()) {
+            case Id:
+                return row.sortKey();
+            case Direction:
+                return row.sent;
+            case Length:
+                return int(row.frame.data.size());
+            case Period:
+                return row.intervalCount > 0 ? row.meanInterval() : -1.0;
+            case Count:
+                return row.count;
+            default:
+                break; // the text sorts as text
+            }
+            return data(index, Qt::DisplayRole);
+        }
         if (role != Qt::DisplayRole && role != Qt::ToolTipRole) {
             return QVariant();
         }
         switch (index.column()) {
+        case Id:
+            return Can::idText(row.id);
         case Direction:
             return row.sent ? CanLink::tr("发") : CanLink::tr("收");
-        case Id: {
-            QString id = Can::idText(row.id);
-            if (row.frame.fd) {
-                id += QStringLiteral(" FD");
-            }
-            return id;
-        }
+        case Type:
+            // Not translated: these are the names the bus tools use.
+            return row.frame.rtr  ? QStringLiteral("RTR")
+                   : row.frame.fd ? (row.frame.brs ? QStringLiteral("FD BRS") : QStringLiteral("FD"))
+                                  : QStringLiteral("Data");
         case Name:
             return row.name;
         case Length:
             return int(row.frame.data.size());
         case Data:
-            return row.frame.rtr ? QStringLiteral("RTR") : toHexString(row.frame.data);
+            return row.dataText();
         case Period:
             return row.intervalCount > 0 ? QString::number(row.meanInterval(), 'f', 1) : QString();
         case Count:
@@ -550,10 +625,12 @@ class CanMonitorModel : public QAbstractTableModel
             return QVariant();
         }
         switch (section) {
-        case Direction:
-            return CanLink::tr("方向");
         case Id:
             return QStringLiteral("ID");
+        case Direction:
+            return CanLink::tr("方向");
+        case Type:
+            return CanLink::tr("类型");
         case Name:
             return CanLink::tr("名称");
         case Length:
@@ -589,6 +666,22 @@ class CanMonitorModel : public QAbstractTableModel
         quint64 key() const { return (id.key() << 1) | (sent ? 1 : 0); }
         // ID order; a standard ID before the extended one of the same value, received before sent.
         std::tuple<quint32, bool, bool> order() const { return {id.id, id.extended, sent}; }
+        quint64 sortKey() const { return (quint64(id.id) << 2) | (quint64(id.extended) << 1) | quint64(sent); }
+        // Hex bytes, BytesPerLine to a line; nothing for a remote frame, which has no data.
+        QString dataText() const
+        {
+            QStringList lines;
+            if (!frame.rtr) {
+                for (qsizetype at = 0; at < frame.data.size(); at += BytesPerLine) {
+                    lines << toHexString(frame.data.mid(at, BytesPerLine));
+                }
+            }
+            return lines.join(QLatin1Char('\n'));
+        }
+        int lines() const
+        {
+            return frame.rtr ? 1 : std::max(1, int((frame.data.size() + BytesPerLine - 1) / BytesPerLine));
+        }
         double meanInterval() const
         {
             double sum = 0;
@@ -611,8 +704,15 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(2, 2, 2, 2);
     m_model = new CanMonitorModel(this);
+    m_sorted = new QSortFilterProxyModel(this);
+    m_sorted->setSourceModel(m_model);
+    m_sorted->setSortRole(CanMonitorModel::SortRole);
+    // Rows are updated ten times a second; with this the proxy keeps the sort as they change.
+    m_sorted->setDynamicSortFilter(true);
     m_view = new FluentQt::TableView(this);
-    m_view->setModel(m_model);
+    m_view->setModel(m_sorted);
+    m_view->setSortingEnabled(true);
+    m_view->sortByColumn(CanMonitorModel::Id, Qt::AscendingOrder);
     m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_view->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_view->verticalHeader()->setVisible(false);
@@ -630,6 +730,37 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_refresh = new QTimer(this);
     m_refresh->setInterval(kMonitorRefreshMs);
     connect(m_refresh, &QTimer::timeout, m_model, [this]() { m_model->refresh(); });
+    // Whatever moves or changes a row (a new one, a longer frame, a sort) can change which height it needs.
+    for (auto signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
+        connect(m_sorted, signal, this, [this]() { fitRowHeights(); });
+    }
+    connect(m_sorted, &QAbstractItemModel::dataChanged, this, [this]() { fitRowHeights(); });
+    connect(m_sorted, &QAbstractItemModel::layoutChanged, this, [this]() { fitRowHeights(); });
+    connect(m_sorted, &QAbstractItemModel::modelReset, this, [this]() { fitRowHeights(); });
+}
+
+void CanMonitorWidget::fitRowHeights()
+{
+    if (m_heightsQueued) {
+        return;
+    }
+    m_heightsQueued = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_heightsQueued = false;
+        QHeaderView *header = m_view->verticalHeader();
+        const int base = header->defaultSectionSize();
+        for (int row = 0; row < m_sorted->rowCount(); ++row) {
+            const int lines = m_sorted->index(row, 0).data(CanMonitorModel::LinesRole).toInt();
+            // The delegate knows what its lines and padding take; a one-line row keeps the default height.
+            const int height =
+                lines > 1
+                    ? std::max(base, m_view->sizeHintForIndex(m_sorted->index(row, CanMonitorModel::Data)).height())
+                    : base;
+            if (header->sectionSize(row) != height) {
+                header->resizeSection(row, height);
+            }
+        }
+    });
 }
 
 void CanMonitorWidget::apply()
@@ -637,7 +768,24 @@ void CanMonitorWidget::apply()
     m_model->setShowSignals(flag("showSignals"));
     QHeaderView *header = m_view->horizontalHeader();
     header->setStretchLastSection(true);
-    static constexpr int widths[] = {40, 96, 90, 40, 150, 64, 60};
+    // Wide enough for the widest thing a column holds, and for its header with the sort arrow.
+    const QFontMetrics body = m_view->fontMetrics();
+    const QFontMetrics head(header->font());
+    const int pad = 24;
+    const auto fit = [&](int column, int contentWidth) {
+        const QString title = m_model->headerData(column, Qt::Horizontal, Qt::DisplayRole).toString();
+        return std::max(contentWidth + pad, head.horizontalAdvance(title) + pad + 12);
+    };
+    const int widths[] = {
+        fit(CanMonitorModel::Id, int(body.horizontalAdvance(QStringLiteral("0x18FF1001")) * 1.2)),
+        fit(CanMonitorModel::Direction, body.horizontalAdvance(QStringLiteral("00"))),
+        fit(CanMonitorModel::Type, body.horizontalAdvance(QStringLiteral("FD BRS"))),
+        fit(CanMonitorModel::Length, body.horizontalAdvance(QStringLiteral("00000"))),
+        fit(CanMonitorModel::Data, body.horizontalAdvance(QStringLiteral("00 00 00 00 00 00 00 00"))),
+        fit(CanMonitorModel::Period, body.horizontalAdvance(QStringLiteral("0000.0"))),
+        fit(CanMonitorModel::Count, body.horizontalAdvance(QStringLiteral("0,000,000"))),
+        fit(CanMonitorModel::Name, body.horizontalAdvance(QStringLiteral("MessageName_00"))),
+    };
     for (int column = 0; column < int(std::size(widths)) && column < m_model->columnCount(); ++column) {
         header->setSectionResizeMode(column, QHeaderView::Interactive);
         header->resizeSection(column, widths[column]);
@@ -646,8 +794,18 @@ void CanMonitorWidget::apply()
 
 void CanMonitorWidget::onAttached()
 {
-    live(connect(context()->hub(), &CommHub::canFrames, this,
-                 [this](CanLink *link, const QList<CanFrame> &frames, bool sent) { m_model->add(link, frames, sent); }));
+    // The first CAN link to connect starts afresh; a second card connecting keeps what the first one has shown.
+    live(connect(context()->hub(), &CommHub::canLinkConnected, this, [this](CanLink *link) {
+        const QList<Link *> connected = context()->hub()->connectedLinks();
+        const bool others = std::any_of(connected.begin(), connected.end(),
+                                        [link](const Link *other) { return other != link && other->isCan(); });
+        if (!others) {
+            m_model->clear();
+        }
+    }));
+    live(
+        connect(context()->hub(), &CommHub::canFrames, this,
+                [this](CanLink *link, const QList<CanFrame> &frames, bool sent) { m_model->add(link, frames, sent); }));
     m_refresh->start();
 }
 
