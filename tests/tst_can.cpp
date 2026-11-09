@@ -196,6 +196,33 @@ class TestCan : public QObject
         QVERIFY(!temp.encode(QStringLiteral("-130"), &error));  // raw -65
     }
 
+    // A binding's Motorola LSB start counts from the signal's LSB; it becomes DBC's MSB start before decoding.
+    // Cases checked by hand, the data as frame bytes in hex.
+    void motorolaLsbStart()
+    {
+        struct Case
+        {
+            int lsbStart;
+            int length;
+            int msbStart;
+            const char *data;
+            qint64 value;
+        };
+        const Case cases[] = {{8, 16, 7, "1234", 0x1234}, {8, 12, 3, "0ABC", 0xABC}, {4, 4, 7, "A0", 0xA}};
+        for (const Case &c : cases) {
+            const auto msb = motorolaMsbStart(c.lsbStart, c.length);
+            QVERIFY(msb);
+            QCOMPARE(*msb, c.msbStart);
+            CanSignalDef signal;
+            signal.start = *msb;
+            signal.length = c.length;
+            signal.motorola = true;
+            QVERIFY(signal.validate(nullptr));
+            QCOMPARE(signal.decode(hex(QLatin1String(c.data))).toLongLong(), c.value);
+        }
+        QVERIFY(!motorolaMsbStart(0, 16)); // its MSB would be in byte -1
+    }
+
     void timingVectors()
     {
         const QJsonObject data = vectors(QStringLiteral("can_timing_vectors.json"));

@@ -330,6 +330,22 @@ bool CanSignalDef::validate(QString *error) const
     return true;
 }
 
+std::optional<int> motorolaMsbStart(int lsbStart, int length)
+{
+    if (lsbStart < 0 || length < 1 || length > 64) {
+        return std::nullopt;
+    }
+    int position = lsbStart;
+    for (int i = 1; i < length; ++i) {
+        position = position % 8 == 7 ? position - 15 : position + 1;
+        if (position < 0) {
+            // Checked at every step: C++'s % of a negative position would walk it back into byte 0.
+            return std::nullopt;
+        }
+    }
+    return position;
+}
+
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
