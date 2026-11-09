@@ -57,7 +57,7 @@ Both use the same project format, and their widget and protocol rules match:
 
 The differences are in how they are built and how they export apps:
 
-| | FluentHMI Studio 0.5.0 | PyQt UI Designer 0.5.0 |
+| | FluentHMI Studio 0.5.1 | PyQt UI Designer 0.5.0 |
 | --- | --- | --- |
 | Implementation | C++17 / Qt 6, compiled natively | Python / PyQt5 (Qt 5), packaged with Nuitka |
 | Exporting an app | Copies a prebuilt runner and adds the project and images, about 0.3 s, no Python or compiler needed | Generates Python source, then compiles it with Nuitka; the downloaded designer needs Python and build tools installed separately to package |
@@ -235,7 +235,7 @@ On macOS this produces `FluentHMI Studio.app`, with the runner at `Contents/Help
 
 To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`, optionally add `docs/release-notes/vX.Y.Z.md`, then push a `vX.Y.Z` tag. The `Release` workflow builds, tests and packages on Windows, macOS (universal) and Linux (x64 and arm64, on Ubuntu 24.04). For each .deb it checks the package name, version, architecture and dependencies, lets apt resolve it, installs it and exports the demo with it, and runs that export in a clean Ubuntu 24.04 container with only the system libraries listed above. It only publishes the GitHub Release when everything passes. Started by hand, or by a pull request that changes the packaging, it packages and checks without publishing.
 
-## Current status (0.5.0)
+## Current status (0.5.1)
 
 Done: all 32 widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP / CAN preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows, macOS and Linux (x64 and arm64 .deb) packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
