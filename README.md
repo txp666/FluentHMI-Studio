@@ -57,7 +57,7 @@ Both use the same project format, and their widget and protocol rules match:
 
 The differences are in how they are built and how they export apps:
 
-| | FluentHMI Studio 0.5.0 | PyQt UI Designer 0.4.0 |
+| | FluentHMI Studio 0.5.0 | PyQt UI Designer 0.5.0 |
 | --- | --- | --- |
 | Implementation | C++17 / Qt 6, compiled natively | Python / PyQt5 (Qt 5), packaged with Nuitka |
 | Exporting an app | Copies a prebuilt runner and adds the project and images, about 0.3 s, no Python or compiler needed | Generates Python source, then compiles it with Nuitka; the downloaded designer needs Python and build tools installed separately to package |

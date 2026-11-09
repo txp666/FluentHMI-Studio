@@ -55,7 +55,7 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 不同之处在实现和导出方式：
 
-| | FluentHMI Studio 0.5.0 | PyQt UI Designer 0.4.0 |
+| | FluentHMI Studio 0.5.0 | PyQt UI Designer 0.5.0 |
 | --- | --- | --- |
 | 实现 | C++17 / Qt 6，原生编译 | Python / PyQt5（Qt 5），用 Nuitka 打包 |
 | 导出应用 | 复制预编译的运行器，再放入工程和图片，约 0.3 秒，不需要 Python 和编译器 | 生成 Python 源码，再用 Nuitka 编译；下载的设计器要打包时需另装 Python 与编译工具 |
