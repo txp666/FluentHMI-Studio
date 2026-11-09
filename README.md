@@ -158,7 +158,7 @@ Nothing is bundled; what each adapter needs:
 | Adapter | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | PEAK (PCAN-USB, PCAN-USB FD) | PEAK's device driver, which installs `PCANBasic.dll` | the PCBUSB library from [mac-can.com](https://mac-can.github.io/drivers/libPCBUSB.html) (`libPCBUSB.dylib` in `/usr/local/lib`) | choose SocketCAN: the kernel's `peak_usb` driver |
-| ZLG (USBCAN-I/II, USBCAN-E-U family, USBCANFD) | ZLG's device driver, and from ZLG's 64-bit "CAN interface function library" `zlgcan.dll` with its `kerneldlls` folder, next to the program or in a `zlgcan` folder beside it | – | – |
+| ZLG (USBCAN-I/II, USBCAN-E-U family, USBCANFD) | ZLG's device driver, and from the `zlgcan_x64` folder of ZLG's "CAN(FD) interface function library" `zlgcan.dll` with its `kerneldlls` folder, next to the program or in a `zlgcan` folder beside it. The library needs the Visual C++ 2013 x64 runtime (USBCAN-I/II also the 2008 x64 runtime with MFC). zlgcan.dll looks for each device's kernel DLL on the system path first, then in `kerneldlls`; the library has none for the USBCAN-E-U family (`USBCAN_E_64.dll` and the like). The card names any missing file when it connects | – | – |
 | SocketCAN | – | – | built in; the interface's bitrate is set with `ip link` (the card shows the command, e.g. `sudo ip link set can0 up type can bitrate 500000 sample-point 0.875`) |
 | slcan (CANable, CANUSB and other Lawicel-protocol adapters) | the adapter's serial port | the adapter's serial port | the adapter's serial port; classic CAN only, 10k–1M |
 
@@ -241,7 +241,7 @@ Done: all 32 widgets, drag-and-drop design, grid snapping, zoom, alignment and d
 
 The MQTT link is a built-in MQTT 3.1.1 client (based on QSslSocket, so the Qt MQTT module isn't needed): it supports username and password, QoS 0/1/2, `+`/`#` wildcard subscriptions, and TLS with the system certificate store, and it reconnects automatically if a connection that succeeded drops. As in the Python version, each message is treated as one frame, and a payload that is a single plain number is also given with the topic name as its key.
 
-Tested end to end on macOS: data display, charts and commands with simulated TCP and MQTT devices, running exported apps, and unpacking and running a package built on the same machine. The Windows package runs an export self-check in the release workflow (Windows Server 2022), and unpacking and running it, exporting, and running the exported app have been checked in a Windows 11 ARM64 virtual machine (under x64 emulation). Not verified yet: connecting to a real MQTT broker, and TLS. CAN has been checked end to end with a simulated slcan adapter only; the PEAK, ZLG and SocketCAN adapters have not been tried on hardware yet.
+Tested end to end on macOS: data display, charts and commands with simulated TCP and MQTT devices, running exported apps, and unpacking and running a package built on the same machine. The Windows package runs an export self-check in the release workflow (Windows Server 2022), and unpacking and running it, exporting, and running the exported app have been checked in a Windows 11 ARM64 virtual machine (under x64 emulation). Not verified yet: connecting to a real MQTT broker, and TLS. CAN has been checked end to end with a simulated slcan adapter, and a user has run a PCAN-USB adapter on a real bus; the ZLG and SocketCAN adapters have not been confirmed on hardware yet.
 
 Roadmap:
 

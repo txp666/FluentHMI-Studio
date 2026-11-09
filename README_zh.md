@@ -156,7 +156,7 @@ sudo usermod -aG dialout $USER
 | 适配器 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | PEAK（PCAN-USB、PCAN-USB FD） | PEAK 的设备驱动（会装好 `PCANBasic.dll`） | [mac-can.com](https://mac-can.github.io/drivers/libPCBUSB.html) 的 PCBUSB 库（`libPCBUSB.dylib` 装在 `/usr/local/lib`） | 选 SocketCAN：内核自带 `peak_usb` 驱动 |
-| ZLG（USBCAN-I/II、USBCAN-E-U 系列、USBCANFD） | 致远的设备驱动，以及致远“CAN 接口卡二次开发接口函数库”（64 位）里的 `zlgcan.dll` 和 `kerneldlls` 文件夹，放在程序旁边或旁边的 `zlgcan` 文件夹里 | – | – |
+| ZLG（USBCAN-I/II、USBCAN-E-U 系列、USBCANFD） | 致远的设备驱动，以及致远“CAN(FD) 接口卡二次开发接口函数库” `zlgcan_x64` 文件夹里的 `zlgcan.dll` 和 `kerneldlls` 文件夹，放在程序旁边或旁边的 `zlgcan` 文件夹里。函数库需要 Visual C++ 2013 x64 运行库（USBCAN-I/II 还要 2008 x64 含 MFC 的运行库）。zlgcan.dll 先在系统路径里找各设备的内核 DLL，再找 `kerneldlls`；USBCAN-E-U 系列的（`USBCAN_E_64.dll` 等）函数库里没有。连接时卡片会指出缺哪个文件 | – | – |
 | SocketCAN | – | – | 系统自带；接口的波特率用 `ip link` 设置（卡片上会给出命令，如 `sudo ip link set can0 up type can bitrate 500000 sample-point 0.875`） |
 | slcan（CANable、CANUSB 等 Lawicel 协议的适配器） | 适配器的串口 | 适配器的串口 | 适配器的串口；只支持经典 CAN，10k–1M |
 
@@ -239,7 +239,7 @@ macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHM
 
 MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQTT 模块）：支持用户名密码、QoS 0/1/2、`+`/`#` 通配符订阅，TLS 使用系统证书库；连接成功后若断开会自动重连。与 Python 版一致，每条消息视为一帧，纯数值载荷还会以主题名为键再给出一份。
 
-已在 macOS 上做过端到端验证：TCP 和 MQTT 模拟设备的数据显示、曲线和命令下发，导出应用的运行，以及在本机打包后解压运行。Windows 包在发布工作流（Windows Server 2022）中做导出自检，并在 Windows 11 ARM64 虚拟机上（x64 仿真）验证过解压运行、导出和导出应用的运行。尚未验证的：连接真实 MQTT broker 和 TLS。CAN 只用模拟的 slcan 适配器做过端到端验证，PEAK、ZLG 和 SocketCAN 适配器还没有接真实硬件试过。
+已在 macOS 上做过端到端验证：TCP 和 MQTT 模拟设备的数据显示、曲线和命令下发，导出应用的运行，以及在本机打包后解压运行。Windows 包在发布工作流（Windows Server 2022）中做导出自检，并在 Windows 11 ARM64 虚拟机上（x64 仿真）验证过解压运行、导出和导出应用的运行。尚未验证的：连接真实 MQTT broker 和 TLS。CAN 用模拟的 slcan 适配器做过端到端验证，用户在真实总线上用过 PCAN-USB；ZLG 和 SocketCAN 适配器还没有在真实硬件上确认过。
 
 路线图：
 
