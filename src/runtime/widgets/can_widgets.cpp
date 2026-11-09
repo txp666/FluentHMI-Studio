@@ -6,6 +6,7 @@
 #include "runtime/runtime_context.h"
 #include "runtime/ui_helpers.h"
 
+#include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/Views/ItemViews.h>
 #include <FluentQtWidgets/Widgets/Button.h>
@@ -860,23 +861,38 @@ void CanMonitorWidget::apply()
     }
     QHeaderView *header = m_view->horizontalHeader();
     header->setStretchLastSection(true);
-    // Wide enough for the widest thing a column holds, and for its header with the sort arrow.
-    const QFontMetrics body = m_view->fontMetrics();
+    // Wide enough for the widest thing a column holds, and for its header with the sort arrow. The cells are painted
+    // in FluentQtWidgets' item font (its families at 13 px), not in the view's own font, which can be smaller
+    // (Windows' 9 pt Segoe UI is 12 px; the extended IDs and the data were cut off): measure with the larger.
+    QFont itemFont;
+    itemFont.setFamilies(FluentQt::FluentConfig::instance()->fontFamilies());
+    itemFont.setPixelSize(13);
+    const QFontMetrics item(itemFont);
+    const QFontMetrics own = m_view->fontMetrics();
     const QFontMetrics head(header->font());
-    const int pad = 24;
+    const auto advance = [&](const QString &text) {
+        return std::max(item.horizontalAdvance(text), own.horizontalAdvance(text));
+    };
+    // FluentQtWidgets' table pads each cell 16 px a side, and the style a pixel more; a header has 5 px a side and the
+    // sort arrow.
+    const int cellPad = 36;
+    const int headPad = 36;
     const auto fit = [&](int column, int contentWidth) {
         const QString title = m_model->headerData(column, Qt::Horizontal, Qt::DisplayRole).toString();
-        return std::max(contentWidth + pad, head.horizontalAdvance(title) + pad + 12);
+        const int titleWidth = std::max(head.horizontalAdvance(title), item.horizontalAdvance(title));
+        return std::max(contentWidth + cellPad, titleWidth + headPad);
     };
+    // Hex is measured with D, one of its widest digits (0x18FF50E5 is wider than 0x18FF1001); an extended ID starts
+    // with 0 or 1.
     const int widths[] = {
-        fit(CanMonitorModel::Id, int(body.horizontalAdvance(QStringLiteral("0x18FF1001")) * 1.2)),
-        fit(CanMonitorModel::Direction, body.horizontalAdvance(QStringLiteral("00"))),
-        fit(CanMonitorModel::Type, body.horizontalAdvance(QStringLiteral("FD BRS"))),
-        fit(CanMonitorModel::Length, body.horizontalAdvance(QStringLiteral("00000"))),
-        fit(CanMonitorModel::Data, body.horizontalAdvance(QStringLiteral("00 00 00 00 00 00 00 00"))),
-        fit(CanMonitorModel::Period, body.horizontalAdvance(QStringLiteral("0000.0"))),
-        fit(CanMonitorModel::Count, body.horizontalAdvance(QStringLiteral("0,000,000"))),
-        fit(CanMonitorModel::Name, body.horizontalAdvance(QStringLiteral("MessageName_00"))),
+        fit(CanMonitorModel::Id, advance(QStringLiteral("0x1DDDDDDD"))),
+        fit(CanMonitorModel::Direction, advance(QStringLiteral("00"))),
+        fit(CanMonitorModel::Type, advance(QStringLiteral("FD BRS"))),
+        fit(CanMonitorModel::Length, advance(QStringLiteral("00"))),
+        fit(CanMonitorModel::Data, advance(QStringLiteral("DD DD DD DD DD DD DD DD"))),
+        fit(CanMonitorModel::Period, advance(QStringLiteral("0000.0"))),
+        fit(CanMonitorModel::Count, advance(QStringLiteral("0,000,000"))),
+        fit(CanMonitorModel::Name, advance(QStringLiteral("MessageName_00"))),
     };
     for (int column = 0; column < int(std::size(widths)) && column < m_model->columnCount(); ++column) {
         header->setSectionResizeMode(column, QHeaderView::Interactive);

@@ -27,12 +27,14 @@
 #include <QtCore/QSet>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QRegularExpressionValidator>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QCompleter>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 
 namespace fhmi {
@@ -98,16 +100,24 @@ void collectCanCards(const QJsonArray &widgets, QList<QJsonObject> &out)
     }
 }
 
-bool hasCanCard(const Project *project)
+// The widgets as they are now. In the designer that is the scene: the project's list is brought up to date only
+// when the project is saved, so a CAN card dropped since would offer no DBC names and no CAN信号 mode.
+QJsonArray currentWidgets(const Project *project, const DesignScene *scene)
+{
+    if (scene) {
+        return scene->widgetsJson();
+    }
+    return project ? project->widgets : QJsonArray();
+}
+
+bool hasCanCard(const QJsonArray &widgets)
 {
     QList<QJsonObject> cards;
-    if (project) {
-        collectCanCards(project->widgets, cards);
-    }
+    collectCanCards(widgets, cards);
     return !cards.isEmpty();
 }
 
-CanNames canNames(const Project *project)
+CanNames canNames(const Project *project, const QJsonArray &widgets)
 {
     CanNames names;
     if (!project) {
@@ -120,7 +130,7 @@ CanNames canNames(const Project *project)
     };
     static QHash<QString, Cached> cache;
     QList<QJsonObject> cards;
-    collectCanCards(project->widgets, cards);
+    collectCanCards(widgets, cards);
     for (const QJsonObject &card : std::as_const(cards)) {
         std::shared_ptr<const CanDatabase> dbc;
         const QString file = card.value(QStringLiteral("dbcFile")).toString().trimmed();
@@ -176,6 +186,12 @@ void complete(FluentQt::LineEdit *edit, const QStringList &words)
     completer->setFilterMode(Qt::MatchContains);
     completer->setMaxVisibleItems(12);
     edit->setCompleter(completer);
+    // Leaving the field (Tab, a click elsewhere) also closes the list, so it never outlives the edit.
+    QObject::connect(edit, &QLineEdit::editingFinished, completer, [completer]() {
+        if (QAbstractItemView *popup = completer->popup()) {
+            popup->hide();
+        }
+    });
 }
 
 const QHash<QString, QSet<QString>> &chartParseVisibility()
@@ -234,14 +250,48 @@ const QRegularExpression &numberPattern()
     return number;
 }
 
-// The red caption that says why a CAN信号 setup reads nothing; its text is set by updateVisibility.
-FluentQt::CaptionLabel *newProblemLabel(QWidget *parent)
+// The red caption that says why a CAN信号 setup reads nothing; its text is set by updateVisibility. It fixes its own
+// height to what its wrapped lines need at its width. Left to the form, a note that appears after an edit can be
+// laid out at a wider width's height and lose lines: QFormLayout keeps one table of wrapped heights for two widths.
+class ProblemLabel : public FluentQt::CaptionLabel
 {
-    auto *problem = new FluentQt::CaptionLabel(parent);
-    problem->setWordWrap(true);
-    problem->setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4)); // Fluent's critical colours
-    return problem;
-}
+  public:
+    explicit ProblemLabel(QWidget *parent) : FluentQt::CaptionLabel(parent)
+    {
+        setWordWrap(true);
+        setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4)); // Fluent's critical colours
+    }
+
+    void setProblem(const QString &problem)
+    {
+        setText(problem);
+        fitHeight();
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        FluentQt::CaptionLabel::resizeEvent(event);
+        fitHeight();
+    }
+
+  private:
+    // Measured from the font, not heightForWidth(), which never goes below the fixed height already set.
+    void fitHeight()
+    {
+        if (text().isEmpty()) {
+            return;
+        }
+        const QMargins margins = contentsMargins();
+        const int extra = 2 * margin();
+        const int textWidth = std::max(1, width() - margins.left() - margins.right() - extra);
+        const QRect lines = fontMetrics().boundingRect(QRect(0, 0, textWidth, QWIDGETSIZE_MAX),
+                                                       int(alignment() | Qt::TextWordWrap), text());
+        setFixedHeight(lines.height() + margins.top() + margins.bottom() + extra);
+    }
+};
+
+ProblemLabel *newProblemLabel(QWidget *parent) { return new ProblemLabel(parent); }
 
 // The send switch each widget type has; while it is off, no command fields apply.
 QString sendToggle(const QString &type)
@@ -541,7 +591,7 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     case PropType::Enum: {
         auto *combo = new FluentQt::ComboBox(m_content);
         QStringList options = def.options;
-        if (def.name == QLatin1String("curveParseMode") && !hasCanCard(m_project) &&
+        if (def.name == QLatin1String("curveParseMode") && !hasCanCard(currentWidgets(m_project, m_scene)) &&
             value.toVariant().toString() != ParseMode::CanSignal) {
             options.removeAll(ParseMode::CanSignal); // offered where there is a CAN card, as for a binding
         }
@@ -578,7 +628,7 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     edit->setText(value.toVariant().toString());
     connect(edit, &QLineEdit::textChanged, this, [commit](const QString &t) { commit(t); });
     if (def.name == QLatin1String("canId")) {
-        complete(edit, canNames(m_project).messages);
+        complete(edit, canNames(m_project, currentWidgets(m_project, m_scene)).messages);
     }
     const bool dbc = def.name == QLatin1String("dbcFile");
     if (def.name != QLatin1String("imagePath") && !dbc) {
@@ -1083,13 +1133,14 @@ void PropertyEditor::buildBindingForm()
     QStringList modes{ParseMode::KeyValue, ParseMode::JsonPath, ParseMode::HexBytes, ParseMode::Modbus};
     // CAN信号 reads the frames of a CAN card's links, so it is offered only where there is one, and kept where a
     // binding already uses it.
-    if (mode == ParseMode::CanSignal || hasCanCard(m_project)) {
+    if (mode == ParseMode::CanSignal || hasCanCard(currentWidgets(m_project, m_scene))) {
         modes.append(ParseMode::CanSignal);
     }
     add("parseMode", tr("解析模式"), combo(modes, mode));
     add("key", tr("绑定字段"), line(value("key", QString()).toString(), tr("字段名 (如 temperature)")));
     // The signal keys of the project's CAN cards, so a DBC's names need not be typed out.
-    complete(static_cast<FluentQt::LineEdit *>(m_bindingEditors.value(QStringLiteral("key"))), canNames(m_project).keys);
+    complete(static_cast<FluentQt::LineEdit *>(m_bindingEditors.value(QStringLiteral("key"))),
+             canNames(m_project, currentWidgets(m_project, m_scene)).keys);
     add("jsonPath", tr("JSON路径"), line(value("jsonPath", QString()).toString(), tr("路径 (如 data.sensors.0.temp)")));
     add("byteOffset", tr("字节偏移"), spin(0, 9999, value("byteOffset", 0).toInt()));
     add("dataType", tr("数据类型"),
@@ -1254,8 +1305,8 @@ void PropertyEditor::updateVisibility()
         }
         if (mode == QLatin1String("CAN")) {
             // The link ignores these for a message with signals; show them only where they still matter.
-            const CanTargetKind kind =
-                canTargetKind(canNames(m_project), m_item->propertyValue(QStringLiteral("canId")).toString());
+            const CanTargetKind kind = canTargetKind(canNames(m_project, currentWidgets(m_project, m_scene)),
+                                                     m_item->propertyValue(QStringLiteral("canId")).toString());
             setRowVisible(QStringLiteral("dataType"), !kind.hasSignals);
             setRowVisible(QStringLiteral("byteOrder"), !kind.hasSignals);
             setRowVisible(QStringLiteral("canFd"), !kind.fromDbc);
@@ -1307,8 +1358,8 @@ void PropertyEditor::updateVisibility()
                 m_item->properties(), m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0)));
         }
         if (const auto row = m_rows.constFind(QStringLiteral("curveCanProblem")); row != m_rows.constEnd()) {
-            if (auto *label = qobject_cast<QLabel *>(row->second)) {
-                label->setText(problem);
+            if (auto *label = dynamic_cast<ProblemLabel *>(row->second)) {
+                label->setProblem(problem);
             }
         }
         setRowVisible(QStringLiteral("curveCanProblem"), !problem.isEmpty());
@@ -1333,8 +1384,8 @@ void PropertyEditor::updateVisibility()
         const QJsonObject binding = m_item ? m_item->binding() : QJsonObject();
         const QString problem =
             mode == ParseMode::CanSignal && !binding.isEmpty() ? canSignalProblem(binding) : QString();
-        if (auto *label = qobject_cast<QLabel *>(m_bindingEditors.value(QStringLiteral("canProblem")))) {
-            label->setText(problem);
+        if (auto *label = dynamic_cast<ProblemLabel *>(m_bindingEditors.value(QStringLiteral("canProblem")))) {
+            label->setProblem(problem);
         }
         setRowVisible(QStringLiteral("binding.canProblem"), !problem.isEmpty());
     }
