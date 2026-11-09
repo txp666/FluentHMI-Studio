@@ -27,7 +27,7 @@
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
 - `mbValue`（值/数量，整数）默认 `1`，范围 -2147483648–2147483647
-- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节
 - `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
 - `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 - `notify`（按下通知，true/false）默认 `false`
@@ -68,7 +68,7 @@
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
-- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节
 - `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
 - `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 
@@ -94,7 +94,7 @@
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
 - `mbValue`（值/数量，整数）默认 `1`，范围 -2147483648–2147483647
-- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节
 - `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
 - `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 
@@ -116,7 +116,7 @@
 - `commandNewline`（换行符，选项）默认 `"\\r\\n"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
 - `mbSlave`（从站地址，整数）默认 `1`，范围 1–247
 - `mbAddress`（线圈地址，整数）默认 `0`，范围 0–65535
-- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节
 - `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
 - `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 - `notify`（切换通知，true/false）默认 `false`
@@ -146,7 +146,7 @@
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
-- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节
 - `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
 - `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 
@@ -172,7 +172,7 @@
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
-- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`，原始 ID 按 HEX 模式组字节
+- `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节
 - `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
 - `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
 

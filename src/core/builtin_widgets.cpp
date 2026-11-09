@@ -165,7 +165,7 @@ QList<PropDef> canCommand()
 {
     return {described(str(QStringLiteral("canId"), QT_TR_NOOP("CAN 报文"), QString()),
                       QStringLiteral("DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 " // i18n: ignore
-                                     "`信号=值`，原始 ID 按 HEX 模式组字节")),                                // i18n: ignore
+                                     "`信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节")),                                // i18n: ignore
             described(boolean(QStringLiteral("canFd"), QT_TR_NOOP("CAN FD 帧"), false),
                       QStringLiteral("只用于原始 ID；DBC 报文是否 FD 由 DBC 决定")), // i18n: ignore
             described(integer(QStringLiteral("canCycle"), QT_TR_NOOP("循环周期(ms)"), 0, 0, 60000),

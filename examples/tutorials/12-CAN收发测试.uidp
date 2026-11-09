@@ -245,10 +245,10 @@
       },
       "properties": {
         "text": "发 CAN FD 报文 0x200",
-        "command": "4660",
+        "command": "0x1234",
         "commandMode": "CAN",
         "canId": "FdData",
-        "commandTemplate": "FdFirst={value}, FdLast=200"
+        "commandTemplate": "FdFirst={value}, FdLast=0xC8"
       }
     },
     {

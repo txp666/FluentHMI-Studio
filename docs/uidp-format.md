@@ -144,7 +144,7 @@ FluentHMIStudio --export <输出目录> motor.uidp
 - `CanConfigCard` 连一路 CAN：`defaultAdapter` 是 `"PCAN"`（默认）、`"ZLG"`（再设 `zlgModel`）、`"SocketCAN"` 或 `"slcan"`；`defaultBitrate` 如 `"500k"`；`canFd` 为 `true` 时用 CAN FD，数据域是 `defaultDataBitrate`。`dbcFile` 是 DBC 文件，路径相对 .uidp，导出时一起复制。
 - 收到的报文按 DBC 解成键 `报文名.信号名` 和 `信号名`，信号有值描述（VAL_）时还有 `.text` 结尾的键，值是描述文字。用 `"键值匹配"` 绑定；几个报文有同名信号时绑定带报文名的键。
 - 没有 DBC 时在 `canSignals` 里写信号，每行一个，如 `102 EngSpeed : 16|16@1+ (1,0) [0|8000] "rpm"`：ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号；键是信号名。
-- 发命令：`commandMode` 设成 `"CAN"`，`canId` 填 DBC 报文名或 ID，`commandTemplate` 写 `信号=值`，逗号分隔，`{value}` 换成控件的值，值也可以是值描述文字。`canCycle`（ms）大于 0 时连接期间按周期重发，为 0 时用 DBC 的 GenMsgCycleTime。没有信号的 ID 按 HEX 模式组数据。
+- 发命令：`commandMode` 设成 `"CAN"`，`canId` 填 DBC 报文名或 ID，`commandTemplate` 写 `信号=值`，逗号分隔，`{value}` 换成控件的值。值是十进制物理值或值描述文字，`0x` 开头的是原始值（不经因子和偏移）。`canCycle`（ms）大于 0 时连接期间按周期重发，为 0 时用 DBC 的 GenMsgCycleTime。没有信号的 ID 按 HEX 模式组数据。
 - `CanMonitor` 按 ID 列出收发的报文；`DataSendCard` 在 CAN 链路上发 `ID#数据`，如 `102#11223344`。
 
 例：电机驱动器的 DBC 里 `PC2BLDC` 发给它，`BLDC2PC` 是它的回报（绑定 `BLDC2PC.信号名`）。滑块设转速，每 100 ms 发一次：
