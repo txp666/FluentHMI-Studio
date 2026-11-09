@@ -214,6 +214,7 @@ void LinkCardBase::addField(const QString &label, QWidget *field, bool small)
     const int row = m_grid->rowCount();
     QLabel *caption = small ? static_cast<QLabel *>(new FluentQt::CaptionLabel(label, this))
                             : static_cast<QLabel *>(new FluentQt::BodyLabel(label, this));
+    caption->setWordWrap(true); // long English labels ("Parser mode") wrap when the card is narrower than they need
     m_grid->addWidget(caption, row, 0);
     m_grid->addWidget(field, row, 1);
     caption->show();
@@ -303,10 +304,16 @@ SerialConfigCardWidget::SerialConfigCardWidget(const WidgetMeta &meta, QWidget *
     m_dataBits = comboOf(m_paramsRow, enumOptions(meta, "defaultDatabits"));
     m_parity = comboOf(m_paramsRow, enumOptions(meta, "defaultParity"));
     m_stopBits = comboOf(m_paramsRow, enumOptions(meta, "defaultStopbits"));
+    // The inline captions wrap ("Stop bits" over two lines) rather than push the card past its width.
+    const auto caption = [this](const QString &text) {
+        auto *label = new FluentQt::CaptionLabel(text, m_paramsRow);
+        label->setWordWrap(true);
+        return label;
+    };
     paramsLayout->addWidget(m_dataBits, 1);
-    paramsLayout->addWidget(new FluentQt::CaptionLabel(tr("校验"), m_paramsRow));
+    paramsLayout->addWidget(caption(tr("校验")));
     paramsLayout->addWidget(m_parity, 1);
-    paramsLayout->addWidget(new FluentQt::CaptionLabel(tr("停止位"), m_paramsRow));
+    paramsLayout->addWidget(caption(tr("停止位")));
     paramsLayout->addWidget(m_stopBits, 1);
     m_paramsRow->hide();
     m_flow = comboOf(this, enumOptions(meta, "defaultFlow"));
