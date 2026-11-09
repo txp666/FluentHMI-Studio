@@ -986,7 +986,7 @@ void RealtimeChartWidget::onAttached()
         }
         for (size_t i = 0; i < m_curves.size(); ++i) {
             BindingEntry &binding = m_curves[i].binding;
-            if (binding.usesParsedData()) {
+            if (!binding.usesRawData()) {
                 continue;
             }
             for (const QVariant &value : binding.extractAllFromRaw(bytes)) {

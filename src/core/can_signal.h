@@ -65,6 +65,12 @@ struct CanSignalDef
     bool validate(QString *error) const;
 };
 
+// The DBC start (the MSB's bit) of a Motorola signal whose start bit is given at its LSB instead, as some tools
+// number it, in the same sawtooth numbering: from the LSB each step towards the MSB goes up one bit within the
+// byte, or from bit 7 to bit 0 of the byte before. nullopt when that walks off the front of the frame (before
+// byte 0), or the length is not 1-64.
+std::optional<int> motorolaMsbStart(int lsbStart, int length);
+
 // A message of a DBC file, or the messages the card's canSignals describe.
 struct CanMessageDef
 {

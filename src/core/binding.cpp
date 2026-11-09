@@ -125,7 +125,59 @@ QString padded(const QString &digits, int width)
     return digits.size() >= width ? digits : QString(width - digits.size(), QLatin1Char('0')) + digits;
 }
 
+// A CAN信号 binding's ID and its signal as DBC describes one, or nullopt with the reason in *error when the ID
+// does not parse, the byte order is unknown or the signal is not valid.
+std::optional<std::pair<CanId, CanSignalDef>> canSignalOf(const QJsonObject &binding, QString *error = nullptr)
+{
+    const auto id = Can::parseId(binding.value(QStringLiteral("canId")).toString(), error);
+    if (!id) {
+        return std::nullopt;
+    }
+    CanSignalDef signal;
+    signal.start = binding.value(QStringLiteral("canStartBit")).toInt(0);
+    signal.length = binding.value(QStringLiteral("canBitLength")).toInt(0);
+    // validate() names the signal in its messages: here it is the ID and the start|length the user typed.
+    signal.name = QStringLiteral("%1 %2|%3").arg(Can::idText(*id)).arg(signal.start).arg(signal.length);
+    const QString order = binding.value(QStringLiteral("canByteOrder")).toString(CanByteOrder::Intel);
+    if (order == CanByteOrder::MotorolaLsb) {
+        const auto msb = motorolaMsbStart(signal.start, signal.length);
+        if (!msb) {
+            if (error) {
+                // clang-format off
+                *error = QCoreApplication::translate("fhmi", "按 Motorola LSB，起始位 %1、长度 %2 的信号会超出报文开头（第 0 字节之前）")
+                             .arg(signal.start)
+                             .arg(signal.length);
+                // clang-format on
+            }
+            return std::nullopt;
+        }
+        signal.start = *msb;
+        signal.motorola = true;
+    } else if (order == CanByteOrder::MotorolaMsb) {
+        signal.motorola = true;
+    } else if (order != CanByteOrder::Intel) {
+        // A misspelt order would read the wrong bits.
+        if (error) {
+            *error = QCoreApplication::translate("fhmi", "未知的字节序: %1").arg(order);
+        }
+        return std::nullopt;
+    }
+    signal.isSigned = binding.value(QStringLiteral("canSigned")).toBool(false);
+    signal.factor = binding.value(QStringLiteral("canFactor")).toDouble(1);
+    signal.offset = binding.value(QStringLiteral("canOffset")).toDouble(0);
+    if (!signal.validate(error)) {
+        return std::nullopt;
+    }
+    return std::pair{*id, signal};
+}
+
 } // namespace
+
+QString canSignalProblem(const QJsonObject &binding)
+{
+    QString error;
+    return canSignalOf(binding, &error) ? QString() : error;
+}
 
 QString displayString(const QVariant &value)
 {
@@ -232,9 +284,10 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     const QString mode = binding.value(QStringLiteral("parseMode")).toString(ParseMode::KeyValue);
     const QString key = binding.value(QStringLiteral("key")).toString();
     const QString jsonPath = binding.value(QStringLiteral("jsonPath")).toString();
+    const auto can = mode == ParseMode::CanSignal ? canSignalOf(binding) : std::nullopt;
     const bool configured = (mode == ParseMode::KeyValue && !key.isEmpty()) ||
                             (mode == ParseMode::JsonPath && !jsonPath.isEmpty()) || mode == ParseMode::HexBytes ||
-                            mode == ParseMode::Modbus;
+                            mode == ParseMode::Modbus || can.has_value();
     if (!configured) {
         return std::nullopt;
     }
@@ -265,6 +318,10 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.mbFcFilter = binding.value(QStringLiteral("mbFcFilter")).toInt(-1);
     entry.mbArea = binding.value(QStringLiteral("mbArea")).toString(ModbusArea::HoldingRegisters);
     entry.mbPeriod = binding.value(QStringLiteral("mbPeriod")).toInt(0);
+    if (can) {
+        entry.canId = can->first;
+        entry.canSignal = can->second;
+    }
     entry.displayFormat = props.value(QStringLiteral("displayFormat")).toString(QStringLiteral("自动")); // i18n: value
     entry.decimals = props.value(QStringLiteral("decimals")).toVariant().toString();
     if (entry.decimals.isEmpty()) {
@@ -457,6 +514,15 @@ QList<QVariant> BindingEntry::extractAllFromRaw(const QByteArray &raw)
         }
     }
     return values;
+}
+
+QVariant BindingEntry::extractFromCan(const CanFrame &frame) const
+{
+    if (parseMode != ParseMode::CanSignal || frame.rtr || frame.error || frame.id != canId.id ||
+        frame.extended != canId.extended) {
+        return {};
+    }
+    return canSignal.decode(frame.data);
 }
 
 void BindingEntry::resetStream()
