@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     FluentHMIStudio
-    VERSION 0.5.1
+    VERSION 0.6.0
     DESCRIPTION "Visual HMI designer for hardware engineers, built on FluentQtWidgets"
     HOMEPAGE_URL "https://github.com/txp666/FluentHMI-Studio"
     LANGUAGES CXX
