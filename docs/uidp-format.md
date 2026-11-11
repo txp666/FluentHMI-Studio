@@ -1,253 +1,59 @@
-# .uidp 工程格式：让 AI 直接写工程
+# 给 AI 的 .uidp 工程模板
 
-FluentHMI Studio 的工程文件 `.uidp` 是一个 JSON 文件，和 PyQt UI Designer 通用。想让 AI 帮忙做上位机时，把这份文档的链接或内容连同需求交给 Claude、Codex 等 AI，让它直接写出 `.uidp`，写完按「写完怎么检查」验一遍，再用Studio打开微调。
-
-> **给 AI**：规则都在这份说明里，不用读源码。照「一个完整的例子」改；用到例子里没有的控件或属性时，查文末「控件一览」和 [uidp-widgets.md](uidp-widgets.md)（每个控件的全部属性、默认值和可选项），没列出的字段不要编。只写需要改的属性，没写的用默认值。没法运行时，至少用 `python3 -m json.tool` 检查一次 JSON。
-
-## 写完怎么检查
-
-```bash
-# 1. 能不能打开：输出 "ok: <应用名>"，否则输出具体错误（未知控件类型、ID 重复、坐标不是数字……）
-FluentHMIRuntime motor.uidp --check
-
-# 2. 布局对不对：把整个界面画成图片
-FluentHMIRuntime motor.uidp --screenshot shot.png
-
-# 3. 导出独立应用（不用编译器，不到一秒）
-FluentHMIStudio --export <输出目录> motor.uidp
-```
-
-`FluentHMIRuntime` 在安装包里：macOS 是 `FluentHMI Studio.app/Contents/Helpers/FluentHMIRuntime.app/Contents/MacOS/FluentHMIRuntime`，Windows 是和 `FluentHMIStudio.exe` 同目录的 `FluentHMIRuntime.exe`，Linux 是 .deb 装好的 `/opt/FluentHMIStudio/FluentHMIRuntime`。
-
-真正收发数据要用 Studio 打开工程，切到「预览」，点链路卡片上的「连接」，接上设备看。
+`.uidp` 是 UTF-8 JSON。FluentHMI Studio、PyQt UI Designer 和 modusignal 网页的「自定义设备」共用下面的工程模板。给 AI 这个入口和一条设备实际收发的数据即可开始，特殊协议按需查表。直接复制了本文时，相对链接以[原始文档](https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.md)为基准。
 
 ## 一个完整的例子
 
-需求：「通过 TCP 连 127.0.0.1:9100 的电机控制器，它每 100 毫秒发一行 `rpm=1500,power=2.40,load=50,running=1`；仪表盘显示转速，曲线画负载，LED 显示是否在运行，开关发 START/STOP，滑块（0–3000）发 `SPEED=数值`。」
+设备用 115200 波特率发 `temp10=253,hum=60`，以换行结束。下面是可以直接保存为 `monitor.uidp` 的工程。连接串口后，曲线记录 25.3 °C，数值卡显示 60%，「读取」按钮发出 `READ` 并以 CRLF 结束。
 
 ```json
 {
   "version": "1.0",
-  "appName": "电机监控",
-  "canvas": {"width": 900, "height": 620, "gridSize": 10},
+  "appName": "温湿度监控",
+  "canvas": {"width": 800, "height": 400, "gridSize": 10},
   "serial": {"parser": "line", "parserConfig": {"separator": ","}},
   "widgets": [
-    {"type": "Label", "id": "title", "geometry": {"x": 20, "y": 10, "w": 860, "h": 36},
-     "properties": {"text": "电机监控", "fontSize": 22, "bold": true}},
-    {"type": "TcpConfigCard", "id": "tcp", "geometry": {"x": 20, "y": 60, "w": 300, "h": 290},
-     "properties": {"title": "TCP 连接", "defaultHost": "127.0.0.1", "defaultPort": 9100}},
-    {"type": "GaugeMeter", "id": "rpm", "geometry": {"x": 340, "y": 60, "w": 260, "h": 260},
-     "properties": {"title": "转速", "unit": "rpm", "maximum": 3000},
-     "binding": {"parseMode": "键值匹配", "key": "rpm"}},
-    {"type": "LEDIndicator", "id": "running_led", "geometry": {"x": 620, "y": 70, "w": 260, "h": 36},
-     "properties": {"label": "运行中", "on": false},
-     "binding": {"parseMode": "键值匹配", "key": "running"}},
-    {"type": "ToggleSwitch", "id": "run", "geometry": {"x": 620, "y": 130, "w": 260, "h": 36},
-     "properties": {"label": "电机启停", "onCommand": "START", "offCommand": "STOP"},
-     "binding": {"parseMode": "键值匹配", "key": "running"}},
-    {"type": "Label", "id": "speed_label", "geometry": {"x": 620, "y": 200, "w": 260, "h": 28},
-     "properties": {"text": "设定转速（0–3000 rpm）"}},
-    {"type": "Slider", "id": "speed", "geometry": {"x": 620, "y": 235, "w": 260, "h": 36},
-     "properties": {"minimum": 0, "maximum": 3000, "value": 0, "sendOnChange": true,
-                    "commandTemplate": "SPEED={value}"}},
-    {"type": "RealtimeChart", "id": "load_chart", "geometry": {"x": 20, "y": 370, "w": 860, "h": 230},
-     "properties": {"title": "负载", "curveCount": 1, "_curve_0_name": "负载", "_curve_0_key": "load"}}
+    {"type": "SerialConfigCard", "id": "link", "geometry": {"x": 16, "y": 16, "w": 360, "h": 320},
+     "properties": {"defaultBaud": "115200"}},
+    {"type": "RealtimeChart", "id": "trend", "geometry": {"x": 392, "y": 16, "w": 392, "h": 246},
+     "properties": {"title": "温度", "_curve_0_name": "温度 (°C)", "_curve_0_key": "temp10", "_curve_0_expression": "value / 10"}},
+    {"type": "NumericDisplay", "id": "humidity", "geometry": {"x": 392, "y": 278, "w": 192, "h": 90},
+     "properties": {"title": "湿度", "unit": "%"}, "binding": {"parseMode": "键值匹配", "key": "hum"}},
+    {"type": "PushButton", "id": "read", "geometry": {"x": 608, "y": 300, "w": 152, "h": 36},
+     "properties": {"text": "读取", "command": "READ"}}
   ]
 }
 ```
 
-要点：
+## 改成自己的工程
 
-- 设备通过一张链路卡片连接（这里是 `TcpConfigCard`），运行时由用户点「连接」，不会自动连。
-- `serial.parser` 是 `line`：每收到一行，按逗号拆成 `rpm`、`power`、`load`、`running` 四个键，数字自动转成数值。
-- 显示控件用 `binding` 取一个键；曲线见「实时曲线」。
-- 开关也绑定了 `running`：设备的状态会拨动开关，但不会因此再发一次命令；开关被点击时才发 `START` / `STOP`。
+- 在 `canvas` 设画布宽高（1–9999 的整数）。每个控件给一个全工程唯一的 `id`，`geometry` 的 `x/y/w/h` 以像素为单位。控件类型、属性和枚举值按参考中的原文填写，只写需要改的属性。`defaultBaud` 这类选项是字符串，`defaultPort` 这类数值是数字。
+- `serial` 保存工程默认帧格式，串口和网络链路都能使用。每个设备放一张链路卡片，运行时在卡片上点「连接」。上例改成读其他量时，把设备发来的键填到显示控件的 `binding.key` 或曲线的 `_curve_0_key`。
+- 容器用 `children` 放子控件，坐标相对于容器。`TabWidget` 的 `tabNames` 每行一个页名，子控件的 `tabIndex` 从 0 起。每页布局写 `_tabLayout_0` 等，取值为 `"自由"`、`"垂直"`、`"水平"`、`"弹性(Flex)"`。`icon` 是可选的 PNG、JPG 或 ICO 图标路径，相对于工程文件。
+- 三端都能运行上面的串口模板，网页串口需支持 Web Serial 的浏览器。网页的 TCP 客户端和 MQTT 通过 WebSocket 连接。UDP、TCP 服务端、图片控件及 Modbus 从站用桌面版，CAN / CAN FD 用 FluentHMI Studio。
 
-## 文件结构
+## 按任务查
 
-```json
-{
-  "version": "1.0",
-  "appName": "上位机",
-  "canvas": {"width": 1200, "height": 800, "gridSize": 10},
-  "serial": {"parser": "line", "parserConfig": {"separator": ","}},
-  "widgets": []
-}
-```
-
-| 字段 | 说明 |
-| --- | --- |
-| `version` | 只能是 `"1.0"` |
-| `appName` | 应用名，导出的应用以它命名 |
-| `icon` | 可选，应用图标：PNG、JPG 或 ICO 图片的路径，相对 .uidp 所在的文件夹。导出的应用用它做窗口、任务栏和程序图标；不写时用默认图标 |
-| `canvas` | 画布宽、高（1–9999 的整数）和网格大小 |
-| `serial` | 工程默认的帧格式：`parser` 和 `parserConfig`，见下面「解析收到的数据」。名字叫 serial，但对所有链路都有效 |
-| `widgets` | 控件数组 |
-
-每个控件：
-
-```json
-{
-  "type": "GaugeMeter",
-  "id": "rpm",
-  "geometry": {"x": 340, "y": 60, "w": 260, "h": 260},
-  "properties": {"title": "转速", "maximum": 3000},
-  "binding": {"parseMode": "键值匹配", "key": "rpm"}
-}
-```
-
-| 字段 | 说明 |
-| --- | --- |
-| `type` | 控件类型，大小写要和「控件一览」里完全一致 |
-| `id` | 控件 ID，整个工程里不能重复。建议每个控件都写 |
-| `geometry` | 位置和大小，单位是画布像素；`w`、`h` 必须大于 0，且不要小于[控件参考](uidp-widgets.md)里的最小尺寸 |
-| `properties` | 属性。只写要改的，没写的用默认值。选项类属性必须是参考里列出的原文（包括中文） |
-| `binding` | 数据绑定，只有能显示数据的控件需要，见下面 |
-| `children` | 容器的子控件数组，子控件的坐标相对于容器左上角 |
-| `tabIndex` | 选项卡（`TabWidget`）的子控件放在第几页，从 0 开始 |
-
-## 连接设备：链路卡片
-
-每个设备放一张链路卡片，用户在运行时点卡片上的「连接」。同一种卡片可放多张，各连各的。
-
-| 卡片 | 常用属性 |
-| --- | --- |
-| `SerialConfigCard` 串口 | `defaultBaud`（如 `"115200"`）、`defaultDatabits`、`defaultParity`、`defaultStopbits`；串口号运行时选 |
-| `TcpConfigCard` TCP | `defaultMode`（`"客户端"` / `"服务端"`）、`defaultHost`、`defaultPort` |
-| `UdpConfigCard` UDP | `defaultLocalPort`（`0` 由系统选端口）、`defaultHost`（远程地址）、`defaultPort` |
-| `MqttConfigCard` MQTT | `defaultHost`、`defaultPort`、`defaultSubscribe`（可用 `+` `#` 通配）、`defaultPublish`、`defaultUsername`、`defaultPassword`、`defaultQos`（`"0"` `"1"` `"2"`） |
-| `CanConfigCard` CAN | `defaultAdapter`、`defaultBitrate`、`canFd`、`dbcFile`，见「接 CAN 总线」 |
-
-- `displayMode` 为 `"完整"`（默认）时，卡片不要比默认尺寸矮：串口 360×320、TCP 360×250、UDP 360×220、MQTT 380×390；地方不够就设成 `"简洁"`。控件参考里的「最小」尺寸是串口 `"单行"` 模式的下限。
-- `defaultParser`：`"项目设置"`（默认，用工程的 `serial.parser`）、`"line"`、`"hex"`、`"modbus"`、`"modbus_tcp"`、`"modbus_ascii"`，设备帧格式不同时在卡片上分别设。卡片的 `parserConfig`（键同 `serial.parserConfig`）在 `defaultParser` 不是 `"项目设置"` 时生效；不写或写 `{}` 时，解析模式和工程相同就沿用工程的，不同就用默认值。
-- MQTT 每条消息、UDP 每个数据报算一帧，`line` 不需要行结束符。MQTT 消息只有一个数值时（如主题 `sensor/temp` 收到 `25.3`），可直接用主题名当键绑定。
-- 命令发到所有已连接的链路（MQTT 发到 `defaultPublish`）。MQTT 消息和 UDP 数据报的内容就是整条命令，包括 `commandNewline` 加的换行；设备不要换行时设成 `"无"`。
-- UDP 的 `defaultHost` 留空时命令发给最后的发送方（收到数据报前不发），这时 `defaultLocalPort` 不能是 `0`；远程地址填广播地址即广播。
-- 接 PLC：卡片的 `defaultParser` 选 `modbus`、`modbus_tcp` 或 `modbus_ascii`，控件按寄存器地址绑定（见"绑定数据"），连上后程序自动轮询，不用点按钮。卡片的 `modbusPeriod`（默认 `500` ms）是默认周期；`modbusTimeout`（默认 `1000` ms）是等应答的时间；`modbusSlave`（默认 `1`）是不过滤从站的绑定读的从站。几张卡片都解析 Modbus 时用文档里第一张连上的。手动读写用发命令控件的 Modbus 模式。读块合并、排队和状态栏文字见 PyQt UI Designer 的 [protocol.md](https://github.com/txp666/PyQt-UI-Designer/blob/main/docs/protocol.md#接-plc自动轮询)。
-
-## 当从站
-
-串口、TCP、UDP 卡片的 `modbusRole` 设成 `"从站"`、解析模式为 `modbus`（RTU）或 `modbus_tcp` 时，链路不轮询，改为应答外部主站（`modbus_ascii` 和 MQTT 不能当从站）：
-
-- `modbusSlave` 是本机从站地址；`modbusDelay` 是应答延时（毫秒）；`modbusExceptions` 为 `false` 时出错的请求不应答。
-- 数据表四个区的起始地址和数量：`slaveCoStart` / `slaveCoCount`（线圈）、`slaveDiStart` / `slaveDiCount`（离散输入）、`slaveHrStart` / `slaveHrCount`（保持寄存器）、`slaveIrStart` / `slaveIrCount`（输入寄存器），默认 `0` 和 `100`，数量 `0` 表示没有这个区。初值全为 0，`slaveInit` 每行改一个，如 `hr100=1234`、`co3=1`。
-- Modbus 绑定反过来用：控件显示数据表的值，主站写入后立刻刷新；用户拨动带 Modbus 绑定的开关、滑块、数值框，值写进数据表（写了 `expression` 的不写）；Modbus 模式的写命令（05、06、16）也写进数据表。从站地址等于某张从站卡片 `modbusSlave` 的绑定和曲线由数据表供数，不轮询。
-- `ModbusSlaveTable` 列出第一张从站卡片一个区（`mbArea`）的全部地址，运行时双击「值」可改。
-
-功能码、广播、日志和状态栏的规则见 [protocol.md](https://github.com/txp666/PyQt-UI-Designer/blob/main/docs/protocol.md#七modbus-从站)。
-
-## 接 CAN 总线
-
-只有 FluentHMI Studio 支持 CAN，PyQt UI Designer 打不开含 `CanConfigCard` 或 `CanMonitor` 的工程。
-
-- `CanConfigCard` 连一路 CAN：`defaultAdapter` 为 `"PCAN"`（默认）、`"ZLG"`（再设 `zlgModel`）、`"SocketCAN"`、`"slcan"`；`defaultBitrate` 如 `"500k"`；`canFd: true` 用 CAN FD，数据域 `defaultDataBitrate`；`dbcFile`：DBC 文件，相对 .uidp，导出时复制。
-- 收到的报文按 DBC 解成键 `报文名.信号名` 和 `信号名`（有值描述 VAL_ 的另有 `.text` 结尾的键，值是描述文字），用 `"键值匹配"` 绑定，重名信号用带报文名的键。
-- 没有 DBC 时在 `canSignals` 里每行写一个信号，如 `102 EngSpeed : 16|16@1+ (1,0) [0|8000] "rpm"`（ID 十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号），键是信号名。
-- 发命令：`commandMode` 为 `"CAN"`，`canId` 填 DBC 报文名或 ID，`commandTemplate` 写逗号分隔的 `信号=值`，`{value}` 换成控件的值；值是十进制物理值、值描述或 `0x` 开头的原始值（不经因子、偏移）。`canCycle`（ms）> 0 时连接期间周期重发，0 用 DBC 的 GenMsgCycleTime。无信号的 ID 按 HEX 模式组数据。
-- `CanMonitor` 按 ID 列出收发的报文；`DataSendCard` 在 CAN 链路上发 `ID#数据`，如 `102#11223344`。
-
-例：电机驱动器的 DBC 里 `PC2BLDC` 发给它，`BLDC2PC` 是回报（绑定 `BLDC2PC.信号名`）。滑块设转速，每 100 ms 发一次：
-
-```json
-{"type": "Slider", "id": "speed", "geometry": {"x": 420, "y": 60, "w": 260, "h": 36},
- "properties": {"maximum": 4000, "sendOnChange": true, "commandMode": "CAN", "canId": "PC2BLDC",
-  "commandTemplate": "SetMotorSpeed={value}, SetDerect=1", "canCycle": 100}}
-```
-
-## 解析收到的数据
-
-`serial.parser`（或卡片的 `defaultParser`）决定一帧怎么变成键值：
-
-| parser | 帧 | 解析结果 |
+| 需要什么 | 规则 | 可直接改的工程 |
 | --- | --- | --- |
-| `line` | 一条条文本记录。`parserConfig` 各键都可省略：`separator` 分隔符（默认 `","`）；`terminator` 行结束符（默认 `"\n"`，也可以是 `";"`、`"\r"` 等；记录两端的空白会去掉，所以 `"\n"` 也认 `\r\n`）；`kvSeparator` 键值分隔符（默认 `"="`，可改成 `":"`）；`encoding` 编码（默认 `"utf-8"`，可选 `"gbk"`、`"ascii"`）。JSON 对象和数组不需要行结束符，可以跨多行、连着发。以 `{` 或 `[` 开头的记录如果在字符串之外出现了 JSON 不可能有的字节（如 `=`），这一行丢掉，后面的记录照常解析 | `temp=25.3,hum=60` → 键 `temp`、`hum`；JSON 对象 → 原样的对象，数组 → 键 `"0"`、`"1"`……；`25.3,60` → `ch0`、`ch1`。数字自动转成数值。带 `*HH` 的 NMEA 语句（如 `$GPGGA,…*47`）先校验，不对就丢掉，对了去掉 `$` 和 `*HH` 再解析，`ch0` 是 `GPGGA` |
-| `hex` | 二进制帧。`parserConfig` 各键都可省略：`header` 帧头、`footer` 帧尾（HEX 文本，默认 `"AA55"`、`"55AA"`，`""` 表示没有）；`lengthOffset` 长度字段的偏移（从帧头第一个字节算，默认 `-1` 表示没有）、`lengthSize`（`1` 或 `2`）、`lengthEndian`（`"大端(BE)"` / `"小端(LE)"`）、`lengthCovers`（长度数的是 `"数据"` / `"长度字段之后"` / `"整帧"`）；`fixedLength` 固定帧长（默认 `0` 表示不固定）；`checksum`（`"无"` `"和校验"` `"异或"` `"CRC8"` `"CRC16-Modbus"` `"CRC16-CCITT"`，校验字节紧贴帧尾之前）、`checksumStart`（从帧内这个偏移开始校验）、`checksumEndian`；`idleTimeout`（毫秒，这么久没有新数据就结束一帧）。帧尾、长度字段、固定帧长、空闲超时至少要有一个。`fields`：`[["temp", 0, 2, "int16"], ...]`，每项是 `[名字, 偏移, 长度, 类型]`，可加第 5 项字节序；偏移从帧头之后算，类型有 `uint8` `int8` `uint16` `int16` `uint32` `int32` `float32` `float64` `ASCII` `HEX` | 按字段取值得到键。HEX字节提取 和 HEX 曲线收到的是整帧，`byteOffset` 从帧头第一个字节算 |
-| `modbus` / `modbus_tcp` | Modbus RTU / TCP 响应 | `slave`、`fc`，以及 `reg0`、`reg1`……（读寄存器）或 `coil0`……（读线圈），是响应内的序号；读请求由本程序发出时，还有起始地址 `start` 和按地址命名的 `hr100`（保持寄存器）、`ir100`（输入寄存器）、`co100`（线圈）、`di100`（离散输入） |
-| `modbus_ascii` | Modbus ASCII 响应 | 键同 `modbus` |
+| 显示数据、多条曲线、换算、取某一位 | [取值与曲线](uidp/data.md) | [JSON 环境监测站](../examples/tutorials/04-环境监测站.uidp) |
+| 组态泵阀、料仓、流量计或压力表 | [工业设备与仪表](uidp/industrial.md) | [恒压供水泵站](../examples/industrial/恒压供水泵站.uidp)、[全控件回放](../examples/industrial/工业控件回放.uidp) |
+| 多控件共用位名和颜色，显示数字时序、电芯数组或电源反馈 | [共享位定义与复合反馈](uidp/electronics.md#共享位定义与复合反馈) | [动态控件全景](../examples/industrial/动态控件全景.uidp)的「信号与诊断」页 |
+| 接串口 / TCP / UDP / MQTT，设置帧头、长度、校验 | [链路与帧格式](uidp/connections.md) | [HEX 电机控制板](../examples/tutorials/03-电机控制板.uidp) |
+| 读 PLC 寄存器，或在桌面模拟从站 | [Modbus 轮询与从站](uidp/connections.md#modbus-主站与从站) | [PLC 压力监控](../examples/tutorials/10-PLC恒压供水.uidp)、[温控仪模拟器](../examples/tutorials/11-温控仪模拟器.uidp) |
+| 按钮、输入框或滑块向设备发命令 | [命令格式与触发时机](uidp/commands.md) | [AT 指令助手](../examples/tutorials/05-AT指令调试助手.uidp) |
+| 在 Studio 连接 CAN 总线，使用 DBC | [CAN 卡片、信号与命令](uidp/can.md) | [CAN 收发测试](../examples/tutorials/12-CAN收发测试.uidp)及[配套 DBC](../examples/tutorials/12-CAN收发测试.dbc) |
+| 查控件属性名、默认值、范围或最小尺寸 | [Studio 控件参考](uidp-widgets.md) · [Python 版控件参考](https://raw.githubusercontent.com/txp666/PyQt-UI-Designer/main/docs/uidp-widgets.md) | 下方按类别列出控件名 |
 
-协议的完整规则（各种发送格式的例子、HEX 类型的字节长度、Modbus 输出格式）和 Python 版相同，见 PyQt UI Designer 的 [protocol.md](https://github.com/txp666/PyQt-UI-Designer/blob/main/docs/protocol.md)。
+## 写完怎么检查
 
-## 绑定数据
-
-能接收数据的控件和它被写入的属性：
-
-| 控件 | 写入 |
-| --- | --- |
-| `Label` | `text` |
-| `NumericDisplay`、`GaugeMeter`、`ProgressBar`、`ProgressRingDisplay` | `value` |
-| `LEDIndicator` | `on`：值等于 `onValue`（默认 `"1"`）时亮，等于 `offValue`（默认 `"0"`）时灭 |
-| `ToggleSwitch` | `checked`：设备状态拨动开关，不会因此发命令 |
-| `Slider`、`SpinBox` | `value`：同上，不会因此发命令 |
-
-`binding` 里只写用到的字段：
-
-| parseMode | 需要的字段 |
-| --- | --- |
-| `"键值匹配"` | `key`：键名，如 `"rpm"` |
-| `"JSON路径"` | `jsonPath`：用点分隔，数组用下标，如 `"data.sensors.0.temp"`（负数从末尾数） |
-| `"HEX字节提取"` | 从原始字节取：`byteOffset`、`dataType`（`"uint8"` … `"float32"`）、`byteOrder`（`"大端(BE)"` / `"小端(LE)"`），可选 `frameHeader` / `frameTail`（HEX 文本，如 `"AA55"`） |
-| `"Modbus"` | `mbArea`：`"保持寄存器"`（默认）、`"输入寄存器"`、`"线圈"`、`"离散输入"`；`mbRegIndex`：寄存器地址；`mbDataType`（`"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`）、`mbRegOrder`（`"大端(AB CD)"` / `"小端(CD AB)"`），可选过滤 `mbSlaveFilter`、`mbFcFilter`（-1 不过滤）；`mbPeriod` 是自动轮询的采集周期（毫秒，0–60000，默认 `0` 用卡片的 `modbusPeriod`） |
-| `"CAN信号"` | 按位读收到的 CAN 报文：`canId`（如 `"18FF50E5"`）、`canStartBit`、`canBitLength`（1–64）、`canByteOrder`（`"Intel"` 默认，`"Motorola MSB"` 即 DBC 的 `@0`，`"Motorola LSB"` 起始位是最低位），可选 `canSigned`、`canFactor`、`canOffset`（默认 `false`、1、0） |
-
-所有模式都可加 `expression` 换算，变量是 `value`，如 `"value * 0.1"`。支持 Python 的算术 `+ - * / // % **`、位运算 `& | ^ ~ << >>`（只对整数）、比较 `< <= > >= == !=`（可连写，如 `"0 < value < 40"`）和 `and` / `or` / `not`；比较结果是 `True` / `False`，给指示灯用时 `onValue` 填 `1`，如 `"(value >> 1) & 1"` 取第 1 位、`"value * 3.3 / 4095 < 1"` 判断电压。算不出来（除以零、位运算碰到小数）按原值显示。
-
-## 发送命令
-
-按钮、开关、滑块、数值框、输入框、下拉框都能发命令。`commandMode` 决定格式：
-
-- **`"文本"`（默认）**：`commandTemplate` 里的 `{value}` 换成要发的值，末尾加 `commandNewline`。`commandNewline` 可选 `"无"`、`"\\r\\n"`（默认）、`"\\n"`、`"\\r"`。在 JSON 里要写成两个反斜杠（值是反斜杠加字母的文字）。
-- **`"HEX"`**：`dataType` 为 `"HEX字符串"` 时，值本身就是 HEX 文本（如 `"01 03 00 00"`）；为数值类型时，按 `dataType` 和 `byteOrder` 打包后放进模板。可加 `frameHeader` / `frameTail`。
-- **`"JSON"`**：`commandTemplate` 里的 `{value}` 换成值的 JSON：值本身是合法 JSON（`1`、`true`、`{"a":1}`）就照用，否则当字符串、自动转义，输入框也一样。如 `{"cmd":"setSpeed","value":{value}}` 发 `{"cmd":"setSpeed","value":75}`。整条须是合法 JSON（`{value}` 不能在引号里），去掉空白后发，末尾加 `commandJsonNewline`（默认 `"无"`）。
-- **`"Modbus"`**：用 `mbSlave`、`mbFunc`（如 `"06 写单寄存器"`）、`mbAddress` 组请求；连接的链路解析模式是 `modbus_tcp` 时自动用 MBAP 帧，`modbus_ascii` 时用 ASCII 帧，否则用 RTU 帧加 CRC。`mbDataType`（默认 `"uint16"`）和 `mbRegOrder` 决定写入的值怎么放进寄存器：`"06 写单寄存器"` 可用 `"uint16"`、`"int16"`；`"16 写多个寄存器"` 还可用 `"uint32"`、`"int32"`、`"float32"`，32 位类型写两个寄存器。按钮写的 `mbValue` 只能是整数（int16、int32 可为负）；写小数用输入框。
-- **`"CAN"`**：见「接 CAN 总线」。
-
-每种控件发什么值：
-
-| 控件 | 值 | 什么时候发 |
-| --- | --- | --- |
-| `PushButton` | `command` | 点击 |
-| `ToggleSwitch` | 打开时 `onCommand`，关闭时 `offCommand` | 用户拨动 |
-| `Slider`、`SpinBox` | 当前数值 | `sendOnChange` 为 `true` 时数值一变就发；拖动滑块时不发，松手发一次（键盘、滚轮每一步都发）；Modbus 以外的模式不打开它就不发 |
-| `LineEdit` | 输入的文字 | `sendOnEnter` 为 `true` 时按回车 |
-| `ComboBox` | `commands` 里和选项同一行的命令（多行文本，一行对应 `items` 的一项）；那一行是空的就发选项文字本身 | `sendOnSelect` 为 `true` 时选中 |
-
-需要设备的反馈控制开关或滑块的位置时，给它们加 `binding`（见上表）。
-
-## 实时曲线
-
-`RealtimeChart` 最多 8 条曲线（`curveCount`），每条曲线的配置写成 `_curve_{序号}_{字段}`，序号从 0 开始：
-
-| 字段 | 说明 |
-| --- | --- |
-| `_curve_0_name` | 图例名 |
-| `_curve_0_parseMode` | 同 binding 的 `parseMode`，默认 `"键值匹配"` |
-| `_curve_0_key`、`_curve_0_jsonPath` | 键值匹配 / JSON路径 |
-| `_curve_0_byteOffset`、`_curve_0_dataType`、`_curve_0_byteOrder`、`_curve_0_frameHeader`、`_curve_0_frameTail` | HEX字节提取 |
-| `_curve_0_mbArea`、`_curve_0_regIndex`、`_curve_0_mbDataType`、`_curve_0_mbRegOrder`、`_curve_0_mbFcFilter`、`_curve_0_mbSlaveFilter` | Modbus，含义同 binding 的 `mbArea`、`mbRegIndex` 等 |
-| `_curve_0_canId`、`_curve_0_canStartBit`、`_curve_0_canBitLength`、`_curve_0_canByteOrder`、`_curve_0_canSigned`、`_curve_0_canFactor`、`_curve_0_canOffset` | CAN信号，含义同 binding 的 `canId` 等 |
-
-控件参考里 `curve` 开头的属性（`curveName`、`curveKey` 等）是 Studio 属性面板编辑「当前曲线」用的，写文件时不需要。
-
-曲线颜色按顺序固定（青绿、红、蓝、黄、紫、绿、橙、灰），文件里不能改。所有曲线共用一条自动缩放的纵轴，数量级差很多的量最好分到两个曲线控件里。
-
-横轴是这条曲线收到的点数，不是时间。几条曲线来自发送频率不同的设备时，会一条快一条慢；能统一频率最好。
-
-## 容器
-
-`HBoxLayout`、`VBoxLayout`、`FlexLayout`、`GroupBox`、`CardContainer`、`TabWidget` 可以放子控件，写在 `children` 里，坐标相对容器。`TabWidget` 的页名在 `tabNames`（多行文本，一行一页），子控件用 `tabIndex` 指定页。每页的布局写成 `_tabLayout_{页号}`，可选 `"自由"` `"垂直"` `"水平"` `"弹性(Flex)"`；控件参考里的 `tabLayout` 是属性面板编辑当前页用的，写文件时不需要。
-
-## 常见错误
-
-- 控件类型拼错或大小写不对 → `--check` 报「未知控件类型」。
-- 两个控件同一个 `id` → 「控件 ID 无效或重复」。
-- 选项类属性写了参考里没有的值（比如把 `"键值匹配"` 写成 `"key"`、`"大端(BE)"` 写成 `"BE"`）→ 不报错，但不生效。
-- `defaultPort`、`maximum` 这类数值写成了字符串；`defaultBaud`、`defaultQos` 反过来是字符串选项。
-- 文本命令忘了设备需要的换行符；设备只认 `\n` 时把 `commandNewline` 设成 `"\\n"`（MQTT 设备通常设成 `"无"`）。
-- 以为工程会自动连接：不会，用户要点「连接」。
+- **FluentHMI Studio** 运行 `FluentHMIRuntime monitor.uidp --check` 检查工程，`FluentHMIRuntime monitor.uidp --screenshot preview.png` 查看布局。`FluentHMIStudio --export out monitor.uidp` 导出独立应用。macOS 安装包内的运行器在 `FluentHMI Studio.app/Contents/Helpers/FluentHMIRuntime.app/Contents/MacOS/FluentHMIRuntime`，Windows 和 Studio 同目录，Linux 在 `/opt/FluentHMIStudio/FluentHMIRuntime`。
+- **PyQt UI Designer** 在源码根目录运行 `python tools/check_uidp.py monitor.uidp` 检查属性拼写、枚举和曲线字段，再用设计器预览或导出。
+- **网页** 在 [modusignal 自定义设备](https://modusignal.cn/#custom) 导入工程，切到运行并连接。没有运行器时，`python3 -m json.tool monitor.uidp` 可以先检查 JSON 语法。
 
 ## 控件一览
 
-类型名、名称和默认尺寸（宽×高）。每个控件的全部属性、默认值、取值范围和可选项见 [uidp-widgets.md](uidp-widgets.md)。
+以下是 FluentHMI Studio 注册的类型及默认尺寸。选择控件时同时参考上文的三端支持范围。
 
 <!-- 以下由 uidp_reference（tools/uidp_reference.cpp）从控件注册表生成，不要手改 -->
 
@@ -256,3 +62,5 @@ FluentHMIStudio --export <输出目录> motor.uidp
 - 显示控件：`LEDIndicator` LED指示灯（140×30）、`NumericDisplay` 数值显示（160×90）、`ProgressBar` 进度条（250×20）、`ProgressRingDisplay` 进度环（120×130）、`ImageDisplay` 图片显示（200×150）
 - 图表控件：`RealtimeChart` 实时曲线（400×280）、`GaugeMeter` 仪表盘（180×180）、`DataTable` 数据表格（350×250）
 - 通信控件：`SerialConfigCard` 串口配置卡片（360×320）、`TcpConfigCard` TCP 配置卡片（360×250）、`UdpConfigCard` UDP 配置卡片（360×220）、`MqttConfigCard` MQTT 配置卡片（380×390）、`CanConfigCard` CAN 配置卡片（380×270）、`DataSendCard` 数据发送卡片（350×140）、`DataRecvCard` 数据接收卡片（350×250）、`LogBox` 日志显示框（400×200）、`CanMonitor` 报文监视（560×280）、`ModbusSlaveTable` 从站寄存器表（260×300）
+- [工业设备与工业仪表的类型和默认值](uidp/industrial.md)
+- [汽车电子、电子 DIY 与嵌入式的类型和状态](uidp/electronics.md)
