@@ -76,6 +76,9 @@ void PushButtonWidget::onAttached()
             if (!props.contains(QStringLiteral("mbFunc"))) {
                 props.insert(QStringLiteral("mbFunc"), QStringLiteral("03 读保持寄存器")); // i18n: value
             }
+            if (CommandEncoder::functionCode(text("mbFunc")) == 0x05 && text("mbValue").toLongLong() == 1) {
+                props.insert(QStringLiteral("mbValue"), 0xFF00);
+            }
             context()->send(CommandEncoder::modbusFromProperties(props));
         } else if (const QString command = text("command").trimmed(); !command.isEmpty()) {
             context()->send(CommandEncoder::encode(props, command));
