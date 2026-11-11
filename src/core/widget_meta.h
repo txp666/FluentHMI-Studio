@@ -46,6 +46,11 @@ enum class WidgetCategory
     Display,
     Chart,
     Comm,
+    IndustrialEquipment,
+    IndustrialInstrument,
+    AutomotiveElectronics,
+    ElectronicsDiy,
+    EmbeddedSystems,
 };
 
 // The category's title, translated.

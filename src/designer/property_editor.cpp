@@ -2,6 +2,9 @@
 
 #include "comm/modbus_slave.h"
 #include "core/binding.h"
+#include "core/bit_profile.h"
+#include <QtWidgets/QColorDialog>
+#include "core/industrial_catalog.h"
 #include "core/dbc.h"
 #include "core/i18n.h"
 #include "core/protocol_parser.h"
@@ -218,6 +221,7 @@ const QHash<QString, QString> &curveFields()
 {
     static const QHash<QString, QString> table = {
         {QStringLiteral("curveName"), QStringLiteral("name")},
+        {QStringLiteral("curveExpression"), QStringLiteral("expression")},
         {QStringLiteral("curveParseMode"), QStringLiteral("parseMode")},
         {QStringLiteral("curveKey"), QStringLiteral("key")},
         {QStringLiteral("curveJsonPath"), QStringLiteral("jsonPath")},
@@ -542,6 +546,12 @@ void PropertyEditor::setRowVisible(const QString &key, bool visible)
 
 QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &value, const Commit &commit)
 {
+    if(def.name==QLatin1String("pulsesPerTurn")) {
+        auto *edit=new FluentQt::LineEdit(m_content);edit->setText(QString::number(value.toDouble(1024),'f',0));
+        edit->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("[0-9]+")),edit));
+        connect(edit,&QLineEdit::textChanged,this,[edit,commit](const QString &text){bool ok=false;const double value=text.toDouble(&ok);if(ok&&value>0&&value<=9007199254740991.0)commit(value);});
+        return edit;
+    }
     switch (def.type) {
     case PropType::Int:
     case PropType::Float: {
@@ -571,7 +581,7 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
         } else {
             auto *spin = new FluentQt::DoubleSpinBox(m_content);
             spin->setRange(def.minimum.value_or(-999999), def.maximum.value_or(999999));
-            spin->setDecimals(3);
+            spin->setDecimals(m_item && isIndustrialCategory(m_item->meta().category) ? 6 : 3);
             spin->setValue(value.toDouble());
             connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                     [commit](double v) { commit(numberValue(v, false)); });
@@ -624,6 +634,16 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
         break;
     }
 
+    if (def.name == QLatin1String("bitProfile")) {
+        auto *combo = new FluentQt::ComboBox(m_content);
+        QStringList names = m_project ? m_project->bitProfiles.keys() : QStringList();
+        const QString current = value.toString(QStringLiteral("default"));
+        if (!names.contains(QStringLiteral("default"))) names.prepend(QStringLiteral("default"));
+        if (!names.contains(current)) names.append(current);
+        combo->addItems(names);combo->setCurrentText(current);
+        connect(combo,&FluentQt::ComboBox::currentTextChanged,this,[commit](const QString &name){commit(name);});
+        return combo;
+    }
     auto *edit = new FluentQt::LineEdit(m_content);
     edit->setText(value.toVariant().toString());
     connect(edit, &QLineEdit::textChanged, this, [commit](const QString &t) { commit(t); });
@@ -668,6 +688,147 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
 // Project settings
 // ---------------------------------------------------------------------------
 
+void PropertyEditor::buildBitProfilesForm()
+{
+    if (!m_project)
+        return;
+    if (m_item)
+        m_bitProfileName = m_item->propertyValue(QStringLiteral("bitProfile")).toString(QStringLiteral("default"));
+    auto *form = addSection(tr("共享位配置"));
+    auto *selector = new FluentQt::ComboBox(m_content);
+    QStringList names = m_project->bitProfiles.keys();
+    if (!names.contains(QStringLiteral("default")))
+        names.prepend(QStringLiteral("default"));
+    if (!names.contains(m_bitProfileName))
+        names.append(m_bitProfileName);
+    selector->addItems(names);
+    selector->setCurrentText(m_bitProfileName);
+    addRow(form, QStringLiteral("profile.select"), tr("配置名"), selector);
+    connect(selector, &FluentQt::ComboBox::currentTextChanged, this, [this](const QString &name) {
+        m_bitProfileName = name;
+        if (m_item)
+            commitProperty(QStringLiteral("bitProfile"), name);
+        QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
+    });
+    const auto publish = [this](const QString &key) {
+        if (m_scene)
+            m_scene->setBitProfiles(m_project->bitProfiles);
+        emit projectSettingsChanged(QStringLiteral("bitProfiles:") + m_bitProfileName + QLatin1Char(':') + key);
+    };
+    auto *name = new FluentQt::LineEdit(m_content);
+    name->setText(m_bitProfileName);
+    addRow(form, QStringLiteral("profile.name"), tr("新配置名"), name);
+    auto *actions = new QWidget(m_content);
+    auto *layout = new QHBoxLayout(actions);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto *create = new FluentQt::PushButton(tr("新建配置"), actions);
+    auto *rename = new FluentQt::PushButton(tr("重命名配置"), actions);
+    layout->addWidget(create);
+    layout->addWidget(rename);
+    form->addRow(actions);
+    connect(create, &QPushButton::clicked, this, [this, name, publish] {
+        const QString target = name->text().trimmed();
+        if (target.isEmpty() || m_project->bitProfiles.contains(target))
+            return;
+        m_project->bitProfiles.insert(target, effectiveBitProfile({}, QStringLiteral("default")));
+        m_bitProfileName = target;
+        if (m_item) {
+            const QSignalBlocker blocker(m_scene);
+            m_item->setPropertyValue(QStringLiteral("bitProfile"), target);
+        }
+        publish(QStringLiteral("create"));
+        QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
+    });
+    connect(rename, &QPushButton::clicked, this, [this, name, publish] {
+        const QString target = name->text().trimmed(), old = m_bitProfileName;
+        if (target.isEmpty() || target == old || m_project->bitProfiles.contains(target))
+            return;
+        auto profile = m_project->bitProfiles.value(old).toObject();
+        if (profile.isEmpty())
+            profile = effectiveBitProfile({}, QStringLiteral("default"));
+        m_project->bitProfiles.remove(old);
+        m_project->bitProfiles.insert(target, profile);
+        std::function<QJsonArray(QJsonArray)> rewrite = [&](QJsonArray widgets) {
+            for (int i = 0; i < widgets.size(); ++i) {
+                auto data = widgets.at(i).toObject();
+                const QString type = data.value(QStringLiteral("type")).toString();
+                auto props = data.value(QStringLiteral("properties")).toObject();
+                if ((type == QLatin1String("StatusWordPanel") || type == QLatin1String("DigitalTimingChart")) &&
+                    props.value(QStringLiteral("bitProfile")).toString(QStringLiteral("default")) == old) {
+                    props.insert(QStringLiteral("bitProfile"), target);
+                    data.insert(QStringLiteral("properties"), props);
+                }
+                if (data.contains(QStringLiteral("children")))
+                    data.insert(QStringLiteral("children"), rewrite(data.value(QStringLiteral("children")).toArray()));
+                widgets[i] = data;
+            }
+            return widgets;
+        };
+        m_project->widgets = rewrite(m_project->widgets);
+        if (m_scene) {
+            const QSignalBlocker blocker(m_scene);
+            for (auto *item : m_scene->allItems())
+                if (item->meta().prop(QStringLiteral("bitProfile")) &&
+                    item->propertyValue(QStringLiteral("bitProfile")).toString() == old)
+                    item->setPropertyValue(QStringLiteral("bitProfile"), target);
+        }
+        m_bitProfileName = target;
+        publish(QStringLiteral("rename"));
+        QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
+    });
+    const auto profile = effectiveBitProfile(m_project->bitProfiles, m_bitProfileName);
+    auto *width = new FluentQt::ComboBox(m_content);
+    width->addItems({QStringLiteral("8"), QStringLiteral("16")});
+    width->setCurrentText(QString::number(profile.value(QStringLiteral("width")).toInt()));
+    addRow(form, QStringLiteral("profile.width"), tr("位宽"), width);
+    connect(width, &FluentQt::ComboBox::currentTextChanged, this, [this, publish](const QString &value) {
+        auto data = m_project->bitProfiles.value(m_bitProfileName).toObject();
+        data.insert(QStringLiteral("width"), value.toInt());
+        m_project->bitProfiles.insert(m_bitProfileName, data);
+        publish(QStringLiteral("width"));
+        QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
+    });
+    const auto bits = profile.value(QStringLiteral("bits")).toArray();
+    for (int i = 0; i < bits.size(); ++i) {
+        auto *row = new QWidget(m_content);
+        auto *h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        auto *label = new FluentQt::LineEdit(row);
+        auto *color = new FluentQt::LineEdit(row);
+        auto *pick = new FluentQt::ToolButton(row);
+        pick->setIcon(FluentQt::icon(FluentQt::FluentIcon::Palette));
+        label->setText(bits.at(i).toObject().value(QStringLiteral("name")).toString());
+        color->setText(bits.at(i).toObject().value(QStringLiteral("color")).toString());
+        color->setMaximumWidth(92);
+        h->addWidget(label, 1);
+        h->addWidget(color);
+        h->addWidget(pick);
+        addRow(form, QStringLiteral("profile.bit%1").arg(i), QStringLiteral("B%1").arg(i), row);
+        const auto commit = [this, publish, i, label, color] {
+            auto data = m_project->bitProfiles.value(m_bitProfileName).toObject();
+            auto values = data.value(QStringLiteral("bits")).toArray();
+            const auto defaults = effectiveBitProfile(m_project->bitProfiles, m_bitProfileName);
+            const auto defaultBits = defaults.value(QStringLiteral("bits")).toArray();
+            while (values.size() < defaultBits.size())
+                values.append(defaultBits.at(values.size()));
+            auto bit = values.at(i).toObject();
+            bit.insert(QStringLiteral("name"), label->text());
+            bit.insert(QStringLiteral("color"), color->text());
+            values[i] = bit;
+            data.insert(QStringLiteral("width"), defaults.value(QStringLiteral("width")));
+            data.insert(QStringLiteral("bits"), values);
+            m_project->bitProfiles.insert(m_bitProfileName, data);
+            publish(QStringLiteral("bit%1").arg(i));
+        };
+        connect(label, &QLineEdit::textChanged, this, [commit] { commit(); });
+        connect(color, &QLineEdit::textChanged, this, [commit] { commit(); });
+        connect(pick, &QToolButton::clicked, this, [this, color] {
+            const auto picked = QColorDialog::getColor(QColor(color->text()), this, tr("点亮颜色"));
+            if (picked.isValid())
+                color->setText(picked.name());
+        });
+    }
+}
 void PropertyEditor::buildProjectForm()
 {
     if (!m_project) {
@@ -700,6 +861,7 @@ void PropertyEditor::buildProjectForm()
     addRow(general, QString(), tr("网格大小"),
            spin("gridSize", 1, 100, m_project->gridSize, [this](int v) { m_project->gridSize = v; }));
 
+    buildBitProfilesForm();
     QFormLayout *frame = addSection(tr("默认帧格式"));
     auto *hint = new FluentQt::CaptionLabel(tr("链路卡片选择“项目设置”时使用"), m_content);
     hint->setWordWrap(true);
@@ -949,7 +1111,7 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
     emit modified(QStringLiteral("property:%1:%2:%3").arg(m_item->widgetId(), key, detail));
     // These change which per-curve / per-page values, or which fields, the form shows;
     // defaultParser decides whether a link card has a frame format section, and what it starts from.
-    static const QSet<QString> structural = {QStringLiteral("currentCurve"), QStringLiteral("curveCount"),
+    static const QSet<QString> structural = {QStringLiteral("bitProfile"), QStringLiteral("currentCurve"), QStringLiteral("curveCount"),
                                              QStringLiteral("currentTab"), QStringLiteral("tabNames"),
                                              QStringLiteral("defaultParser")};
     if (structural.contains(name)) {
@@ -1062,12 +1224,12 @@ void PropertyEditor::buildItemForm()
                 commitProperty(name, v);
             });
             addRow(props, name, translated(def.label), editor);
-        }
-        if (meta.typeName == QLatin1String("RealtimeChart")) {
-            // Under the last curve field; updateVisibility fills it for the current curve.
-            addRow(props, QStringLiteral("curveCanProblem"), QString(), newProblemLabel(m_content));
+            if (name == QLatin1String("curveCanOffset")) {
+                addRow(props, QStringLiteral("curveCanProblem"), QString(), newProblemLabel(m_content));
+            }
         }
     }
+    if (meta.prop(QStringLiteral("bitProfile"))) buildBitProfilesForm();
     // A link card with a mode of its own frames with its own settings, edited like the project's.
     const PropDef *frame = meta.prop(QStringLiteral("parserConfig"));
     if (frame && frame->type == PropType::Object &&

@@ -44,6 +44,8 @@ class RuntimeContext : public QObject
     void clear();
 
     void setActive(bool active);
+    void setBitProfiles(const QJsonObject &profiles) { m_bitProfiles = profiles; emit bitProfilesChanged(); }
+    QJsonObject bitProfiles() const { return m_bitProfiles; }
     bool isActive() const { return m_active; }
 
     // Sends a widget's command over every connected link, or explains why not.
@@ -71,6 +73,8 @@ class RuntimeContext : public QObject
                 int durationMs = 2000);
 
   signals:
+    void activeChanged(bool active);
+    void bitProfilesChanged();
     void notificationRequested(const QString &title, const QString &content, const QString &type, int durationMs);
 
   private:
@@ -86,6 +90,7 @@ class RuntimeContext : public QObject
     QHash<quint64, QList<size_t>> m_canBindings; // CanId::key() -> the CAN信号 bindings' indices in m_bindings
     QList<QPair<const QObject *, QList<ModbusNeed>>> m_curveNeeds; // in the order charts registered
     bool m_active = false;
+    QJsonObject m_bitProfiles;
     QElapsedTimer m_steady;
     std::function<qint64()> m_clock;
 };

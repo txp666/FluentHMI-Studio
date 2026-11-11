@@ -48,6 +48,7 @@ class DesignScene : public QGraphicsScene
     // item cannot be built.
     bool loadWidgets(const QJsonArray &widgets, QString *error);
     QJsonArray widgetsJson() const;
+    void setBitProfiles(const QJsonObject &profiles);
 
     QList<CanvasItem *> topLevelItems() const;
     QList<CanvasItem *> allItems() const;
@@ -100,6 +101,7 @@ class DesignScene : public QGraphicsScene
     int m_gridSize = 10;
     bool m_gridVisible = true;
     QString m_assetBaseDir;
+    QJsonObject m_bitProfiles;
     CanvasItem *m_dropTarget = nullptr;
 };
 

@@ -106,9 +106,11 @@ class BindingEntry
     void resetStream();
 
     QVariant evaluate(const QVariant &raw) const;
+    // Charts require a finite source before applying an expression; bad results retain that source.
+    std::optional<double> chartSample(const QVariant &raw) const;
     QVariant formatValue(const QVariant &value) const;
 
-    static QVariant resolvePath(const QVariant &data, const QString &path);
+    static QVariant resolvePath(const QVariant &data, const QString &path, bool *found = nullptr);
 
   private:
     QVariant extractModbus(const Message &data) const;

@@ -3,6 +3,8 @@
 
 #include <QtTest/QtTest>
 
+#include <limits>
+
 using namespace fhmi;
 
 namespace {
@@ -19,6 +21,83 @@ class TestBinding : public QObject
     Q_OBJECT
 
   private slots:
+    void chartSamplesRequireFiniteSources()
+    {
+        BindingEntry entry;
+        const QList<QVariant> invalid{QVariant(),
+                                      QString(),
+                                      QStringLiteral("bad"),
+                                      QStringLiteral("nan"),
+                                      QStringLiteral("inf"),
+                                      std::numeric_limits<double>::infinity(),
+                                      std::numeric_limits<double>::quiet_NaN()};
+        for (const QString &expression : {QString(), QStringLiteral("42"), QStringLiteral("value * 2")}) {
+            entry.expression = expression;
+            for (const auto &raw : invalid) {
+                QVERIFY(!entry.chartSample(raw));
+            }
+        }
+        for (const QString &expression :
+             {QString(), QStringLiteral(" "), QStringLiteral("value / 0"), QStringLiteral("unknown(value)"),
+              QStringLiteral("'bad'"), QStringLiteral("1e308 * 1e308")}) {
+            entry.expression = expression;
+            QCOMPARE(entry.chartSample(QStringLiteral("12.5")), std::optional<double>(12.5));
+        }
+        entry.expression = "value * 2 + 1";
+        QCOMPARE(entry.chartSample(QStringLiteral("12.5")), std::optional<double>(26.0));
+        entry.expression = "42";
+        QCOMPARE(entry.chartSample(12.5), std::optional<double>(42.0));
+    }
+
+    void chartCurveExpressions()
+    {
+        QJsonObject props{{"_curve_0_key", "temperature"},
+                          {"_curve_0_expression", "value * 2 + 1"},
+                          {"_curve_1_key", "temperature"},
+                          {"_curve_1_expression", "value - 3"}};
+        const auto entryFor = [&](int curve) {
+            return BindingEntry::fromWidget(widget("RealtimeChart", chartCurveBinding(props, curve)));
+        };
+        auto entry = entryFor(0);
+        QVERIFY(entry);
+        QCOMPARE(entry->evaluate(entry->extractFromParsed({{"temperature", 10LL}})).toDouble(), 21.0);
+        QCOMPARE(entryFor(1)->evaluate(10).toDouble(), 7.0);
+        props.remove("_curve_0_expression");
+        QCOMPARE(entryFor(0)->evaluate(10).toInt(), 10);
+        for (const QString &expression :
+             {QString(), QStringLiteral(" "), QStringLiteral("value / 0"), QStringLiteral("unknown(value)")}) {
+            props.insert("_curve_0_expression", expression);
+            QCOMPARE(entryFor(0)->evaluate(10).toInt(), 10);
+        }
+        props.insert("_curve_0_expression", "value * 2 + 1");
+        props.insert("_curve_0_parseMode", ParseMode::JsonPath);
+        props.insert("_curve_0_jsonPath", "temperature");
+        entry = entryFor(0);
+        QVERIFY(entry);
+        QCOMPARE(entry->evaluate(entry->extractFromParsed({{"temperature", 10LL}})).toDouble(), 21.0);
+        props.insert("_curve_0_parseMode", ParseMode::Modbus);
+        entry = entryFor(0);
+        QVERIFY(entry);
+        QCOMPARE(entry->evaluate(entry->extractFromParsed({{"hr0", 10LL}})).toDouble(), 21.0);
+        props.insert("_curve_0_parseMode", ParseMode::HexBytes);
+        props.insert("_curve_0_dataType", "uint16");
+        entry = entryFor(0);
+        QVERIFY(entry);
+        const auto values = entry->extractAllFromRaw(QByteArray::fromHex("000a"));
+        QCOMPARE(values.size(), 1);
+        QCOMPARE(entry->evaluate(values.first()).toDouble(), 21.0);
+        props.insert("_curve_0_parseMode", ParseMode::CanSignal);
+        props.insert("_curve_0_canId", "0x123");
+        props.insert("_curve_0_canFactor", 2);
+        props.insert("_curve_0_canOffset", 3);
+        entry = entryFor(0);
+        QVERIFY(entry);
+        CanFrame frame;
+        frame.id = 0x123;
+        frame.data = QByteArray::fromHex("0a");
+        QCOMPARE(entry->evaluate(entry->extractFromCan(frame)).toDouble(), 47.0);
+    }
+
     // A binding reads its register table by address, holding registers when it names none. The keys that
     // count within a response (reg0, coil0) name nothing a binding reads, and 响应内序号 is no table.
     void modbusAreasReadByRegisterAddress()

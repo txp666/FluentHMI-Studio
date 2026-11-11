@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     FluentHMIStudio
-    VERSION 0.5.1
+    VERSION 0.6.0
     DESCRIPTION "Visual HMI designer for hardware engineers, built on FluentQtWidgets"
     HOMEPAGE_URL "https://github.com/txp666/FluentHMI-Studio"
     LANGUAGES CXX
@@ -57,6 +57,10 @@ endfunction()
 # Qt Core only, so every rule here is unit-testable without a GUI.
 # ---------------------------------------------------------------------------
 add_library(fhmi_core STATIC
+    src/core/industrial_catalog.cpp
+    src/core/industrial_catalog.h
+    src/core/bit_profile.cpp
+    src/core/bit_profile.h
     src/core/binding.cpp
     src/core/binding.h
     src/core/builtin_widgets.cpp
@@ -92,6 +96,8 @@ add_library(fhmi_core STATIC
     src/core/widget_reference.cpp
     src/core/widget_reference.h
 )
+file(GLOB_RECURSE FHMI_INDUSTRIAL_ASSETS CONFIGURE_DEPENDS "resources/industrial/*.svg" "resources/industrial/catalog.json")
+qt_add_resources(fhmi_core industrial PREFIX "/fluenthmi" BASE "resources" FILES ${FHMI_INDUSTRIAL_ASSETS})
 target_include_directories(fhmi_core PUBLIC src)
 target_link_libraries(fhmi_core PUBLIC Qt6::Core)
 
@@ -144,6 +150,8 @@ endif()
 # exported applications all build their controls from this one library.
 # ---------------------------------------------------------------------------
 add_library(fhmi_runtime STATIC
+    src/runtime/widgets/industrial_widget.cpp
+    src/runtime/widgets/industrial_widget.h
     src/runtime/appearance.cpp
     src/runtime/appearance.h
     src/runtime/hmi_widget.cpp
@@ -169,7 +177,7 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/link_cards.cpp
     src/runtime/widgets/link_cards.h
 )
-target_link_libraries(fhmi_runtime PUBLIC fhmi_comm Qt6::Widgets FluentQtWidgets::Widgets)
+target_link_libraries(fhmi_runtime PUBLIC fhmi_comm Qt6::Widgets Qt6::Svg FluentQtWidgets::Widgets)
 
 # ---------------------------------------------------------------------------
 # fhmi_designer: canvas, palette and property editor.
@@ -316,7 +324,11 @@ if(FHMI_BUILD_TESTS)
         FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME modbus COMMAND tst_modbus)
 
-    add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp)
+    add_executable(tst_industrial tests/tst_industrial.cpp resources/app.qrc resources/widget_icons.qrc)
+    target_link_libraries(tst_industrial PRIVATE fhmi_designer Qt6::Test)
+    add_test(NAME industrial COMMAND tst_industrial)
+
+    add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp src/studio/designer_page.cpp resources/widget_icons.qrc)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)
     target_compile_definitions(tst_runtime PRIVATE
         FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"

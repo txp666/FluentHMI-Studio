@@ -1,6 +1,7 @@
 // Metadata of every designable widget. Type names, property names, defaults and enum
 // options match PyQt UI Designer exactly, so .uidp projects open in either program.
 #include "core/widget_meta.h"
+#include "core/industrial_catalog.h"
 
 #include "core/binding.h"
 #include "core/command_encoder.h"
@@ -470,7 +471,8 @@ QList<WidgetMeta> chartWidgets()
                     CanByteOrder::options()),
              boolean(QStringLiteral("curveCanSigned"), QT_TR_NOOP("有符号"), false),
              unranged(QStringLiteral("curveCanFactor"), QT_TR_NOOP("因子"), 1),
-             unranged(QStringLiteral("curveCanOffset"), QT_TR_NOOP("偏移"), 0)},
+             unranged(QStringLiteral("curveCanOffset"), QT_TR_NOOP("偏移"), 0),
+             str(QStringLiteral("curveExpression"), QT_TR_NOOP("转换表达式"), QString())},
             200, 150),
         meta(QStringLiteral("GaugeMeter"), QT_TR_NOOP("仪表盘"), WidgetCategory::Chart, QStringLiteral("speed_high"),
              180, 180,
@@ -654,6 +656,7 @@ QList<WidgetMeta> builtinWidgets()
     all += displayWidgets();
     all += chartWidgets();
     all += commWidgets();
+    all += industrialWidgets();
     return all;
 }
 

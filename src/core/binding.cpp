@@ -187,6 +187,7 @@ QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
     };
     QJsonObject binding{
         {QStringLiteral("parseMode"), field("parseMode", ParseMode::KeyValue)},
+        {QStringLiteral("expression"), field("expression", QString())},
         {QStringLiteral("key"), field("key", QString())},
         {QStringLiteral("jsonPath"), field("jsonPath", QString())},
         {QStringLiteral("byteOffset"), field("byteOffset", 0)},
@@ -563,8 +564,9 @@ void BindingEntry::resetStream()
     m_rawFrames.reset();
 }
 
-QVariant BindingEntry::resolvePath(const QVariant &root, const QString &path)
+QVariant BindingEntry::resolvePath(const QVariant &root, const QString &path, bool *found)
 {
+    if (found) *found = false;
     QVariant data = root;
     for (const QString &part : path.split(QLatin1Char('.'))) {
         if (!data.isValid() || data.isNull()) {
@@ -594,6 +596,7 @@ QVariant BindingEntry::resolvePath(const QVariant &root, const QString &path)
             return {};
         }
     }
+    if (found) *found = true;
     return data;
 }
 
@@ -613,6 +616,18 @@ QVariant BindingEntry::evaluate(const QVariant &raw) const
     }
     const QVariant result = Expression::evaluate(expression, value);
     return result.isValid() ? result : raw; // where Python's eval raises, the raw value
+}
+
+std::optional<double> BindingEntry::chartSample(const QVariant &raw) const
+{
+    const auto source = bindingFloat(raw);
+    if (!source || expression.trimmed().isEmpty()) {
+        return source;
+    }
+    // Preserve evaluate's bool/int/float semantics, including numeric strings. Only a valid source
+    // reaches the expression: a constant expression must never turn a missing/invalid reading into a point.
+    const auto result = bindingFloat(evaluate(raw));
+    return result ? result : source;
 }
 
 QVariant BindingEntry::formatValue(const QVariant &value) const

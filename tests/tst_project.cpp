@@ -17,7 +17,7 @@ class TestProject : public QObject
     void registryHasEveryDesignerWidget()
     {
         // As PyQt UI Designer, without the Modbus card, plus the CAN card and monitor only Studio has.
-        QCOMPARE(WidgetRegistry::instance().all().size(), 32);
+        QCOMPARE(WidgetRegistry::instance().all().size(), 110);
         const WidgetMeta *button = WidgetRegistry::instance().find("PushButton");
         QVERIFY(button);
         QCOMPARE(button->defaultProperties().value("text").toString(), QStringLiteral("按钮"));

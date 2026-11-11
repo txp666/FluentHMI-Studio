@@ -31,6 +31,10 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Use the Ubuntu mirror
+        if: runner.os == 'Linux'
+        run: sudo sh scripts/use-ubuntu-mirror.sh
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:

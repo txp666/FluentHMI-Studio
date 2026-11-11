@@ -37,7 +37,7 @@ FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Design
 https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.md
 ```
 
-这是 [docs/uidp-format.md](docs/uidp-format.md) 的原始文本，AI 一次就能读完，不用打开网页或克隆仓库。说明里有规则、一个完整的例子和控件一览；每个控件的全部属性在 [docs/uidp-widgets.md](docs/uidp-widgets.md)，由程序生成，说明里有它的链接，用到时再读。写完用 `FluentHMIRuntime 工程.uidp --check` 检查，再用 Studio 打开、预览和导出。
+用入口里的串口模板就能搭建第一个工程。需要其他协议时，可按任务查取值与曲线、链路与 Modbus、命令或 CAN。写完用 `FluentHMIRuntime 工程.uidp --check` 检查，再用 Studio 预览和导出。[公共模板与专题索引](docs/uidp-format.md) · [控件属性参考](docs/uidp-widgets.md)
 
 ## 在浏览器里打开工程
 
@@ -47,7 +47,7 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 两者使用同一种工程格式，控件和协议规则一致：
 
-- **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的 11 个示例工程都能打开、预览，并按原样保存。
+- **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的示例工程可以打开、预览并保存。[工业泵站与回放示例](examples/industrial)
 - **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 二进制帧（帧头帧尾、长度字段、校验、定长、空闲分帧）、Modbus RTU、Modbus TCP、Modbus ASCII 五种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / JSON / Modbus 四种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
 - **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定选寄存器区和地址；链路卡片选 Modbus 解析、控件绑定寄存器地址即可自动读取：相近的地址合并成块按周期读，一次一条，只读界面上看得见的控件，写命令排在读请求前面；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 - **Modbus RTU / TCP 从站**：串口、TCP、UDP 卡片可以当从站，用自己的数据表应答外部主站，绑定、控件和写命令直接读写这张表，从站寄存器表控件可以查看和修改。
@@ -55,7 +55,7 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 不同之处在实现和导出方式：
 
-| | FluentHMI Studio 0.5.1 | PyQt UI Designer 0.5.0 |
+| | FluentHMI Studio 0.6.0 | PyQt UI Designer 0.6.0 |
 | --- | --- | --- |
 | 实现 | C++17 / Qt 6，原生编译 | Python / PyQt5（Qt 5），用 Nuitka 打包 |
 | 导出应用 | 复制预编译的运行器，再放入工程和图片，约 0.3 秒，不需要 Python 和编译器 | 生成 Python 源码，再用 Nuitka 编译；下载的设计器要打包时需另装 Python 与编译工具 |
@@ -160,7 +160,7 @@ sudo usermod -aG dialout $USER
 | SocketCAN | – | – | 系统自带；接口的波特率用 `ip link` 设置（卡片上会给出命令，如 `sudo ip link set can0 up type can bitrate 500000 sample-point 0.875`） |
 | slcan（CANable、CANUSB 等 Lawicel 协议的适配器） | 适配器的串口 | 适配器的串口 | 适配器的串口；只支持经典 CAN，10k–1M |
 
-`.uidp` 里卡片、DBC 键、卡片上的信号和 CAN 命令怎么写，见 [docs/uidp-format.md](docs/uidp-format.md#接-can-总线)。
+CAN 专题给出了卡片配置、DBC 键、信号定义和发命令的写法。[CAN 工程说明](docs/uidp/can.md)
 
 ## 架构
 
@@ -233,9 +233,9 @@ macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHM
 
 发布新版本：修改 `CMakeLists.txt` 中 `project(... VERSION ...)`，可选地添加 `docs/release-notes/vX.Y.Z.md`，然后推送 `vX.Y.Z` 标签。`Release` 工作流会在 Windows、macOS（universal）和 Linux（x64 和 arm64，在 Ubuntu 24.04 上）上构建、测试、打包。对每个 .deb，它检查包名、版本、架构和依赖，让 apt 解析依赖，安装后用它导出示例工程，再在只装了上面所列系统库的干净 Ubuntu 24.04 容器里运行这个导出的应用。全部通过后才发布 GitHub Release。手动运行，或者由修改了打包的 pull request 触发时，只打包和检查，不发布。
 
-## 当前状态（0.5.1）
+## 当前状态（0.6.0）
 
-已完成：全部 32 种控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
+已完成：110 种控件，含 25 种工业设备、12 种仪表、13 种汽车电子、14 种电子 DIY 和14 种嵌入式控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
 
 MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQTT 模块）：支持用户名密码、QoS 0/1/2、`+`/`#` 通配符订阅，TLS 使用系统证书库；连接成功后若断开会自动重连。与 Python 版一致，每条消息视为一帧，纯数值载荷还会以主题名为键再给出一份。
 

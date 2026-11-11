@@ -962,7 +962,7 @@ void RealtimeChartWidget::onAttached()
                 continue;
             }
             // A malformed sample skips this curve only; the frame's other curves still update.
-            if (const auto y = bindingFloat(binding.evaluate(binding.extractFromParsed(message)))) {
+            if (const auto y = binding.chartSample(binding.extractFromParsed(message))) {
                 appendSample(int(i), *y);
             }
         }
@@ -977,7 +977,7 @@ void RealtimeChartWidget::onAttached()
                 continue;
             }
             for (const QVariant &value : binding.extractAllFromRaw(bytes)) {
-                if (const auto y = bindingFloat(value)) {
+                if (const auto y = binding.chartSample(value)) {
                     appendSample(int(i), *y);
                 }
             }
@@ -998,7 +998,7 @@ void RealtimeChartWidget::onAttached()
                 if (!raw.isValid()) {
                     continue;
                 }
-                if (const auto y = bindingFloat(binding.evaluate(raw))) {
+                if (const auto y = binding.chartSample(raw)) {
                     appendSample(int(i), *y);
                 }
             }

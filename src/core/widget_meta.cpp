@@ -1,6 +1,7 @@
 #include "core/widget_meta.h"
 
 #include "core/i18n.h"
+#include "core/industrial_catalog.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
@@ -20,6 +21,16 @@ QString categoryTitle(WidgetCategory category)
         return QCoreApplication::translate("fhmi", "显示控件");
     case WidgetCategory::Chart:
         return QCoreApplication::translate("fhmi", "图表控件");
+    case WidgetCategory::AutomotiveElectronics:
+        return QCoreApplication::translate("fhmi", "汽车电子");
+    case WidgetCategory::ElectronicsDiy:
+        return QCoreApplication::translate("fhmi", "电子 DIY");
+    case WidgetCategory::EmbeddedSystems:
+        return QCoreApplication::translate("fhmi", "嵌入式");
+    case WidgetCategory::IndustrialEquipment:
+        return QCoreApplication::translate("fhmi", "工业设备");
+    case WidgetCategory::IndustrialInstrument:
+        return QCoreApplication::translate("fhmi", "工业仪表");
     case WidgetCategory::Comm:
         return QCoreApplication::translate("fhmi", "通信控件");
     }
@@ -61,6 +72,9 @@ const PropDef *WidgetMeta::prop(const QString &name) const
 
 QString WidgetMeta::bindProperty() const
 {
+    if (isIndustrialCategory(category)) {
+        return QStringLiteral("value");
+    }
     static const QHash<QString, QString> mapping = {
         {QStringLiteral("Label"), QStringLiteral("text")},
         {QStringLiteral("LEDIndicator"), QStringLiteral("on")},
@@ -117,6 +131,26 @@ QList<WidgetCategory> WidgetRegistry::categories() const
 
 QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject props, const QString &changed)
 {
+    const auto *meta = WidgetRegistry::instance().find(typeName);
+    if (meta && isIndustrialCategory(meta->category) && meta->prop(QStringLiteral("minimum")) && meta->prop(QStringLiteral("maximum"))) {
+        const auto defaults = meta->defaultProperties();
+        double lo = props.value(QStringLiteral("minimum")).toDouble(defaults.value(QStringLiteral("minimum")).toDouble());
+        double hi = props.value(QStringLiteral("maximum")).toDouble(defaults.value(QStringLiteral("maximum")).toDouble());
+        if (lo > hi) {
+            if (changed == QLatin1String("maximum")) {
+                lo = hi;
+                props.insert(QStringLiteral("minimum"), lo);
+            } else {
+                hi = lo;
+                props.insert(QStringLiteral("maximum"), hi);
+            }
+        }
+        if (props.contains(QStringLiteral("value"))) {
+            const double value = props.value(QStringLiteral("value")).toDouble(defaults.value(QStringLiteral("value")).toDouble());
+            props.insert(QStringLiteral("value"), std::clamp(value, lo, hi));
+        }
+        return props; // omitted properties keep their catalog defaults and stay omitted in the saved project
+    }
     const bool isGauge = typeName == QLatin1String("GaugeMeter");
     if (typeName != QLatin1String("Slider") && typeName != QLatin1String("SpinBox") && !isGauge) {
         return props;

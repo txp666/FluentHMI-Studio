@@ -1,4 +1,5 @@
 #include "designer/design_scene.h"
+#include "runtime/widgets/industrial_widget.h"
 
 #include "comm/modbus_slave.h"
 #include "designer/canvas_item.h"
@@ -107,7 +108,8 @@ void DesignScene::setGridSize(int size)
 {
     m_gridSize = std::max(1, size);
     for (CanvasItem *item : topLevelItems()) {
-        item->setGridSize(m_gridSize);
+        if (auto *widget = dynamic_cast<IndustrialWidget *>(item->widget())) widget->setBitProfiles(m_bitProfiles);
+    item->setGridSize(m_gridSize);
     }
     update();
 }
@@ -152,6 +154,12 @@ void DesignScene::drawBackground(QPainter *painter, const QRectF &rect)
 // ---------------------------------------------------------------------------
 // Items
 // ---------------------------------------------------------------------------
+
+void DesignScene::setBitProfiles(const QJsonObject &profiles)
+{
+    m_bitProfiles = profiles;
+    for (auto *item : allItems()) if (auto *widget = dynamic_cast<IndustrialWidget *>(item->widget())) widget->setBitProfiles(profiles);
+}
 
 void DesignScene::adopt(CanvasItem *item)
 {

@@ -1,6 +1,8 @@
 #include "runtime/hmi_widget.h"
 
 #include "core/i18n.h"
+#include "core/industrial_catalog.h"
+#include "runtime/widgets/industrial_widget.h"
 
 #include "runtime/runtime_context.h"
 #include "runtime/widgets/basic_widgets.h"
@@ -195,7 +197,8 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
         return nullptr;
     }
     const Factory factory = factories().value(typeName);
-    HmiWidget *widget = factory ? factory(*meta, parent) : new PlaceholderWidget(*meta, parent);
+    HmiWidget *widget = isIndustrialCategory(meta->category) ? new IndustrialWidget(*meta, parent)
+        : factory ? factory(*meta, parent) : new PlaceholderWidget(*meta, parent);
     widget->setObjectName(typeName);
     widget->blockSignals(true);
     if (!assetBaseDir.isEmpty()) {
