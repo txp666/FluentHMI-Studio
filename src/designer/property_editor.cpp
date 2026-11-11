@@ -218,6 +218,7 @@ const QHash<QString, QString> &curveFields()
 {
     static const QHash<QString, QString> table = {
         {QStringLiteral("curveName"), QStringLiteral("name")},
+        {QStringLiteral("curveExpression"), QStringLiteral("expression")},
         {QStringLiteral("curveParseMode"), QStringLiteral("parseMode")},
         {QStringLiteral("curveKey"), QStringLiteral("key")},
         {QStringLiteral("curveJsonPath"), QStringLiteral("jsonPath")},
