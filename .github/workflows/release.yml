@@ -12,6 +12,7 @@ on:
   pull_request:
     paths:
       - scripts/package.py
+      - scripts/use-ubuntu-mirror.sh
       - .github/workflows/release.yml
       - resources/linux/**
 
