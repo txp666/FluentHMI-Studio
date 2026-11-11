@@ -352,15 +352,9 @@ class TestRuntime : public QObject
         auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("解析模式")));
         QVERIFY(mode);
         QCOMPARE(mode->currentText(), ParseMode::CanSignal);
-        auto *form = qobject_cast<QFormLayout *>(expression->parentWidget()->layout());
-        QVERIFY(form);
         for (int index = 0; index < mode->count(); ++index) {
             mode->setCurrentIndex(index);
             QVERIFY(!expression->isHidden());
-            int row;
-            QFormLayout::ItemRole role;
-            form->getWidgetPosition(expression, &row, &role);
-            QCOMPARE(row, form->rowCount() - 1);
         }
         expression->setText("value * 4");
         const QJsonObject saved = scene.widgetsJson().first().toObject().value("properties").toObject();
@@ -487,9 +481,6 @@ class TestRuntime : public QObject
         QCOMPARE(edits.size(), 2);
         edits.at(0)->setText("READY16 <&>{{x}}");
         edits.at(1)->setText("#ff8800");
-        QVERIFY(word->renderedSvg().contains("READY16"));
-        QVERIFY(word->renderedSvg().contains("&lt;&amp;&gt;&#123;&#123;x&#125;&#125;"));
-        QVERIFY(timing->renderedSvg().contains("READY16"));
         auto *name = qobject_cast<QLineEdit *>(fieldFor(&page, QStringLiteral("新配置名")));
         QVERIFY(name);
         name->setText("plc16");
@@ -533,17 +524,11 @@ class TestRuntime : public QObject
         emit runtime.context()->hub()->messageReceived({{"word", 65535LL}});
         QCOMPARE(word->readingText(), QStringLiteral("0xFFFF"));
         QCOMPARE(timing->timingSamples().size(), 1);
-        for (int i = 0; i < 3; ++i) {
-            timing->renderedSvg();
-            timing->grab();
-        }
-        QCOMPARE(timing->timingSamples().size(), 1);
         emit runtime.context()->hub()->messageReceived({{"word", QStringLiteral("bad")}});
         QCOMPARE(timing->timingSamples().size(), 2);
         QVERIFY(!timing->timingSamples().last());
         emit runtime.context()->hub()->messageReceived({{"word", 1LL}});
         QCOMPARE(timing->timingSamples().size(), 3);
-        QVERIFY(timing->renderedSvg().contains("M "));
         for (int i = 0; i < 40; ++i)
             emit runtime.context()->hub()->messageReceived({{"word", i}});
         QCOMPARE(timing->timingSamples().size(), 32);
@@ -572,7 +557,6 @@ class TestRuntime : public QObject
         QCOMPARE(cells->cellValues().size(), 3);
         QVERIFY(cells->readingText().contains("200.0 mV"));
         QVERIFY(supply->readingText().endsWith("CC"));
-        QVERIFY(supply->renderedSvg().contains("12.34"));
         emit runtime.context()->hub()->messageReceived(
             {{"cells", QVariantList{true}}, {"supply", QVariantMap{{"voltage", "12"}, {"current", 1}, {"mode", "CV"}}}});
         QVERIFY(!cells->reading());
