@@ -1,4 +1,5 @@
 #include "core/project.h"
+#include "core/bit_profile.h"
 
 #include "core/binding.h"
 #include "core/protocol_parser.h"
@@ -122,6 +123,11 @@ bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, con
         if (!props.isUndefined() && !props.isObject()) {
             return fail(error, QCoreApplication::translate("fhmi", "控件属性必须是对象"));
         }
+        if(type==QLatin1String("RotaryEncoder")) {
+            const auto ppr=props.toObject().value(QStringLiteral("pulsesPerTurn"));
+            if(!ppr.isUndefined()&&(!isStrictInt(ppr)||ppr.toDouble()<1||ppr.toDouble()>9007199254740991.0))
+                return fail(error,QCoreApplication::translate("fhmi","每圈脉冲必须是正的安全整数"));
+        }
         if (!validateCardParser(item, projectParser, error)) {
             return false;
         }
@@ -187,6 +193,7 @@ QJsonObject Project::toJson() const
         {QStringLiteral("widgets"), widgets},
         {QStringLiteral("serial"), serial},
     };
+    if (!bitProfiles.isEmpty()) document.insert(QStringLiteral("bitProfiles"), bitProfiles);
     if (!icon.isEmpty()) {
         document.insert(QStringLiteral("icon"), icon);
     }
@@ -203,6 +210,10 @@ bool Project::validate(const QJsonObject &data, QString *error)
     if (!appName.isUndefined() && !appName.isString()) {
         return fail(error, QCoreApplication::translate("fhmi", "应用名称必须是文本"));
     }
+    const auto profiles = data.value(QStringLiteral("bitProfiles"));
+    if (!profiles.isUndefined() && !profiles.isObject()) return fail(error, QCoreApplication::translate("fhmi", "bitProfiles 必须是对象"));
+    const auto problem = bitProfilesProblem(profiles.toObject());
+    if (!problem.isEmpty()) return fail(error, problem);
     const QJsonValue canvasValue = data.value(QStringLiteral("canvas"));
     if (!canvasValue.isUndefined() && !canvasValue.isObject()) {
         return fail(error, QCoreApplication::translate("fhmi", "画布配置必须是对象"));
@@ -257,6 +268,7 @@ Project Project::fromTrustedJson(const QJsonObject &data)
     project.canvasHeight = canvas.value(QStringLiteral("height")).toInt(800);
     project.gridSize = canvas.value(QStringLiteral("gridSize")).toInt(10);
     project.widgets = data.value(QStringLiteral("widgets")).toArray();
+    project.bitProfiles = data.value(QStringLiteral("bitProfiles")).toObject();
     const QJsonObject serialObject = data.value(QStringLiteral("serial")).toObject();
     for (auto it = serialObject.begin(); it != serialObject.end(); ++it) {
         project.serial.insert(it.key(), it.value());

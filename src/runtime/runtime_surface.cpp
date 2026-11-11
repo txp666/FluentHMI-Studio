@@ -58,6 +58,7 @@ void RuntimeSurface::build(const Project &project)
 {
     clear();
     m_assetBaseDir = project.assetBaseDir();
+    m_context->setBitProfiles(project.bitProfiles);
     m_context->hub()->configure(project.serial);
     setFixedSize(project.canvasWidth, project.canvasHeight);
     for (const QJsonValue &value : project.widgets) {

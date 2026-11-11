@@ -1,6 +1,7 @@
 // Metadata of every designable widget. Type names, property names, defaults and enum
 // options match PyQt UI Designer exactly, so .uidp projects open in either program.
 #include "core/widget_meta.h"
+#include "core/industrial_catalog.h"
 
 #include "core/binding.h"
 #include "core/command_encoder.h"
@@ -655,6 +656,7 @@ QList<WidgetMeta> builtinWidgets()
     all += displayWidgets();
     all += chartWidgets();
     all += commWidgets();
+    all += industrialWidgets();
     return all;
 }
 

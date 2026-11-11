@@ -10,7 +10,11 @@
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
 #include "runtime/widgets/display_widgets.h"
+#include "runtime/widgets/data_widgets.h"
 #include "studio/export_service.h"
+#include "studio/designer_page.h"
+#include "core/bit_profile.h"
+#include "runtime/widgets/industrial_widget.h"
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Widgets/Button.h>
@@ -313,6 +317,295 @@ class TestRuntime : public QObject
         Q_INIT_RESOURCE(fluentqtwidgets);
     }
 
+    void chartExpressionPanelStoresCurrentCurve()
+    {
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets(
+                     QJsonArray{QJsonObject{{"id", "trend"},
+                                            {"type", "RealtimeChart"},
+                                            {"properties", QJsonObject{{"curveCount", 2},
+                                                                       {"_curve_0_expression", "value + 1"},
+                                                                       {"_curve_1_parseMode", ParseMode::CanSignal},
+                                                                       {"_curve_1_canId", "invalid"},
+                                                                       {"_curve_1_expression", "value * 3"}}}}},
+                     &error),
+                 qPrintable(error));
+        auto *item = scene.findItem("trend");
+        QVERIFY(item);
+        PropertyEditor editor;
+        editor.setScene(&scene);
+        editor.showItem(item);
+        editor.show();
+        auto *expression = qobject_cast<QLineEdit *>(fieldFor(&editor, QStringLiteral("转换表达式")));
+        QVERIFY(expression);
+        QCOMPARE(expression->text(), QStringLiteral("value + 1"));
+        expression->setText("value + 2");
+        QCOMPARE(item->properties().value("_curve_0_expression").toString(), QStringLiteral("value + 2"));
+        auto *current = qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("当前编辑曲线")));
+        QVERIFY(current);
+        current->setValue(1);
+        QApplication::processEvents();
+        expression = qobject_cast<QLineEdit *>(fieldFor(&editor, QStringLiteral("转换表达式")));
+        QVERIFY(expression);
+        QCOMPARE(expression->text(), QStringLiteral("value * 3"));
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("解析模式")));
+        QVERIFY(mode);
+        QCOMPARE(mode->currentText(), ParseMode::CanSignal);
+        auto *form = qobject_cast<QFormLayout *>(expression->parentWidget()->layout());
+        QVERIFY(form);
+        for (int index = 0; index < mode->count(); ++index) {
+            mode->setCurrentIndex(index);
+            QVERIFY(!expression->isHidden());
+            int row;
+            QFormLayout::ItemRole role;
+            form->getWidgetPosition(expression, &row, &role);
+            QCOMPARE(row, form->rowCount() - 1);
+        }
+        expression->setText("value * 4");
+        const QJsonObject saved = scene.widgetsJson().first().toObject().value("properties").toObject();
+        QCOMPARE(saved.value("_curve_0_expression").toString(), QStringLiteral("value + 2"));
+        QCOMPARE(saved.value("_curve_1_expression").toString(), QStringLiteral("value * 4"));
+        DesignScene reloaded;
+        QVERIFY2(reloaded.loadWidgets(scene.widgetsJson(), &error), qPrintable(error));
+        QCOMPARE(reloaded.findItem("trend")->properties().value("_curve_1_expression"),
+                 saved.value("_curve_1_expression"));
+    }
+
+    void chartConstantExpressionSkipsInvalidSources()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        const QJsonObject props{{"curveCount", 2},
+                                {"_curve_0_name", "parsed"},
+                                {"_curve_0_key", "temperature"},
+                                {"_curve_0_expression", "42"},
+                                {"_curve_1_name", "raw"},
+                                {"_curve_1_parseMode", ParseMode::HexBytes},
+                                {"_curve_1_dataType", "float32"},
+                                {"_curve_1_expression", "42"}};
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("RealtimeChart", props));
+        auto *chart = dynamic_cast<RealtimeChartWidget *>(widget.get());
+        QVERIFY(chart);
+        chart->attach(&context);
+        emit context.hub()->messageReceived({});
+        for (const QString &value : {QStringLiteral("bad"), QStringLiteral("nan"), QStringLiteral("inf")}) {
+            emit context.hub()->messageReceived({{"temperature", value}});
+        }
+        emit context.hub()->rawReceived(QByteArray::fromHex("7f800000")); // infinity
+        emit context.hub()->rawReceived(QByteArray::fromHex("7fc00000")); // NaN
+        emit context.hub()->messageReceived({{"temperature", QStringLiteral("12.5")}});
+        emit context.hub()->rawReceived(QByteArray::fromHex("41480000")); // 12.5
+        QTemporaryDir dir;
+        const QString path = dir.filePath("history.json");
+        chart->saveHistory(path);
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject recorded = QJsonDocument::fromJson(file.readAll()).object();
+        QCOMPARE(recorded.value("parsed").toArray(), QJsonArray{42.0});
+        QCOMPARE(recorded.value("raw").toArray(), QJsonArray{42.0});
+    }
+
+    void chartTransformsBeforeRecording()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        const QJsonObject props{{"curveCount", 3},
+                                {"_curve_0_name", "parsed"},
+                                {"_curve_0_key", "temperature"},
+                                {"_curve_0_expression", "value * 2 + 1"},
+                                {"_curve_1_name", "raw"},
+                                {"_curve_1_parseMode", ParseMode::HexBytes},
+                                {"_curve_1_dataType", "uint16"},
+                                {"_curve_1_expression", "value * 2 + 1"},
+                                {"_curve_2_name", "can"},
+                                {"_curve_2_parseMode", ParseMode::CanSignal},
+                                {"_curve_2_canId", "0x123"},
+                                {"_curve_2_canFactor", 2},
+                                {"_curve_2_canOffset", 3},
+                                {"_curve_2_expression", "value * 2 + 1"}};
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("RealtimeChart", props));
+        auto *chart = dynamic_cast<RealtimeChartWidget *>(widget.get());
+        QVERIFY(chart);
+        chart->attach(&context);
+        emit context.hub()->messageReceived({{"temperature", 10LL}});
+        emit context.hub()->rawReceived(QByteArray::fromHex("000a"));
+        CanFrame frame;
+        frame.id = 0x123;
+        frame.data = QByteArray::fromHex("0a");
+        emit context.hub()->canFrames(nullptr, {frame}, false);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("history.json");
+        chart->saveHistory(path);
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject recorded = QJsonDocument::fromJson(file.readAll()).object();
+        QCOMPARE(recorded.value("parsed").toArray(), QJsonArray{21.0});
+        QCOMPARE(recorded.value("raw").toArray(), QJsonArray{21.0});
+        QCOMPARE(recorded.value("can").toArray(), QJsonArray{47.0});
+    }
+
+    void sharedBitProfilesEditSaveAndRuntimeState()
+    {
+        Project project;
+        project.appName = "signals";
+        project.bitProfiles = {
+            {"machine",
+             QJsonObject{{"width", 8}, {"bits", QJsonArray{QJsonObject{{"name", "READY"}, {"color", "#228866"}}}}}}};
+        const auto device = [](const char *id, const char *type, const char *key) {
+            return QJsonObject{{"id", id},
+                               {"type", type},
+                               {"properties", QJsonObject{{"bitProfile", "machine"}}},
+                               {"binding", QJsonObject{{"key", key}}}};
+        };
+        project.widgets = {device("word", "StatusWordPanel", "word"), device("timing", "DigitalTimingChart", "word"),
+                           device("encoder", "RotaryEncoder", "encoder"), device("cells", "BmsCellMatrix", "cells"),
+                           device("supply", "DcPowerSupply", "supply")};
+        QTemporaryDir dir;
+        QString error;
+        const QString path = dir.filePath("signals.uidp");
+        QVERIFY2(project.save(path, &error), qPrintable(error));
+        DesignerPage page;
+        page.show();
+        QVERIFY(page.openProject(path));
+        auto *scene = page.findChild<DesignScene *>();
+        QVERIFY(scene);
+        scene->selectIds({"word"});
+        QApplication::processEvents();
+        auto *width = qobject_cast<FluentQt::ComboBox *>(fieldFor(&page, QStringLiteral("位宽")));
+        QVERIFY(width);
+        width->setCurrentText("16");
+        QApplication::processEvents();
+        auto *word = dynamic_cast<IndustrialWidget *>(scene->findItem("word")->widget());
+        auto *timing = dynamic_cast<IndustrialWidget *>(scene->findItem("timing")->widget());
+        QCOMPARE(word->bitProfile().value("width").toInt(), 16);
+        QCOMPARE(timing->bitProfile().value("width").toInt(), 16);
+        auto *row = fieldFor(&page, "B0");
+        QVERIFY(row);
+        auto edits = row->findChildren<QLineEdit *>();
+        QCOMPARE(edits.size(), 2);
+        edits.at(0)->setText("READY16 <&>{{x}}");
+        edits.at(1)->setText("#ff8800");
+        QVERIFY(word->renderedSvg().contains("READY16"));
+        QVERIFY(word->renderedSvg().contains("&lt;&amp;&gt;&#123;&#123;x&#125;&#125;"));
+        QVERIFY(timing->renderedSvg().contains("READY16"));
+        auto *name = qobject_cast<QLineEdit *>(fieldFor(&page, QStringLiteral("新配置名")));
+        QVERIFY(name);
+        name->setText("plc16");
+        QPushButton *rename = nullptr;
+        for (auto *button : page.findChildren<QPushButton *>())
+            if (button->text() == QStringLiteral("重命名配置"))
+                rename = button;
+        QVERIFY(rename);
+        rename->click();
+        QApplication::processEvents();
+        QCOMPARE(scene->findItem("word")->propertyValue("bitProfile").toString(), QStringLiteral("plc16"));
+        QCOMPARE(scene->findItem("timing")->propertyValue("bitProfile").toString(), QStringLiteral("plc16"));
+        QVERIFY(page.save());
+        Project loaded;
+        QVERIFY2(Project::load(path, &loaded, &error), qPrintable(error));
+        QVERIFY(!loaded.bitProfiles.contains("machine"));
+        QCOMPARE(loaded.bitProfiles.size(), 1);
+        QCOMPARE(loaded.bitProfiles.value("plc16").toObject().value("width").toInt(), 16);
+        RuntimeSurface runtime;
+        runtime.build(loaded);
+        runtime.show();
+        QApplication::processEvents();
+        IndustrialWidget *counter = nullptr, *cells = nullptr, *supply = nullptr;
+        word = nullptr;
+        timing = nullptr;
+        for (auto *widget : runtime.widgets()) {
+            auto *item = dynamic_cast<IndustrialWidget *>(widget);
+            if (widget->typeName() == "StatusWordPanel")
+                word = item;
+            if (widget->typeName() == "DigitalTimingChart")
+                timing = item;
+            if (widget->typeName() == "RotaryEncoder")
+                counter = item;
+            if (widget->typeName() == "BmsCellMatrix")
+                cells = item;
+            if (widget->typeName() == "DcPowerSupply")
+                supply = item;
+        }
+        QVERIFY(word && timing && counter && cells && supply);
+        QCOMPARE(timing->timingSamples().size(), 0);
+        emit runtime.context()->hub()->messageReceived({{"word", 65535LL}});
+        QCOMPARE(word->readingText(), QStringLiteral("0xFFFF"));
+        QCOMPARE(timing->timingSamples().size(), 1);
+        for (int i = 0; i < 3; ++i) {
+            timing->renderedSvg();
+            timing->grab();
+        }
+        QCOMPARE(timing->timingSamples().size(), 1);
+        emit runtime.context()->hub()->messageReceived({{"word", QStringLiteral("bad")}});
+        QCOMPARE(timing->timingSamples().size(), 2);
+        QVERIFY(!timing->timingSamples().last());
+        emit runtime.context()->hub()->messageReceived({{"word", 1LL}});
+        QCOMPARE(timing->timingSamples().size(), 3);
+        QVERIFY(timing->renderedSvg().contains("M "));
+        for (int i = 0; i < 40; ++i)
+            emit runtime.context()->hub()->messageReceived({{"word", i}});
+        QCOMPARE(timing->timingSamples().size(), 32);
+        QCOMPARE(timing->timingSamples().first(), std::optional<quint32>(8));
+        QCOMPARE(timing->timingSamples().last(), std::optional<quint32>(39));
+        const auto count = [&](const QVariant &value) {
+            emit runtime.context()->hub()->messageReceived({{"encoder", value}});
+        };
+        count(100LL);
+        QVERIFY(!counter->encoderDirection());
+        count(100LL);
+        QCOMPARE(counter->encoderDirection(), std::optional<int>(0));
+        count(99LL);
+        QCOMPARE(counter->encoderDirection(), std::optional<int>(-1));
+        count(110LL);
+        QCOMPARE(counter->encoderDirection(), std::optional<int>(1));
+        count(.5);
+        QVERIFY(!counter->reading());
+        count(111LL);
+        QVERIFY(!counter->encoderDirection());
+        count(true);
+        QVERIFY(!counter->reading());
+        emit runtime.context()->hub()->messageReceived(
+            {{"cells", QVariantList{3.7, 3.8, 3.6}},
+             {"supply", QVariantMap{{"voltage", 12.34}, {"current", -.002}, {"mode", " cc "}}}});
+        QCOMPARE(cells->cellValues().size(), 3);
+        QVERIFY(cells->readingText().contains("200.0 mV"));
+        QVERIFY(supply->readingText().endsWith("CC"));
+        QVERIFY(supply->renderedSvg().contains("12.34"));
+        emit runtime.context()->hub()->messageReceived(
+            {{"cells", QVariantList{true}}, {"supply", QVariantMap{{"voltage", "12"}, {"current", 1}, {"mode", "CV"}}}});
+        QVERIFY(!cells->reading());
+        QVERIFY(!supply->reading());
+        emit runtime.context()->hub()->messageReceived(
+            {{"cells", QVariantList{-.1, 0.0}},
+             {"supply", QVariantMap{{"voltage", 0.0}, {"current", 0.0}, {"mode", "cv"}}}});
+        QVERIFY(cells->reading());
+        QVERIFY(supply->reading());
+        for (const auto &type : {QStringLiteral("BmsCellMatrix"), QStringLiteral("DcPowerSupply")}) {
+            const auto key = type == "BmsCellMatrix" ? QStringLiteral("cells") : QStringLiteral("supply");
+            runtime.context()->addBinding(*BindingEntry::fromWidget(
+                QJsonObject{{"id", key},
+                            {"type", type},
+                            {"binding", QJsonObject{{"parseMode", ParseMode::JsonPath},
+                                                    {"jsonPath", QStringLiteral("packet.") + key}}}}));
+        }
+        emit runtime.context()->hub()->messageReceived(
+            {{"packet", QVariantMap{{"cells", QVariantList{4.1, 4.2}},
+                                    {"supply", QVariantMap{{"voltage", 5.0}, {"current", .25}, {"mode", "CV"}}}}}});
+        QCOMPARE(cells->cellValues(), QList<double>({4.1, 4.2}));
+        QVERIFY(supply->readingText().contains("5.00 V"));
+        runtime.context()->addBinding(*BindingEntry::fromWidget(
+            QJsonObject{{"id", "timing"},
+                        {"type", "DigitalTimingChart"},
+                        {"binding", QJsonObject{{"parseMode", ParseMode::JsonPath}, {"jsonPath", "packet.word"}}}}));
+        const int before = timing->timingSamples().size();
+        emit runtime.context()->hub()->messageReceived({{"packet", QVariantMap{{"unrelated", 1}}}});
+        QCOMPARE(timing->timingSamples().size(), before);
+        emit runtime.context()->hub()->messageReceived({{"packet", QVariantMap{{"word", QVariant()}}}});
+        QVERIFY(!timing->timingSamples().last());
+    }
+
     void everyTypeHasAWidget()
     {
         for (const WidgetMeta &meta : WidgetRegistry::instance().all()) {
@@ -393,6 +686,36 @@ class TestRuntime : public QObject
         button->click();
         QCOMPARE(link.sent, QList<QByteArray>{QByteArray("RUN\n")});
         surface.context()->hub()->removeLink(&link);
+    }
+
+    void buttonWritesSingleCoil()
+    {
+        FakeLink link;
+        RuntimeContext context;
+        context.hub()->addLink(&link);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("PushButton", {}));
+        widget->attach(&context);
+        auto *button = widget->findChild<QPushButton *>();
+        QVERIFY(button);
+        auto click = [&](const QString &function, QJsonValue value = QJsonValue::Undefined) {
+            QJsonObject props{{"commandMode", "Modbus"}, {"mbFunc", function}};
+            props.insert("mbValue", value);
+            widget->setProperties(props);
+            link.sent.clear();
+            button->click();
+            return link.sent;
+        };
+        const QString coil = QStringLiteral("05 写单线圈");
+        const QList<QByteArray> on{QByteArray::fromHex("01050000ff008c3a")};
+        QCOMPARE(click(coil), on);
+        QCOMPARE(click(coil, 1), on);
+        QCOMPARE(click(coil, QStringLiteral("1")), on);
+        QCOMPARE(click(coil, 65280), on);
+        QCOMPARE(click(coil, 0), QList<QByteArray>{QByteArray::fromHex("010500000000cdca")});
+        QVERIFY(click(coil, 2).isEmpty());
+        QVERIFY(click(coil, 1.5).isEmpty());
+        QCOMPARE(click(QStringLiteral("01 读线圈"), 1), QList<QByteArray>{QByteArray::fromHex("010100000001fdca")});
+        QCOMPARE(click(QStringLiteral("06 写单寄存器"), 1), QList<QByteArray>{QByteArray::fromHex("010600000001480a")});
     }
 
     // The receive log shows text the way the link that received it spells it.
@@ -1624,10 +1947,13 @@ class TestRuntime : public QObject
 
         Project project;
         project.appName = QStringLiteral("温控/面板");
+        project.bitProfiles={{"default",effectiveBitProfile({},QStringLiteral("default"))}};
         project.filePath = source.filePath("panel.uidp");
         project.widgets = QJsonArray{QJsonObject{{"id", "img"},
                                                  {"type", "ImageDisplay"},
                                                  {"properties", QJsonObject{{"imagePath", "logo.png"}}}}};
+        project.widgets.append(QJsonObject{{"id","word"},{"type","StatusWordPanel"},{"properties",QJsonObject{{"bitProfile","default"}}}});
+        project.widgets.append(QJsonObject{{"id","timing"},{"type","DigitalTimingChart"},{"properties",QJsonObject{{"bitProfile","default"}}}});
         // A studio set to orange once exported a cyan application.
         auto *config = FluentQt::FluentConfig::instance();
         auto *theme = FluentQt::ThemeManager::instance();
@@ -1659,6 +1985,9 @@ class TestRuntime : public QObject
         Project exported;
         QVERIFY2(Project::load(resources.filePath("project.uidp"), &exported, &error), qPrintable(error));
         QCOMPARE(exported.appName, project.appName);
+        QCOMPARE(exported.bitProfiles,project.bitProfiles);
+        QCOMPARE(exported.widgets.at(1).toObject().value("properties").toObject().value("bitProfile").toString(),QStringLiteral("default"));
+        QCOMPARE(exported.widgets.at(2).toObject().value("properties").toObject().value("bitProfile").toString(),QStringLiteral("default"));
         const QString bundled = exported.widgets.at(0).toObject().value("properties").toObject().value("imagePath").toString();
         QCOMPARE(bundled, QStringLiteral("assets/logo.png"));
         QVERIFY(QFileInfo::exists(resources.filePath(bundled)));

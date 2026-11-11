@@ -1,4 +1,5 @@
 #include "runtime/runtime_context.h"
+#include "core/industrial_catalog.h"
 
 #include "comm/modbus_slave.h"
 #include "runtime/hmi_widget.h"
@@ -87,6 +88,7 @@ void RuntimeContext::setCurveNeeds(const QObject *chart, const QList<ModbusNeed>
 void RuntimeContext::setActive(bool active)
 {
     m_active = active;
+    emit activeChanged(active);
     if (!active) {
         for (BindingEntry &binding : m_bindings) {
             binding.resetStream();
@@ -181,7 +183,13 @@ void RuntimeContext::onMessage(const Message &message)
             continue;
         }
         const QVariant value = binding.extractFromParsed(message);
-        if (value.isValid() && !value.isNull()) {
+        const bool special = binding.typeName==QLatin1String("DigitalTimingChart")||binding.typeName==QLatin1String("RotaryEncoder")||binding.typeName==QLatin1String("StatusWordPanel")||binding.typeName==QLatin1String("BmsCellMatrix")||binding.typeName==QLatin1String("DcPowerSupply");
+        bool explicitlyPresent = special && binding.parseMode==ParseMode::KeyValue && message.contains(binding.key);
+        if(special && (!value.isValid()||value.isNull()) && binding.parseMode==ParseMode::JsonPath) {
+            const auto dot=binding.jsonPath.indexOf(QLatin1Char('.'));const auto first=dot<0?binding.jsonPath:binding.jsonPath.left(dot);
+            if(message.contains(first)){if(dot<0)explicitlyPresent=true;else BindingEntry::resolvePath(message.value(first),binding.jsonPath.mid(dot+1),&explicitlyPresent);}
+        }
+        if ((value.isValid() && !value.isNull()) || explicitlyPresent) {
             push(binding, value);
         }
     }
@@ -228,7 +236,15 @@ void RuntimeContext::push(const BindingEntry &binding, const QVariant &raw)
 {
     const QPointer<HmiWidget> widget = m_widgets.value(binding.widgetId);
     if (widget) {
-        widget->applyBoundValue(binding.formatValue(binding.evaluate(raw)), binding);
+        const QString type=widget->typeName();
+        if(type==QLatin1String("BmsCellMatrix")||type==QLatin1String("DcPowerSupply")||type==QLatin1String("StatusWordPanel")||type==QLatin1String("DigitalTimingChart")||type==QLatin1String("RotaryEncoder")) {
+            widget->applyBoundValue(binding.evaluate(raw),binding);
+        } else if (isIndustrialCategory(widget->meta().category)) {
+            const auto value = binding.chartSample(raw);
+            widget->applyBoundValue(value ? QVariant(*value) : QVariant(), binding);
+        } else {
+            widget->applyBoundValue(binding.formatValue(binding.evaluate(raw)), binding);
+        }
     }
 }
 

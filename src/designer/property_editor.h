@@ -57,6 +57,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     QWidget *createEditor(const PropDef &def, const QJsonValue &value, const Commit &commit);
 
     void buildProjectForm();
+    void buildBitProfilesForm();
     // The project's icon beside its name: choose an image or go back to the default.
     QWidget *createIconButton(QWidget *nameField);
     void buildItemForm();
@@ -83,6 +84,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     QPointer<CanvasItem> m_item;
     DesignScene *m_scene = nullptr;
     Project *m_project = nullptr;
+    QString m_bitProfileName = QStringLiteral("default");
     QWidget *m_content = nullptr;
     QVBoxLayout *m_layout = nullptr;
     QHash<QString, QPair<QWidget *, QWidget *>> m_rows;

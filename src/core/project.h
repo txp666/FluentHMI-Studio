@@ -32,6 +32,7 @@ class Project
     int gridSize = 10;
     QJsonArray widgets;
     QJsonObject serial;
+    QJsonObject bitProfiles;
     QString filePath; // empty until saved or loaded
 
     QJsonObject toJson() const;

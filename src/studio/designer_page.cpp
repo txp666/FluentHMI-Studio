@@ -408,6 +408,7 @@ void DesignerPage::fitCanvas()
 void DesignerPage::applyProjectSettings()
 {
     m_scene->setCanvasSize(QSize(m_project.canvasWidth, m_project.canvasHeight));
+    m_scene->setBitProfiles(m_project.bitProfiles);
     m_scene->setGridSize(m_project.gridSize);
 }
 
