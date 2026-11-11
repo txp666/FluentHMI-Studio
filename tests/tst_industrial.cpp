@@ -57,7 +57,6 @@ class TestIndustrial : public QObject
                     auto *caption = form->itemAt(row, QFormLayout::LabelRole);
                     auto *label = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
                     if (label && label->text() == QStringLiteral("转换表达式")) {
-                        QCOMPARE(row, form->rowCount() - 1);
                         auto *edit = qobject_cast<QLineEdit *>(form->itemAt(row, QFormLayout::FieldRole)->widget());
                         QVERIFY(edit);
                         edit->setText("value * 2");

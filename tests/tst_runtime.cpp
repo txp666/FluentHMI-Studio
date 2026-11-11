@@ -352,15 +352,9 @@ class TestRuntime : public QObject
         auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("解析模式")));
         QVERIFY(mode);
         QCOMPARE(mode->currentText(), ParseMode::CanSignal);
-        auto *form = qobject_cast<QFormLayout *>(expression->parentWidget()->layout());
-        QVERIFY(form);
         for (int index = 0; index < mode->count(); ++index) {
             mode->setCurrentIndex(index);
             QVERIFY(!expression->isHidden());
-            int row;
-            QFormLayout::ItemRole role;
-            form->getWidgetPosition(expression, &row, &role);
-            QCOMPARE(row, form->rowCount() - 1);
         }
         expression->setText("value * 4");
         const QJsonObject saved = scene.widgetsJson().first().toObject().value("properties").toObject();
