@@ -61,6 +61,11 @@ jobs:
         with:
           submodules: recursive
 
+      # The runner mirror list falls back to official Ubuntu archives; Azure DNS is failing.
+      - name: Exclude the unavailable Azure apt mirror
+        if: runner.os == 'Linux' && runner.arch == 'X64'
+        run: sudo sed -i -E '\|^https?://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+
       # Qt's CMake packages want the GL headers. The xcb libraries named here go into the package; patchelf
       # and xvfb serve scripts/package.py.
       - name: Install Linux packages
