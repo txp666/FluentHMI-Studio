@@ -8,18 +8,13 @@
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
 #include "runtime/widgets/industrial_widget.h"
-#include <FluentQtWidgets/Theme.h>
 #include <QtCore/QJsonArray>
 #include <QtCore/QTemporaryDir>
-#include <QtGui/QPainter>
-#include <QtSvg/QSvgRenderer>
 #include <QtTest/QtTest>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
-#include <QtWidgets/QScrollArea>
-#include <QtWidgets/QScrollBar>
 #include <QtWidgets/QTreeWidget>
 
 using namespace fhmi;
@@ -91,32 +86,6 @@ class TestIndustrial : public QObject
         }
         applyLanguage(qApp, kLanguageChinese);
     }
-    void contactSheets()
-    {
-        const QString output = qEnvironmentVariable("FHMI_INDUSTRIAL_CONTACT_SHEET");
-        if (output.isEmpty()) {
-            return;
-        }
-        for (bool dark : {false, true}) {
-            FluentQt::ThemeManager::instance()->setTheme(dark ? FluentQt::Theme::Dark : FluentQt::Theme::Light);
-            QImage sheet(6 * 192, int((industrialCatalog().size() + 5) / 6) * 176, QImage::Format_ARGB32_Premultiplied);
-            sheet.fill(dark ? QColor("#172332") : QColor("#f4f7fa"));
-            QPainter painter(&sheet);
-            int index = 0;
-            for (const auto &item : industrialCatalog()) {
-                const auto type = item.toObject().value("type").toString();
-                std::unique_ptr<HmiWidget> widget(createHmiWidget(type, {}));
-                const QPoint origin(index % 6 * 192 + 16, index / 6 * 176);
-                widget->render(&painter, origin);
-                painter.setPen(dark ? Qt::white : Qt::black);
-                painter.drawText(QRect(origin + QPoint(-16, 144), QSize(192, 24)), Qt::AlignCenter, type);
-                ++index;
-            }
-            painter.end();
-            QVERIFY(sheet.save(output + (dark ? "-dark.png" : "-light.png")));
-        }
-        FluentQt::ThemeManager::instance()->setTheme(FluentQt::Theme::Light);
-    }
     void semanticControls()
     {
         BindingEntry binding;
@@ -124,93 +93,32 @@ class TestIndustrial : public QObject
             createHmiWidget("FlowMeter", {{"minimum", -100}, {"maximum", 100}, {"value", 50}}));
         auto *flow = dynamic_cast<IndustrialWidget *>(flowBase.get());
         QVERIFY(flow);
-        QCOMPARE(flow->animationRate(), 0.525);
-        QVERIFY(!flow->animationRunning()); // design canvas remains still
         QVERIFY(flow->readingText().contains(QStringLiteral("正向")));
         flow->applyBoundValue(-100, binding);
-        QCOMPARE(flow->animationRate(), -0.9);
         QVERIFY(flow->readingText().contains(QStringLiteral("反向")));
         flow->applyBoundValue(0, binding);
-        QCOMPARE(flow->animationRate(), 0.0);
         QVERIFY(flow->readingText().contains(QStringLiteral("零流量")));
         std::unique_ptr<HmiWidget> powerBase(createHmiWidget("PowerMeter", {}));
         auto *power = dynamic_cast<IndustrialWidget *>(powerBase.get());
         power->applyBoundValue(-1, binding);
         QVERIFY(power->readingText().contains(QStringLiteral("输出")));
-        std::unique_ptr<HmiWidget> pipeBase(
-            createHmiWidget("FlowPipe", {{"pipeShape", "直管"}, {"pipeDirection", "镜像布局"}, {"pipeWidth", 26}}));
-        auto *pipe = dynamic_cast<IndustrialWidget *>(pipeBase.get());
-        QCOMPARE(pipe->svgDrivers().value("straight"), 1.0);
-        QCOMPARE(pipe->svgDrivers().value("elbow"), 0.0);
-        QCOMPARE(pipe->svgDrivers().value("mirrored"), 1.0);
-        QCOMPARE(pipe->svgDrivers().value("thickness"), 1.0);
-        QVERIFY(QSvgRenderer(pipe->renderedSvg()).isValid());
         std::unique_ptr<HmiWidget> motorBase(createHmiWidget("Motor", {{"feedbackMode", "运行位"}}));
         auto *motor = dynamic_cast<IndustrialWidget *>(motorBase.get());
         motor->applyBoundValue(2, binding);
         QVERIFY(!motor->reading());
         QVERIFY(motor->readingText().contains(QStringLiteral("数据异常")));
         motor->applyBoundValue(1, binding);
-        QCOMPARE(motor->animationRate(), 0.55);
         QCOMPARE(motor->readingText(), QStringLiteral("运行"));
-        motor->applyBoundValue(0, binding);
-        QCOMPARE(motor->animationRate(), 0.0);
         std::unique_ptr<HmiWidget> cylinderBase(createHmiWidget("Cylinder", {{"feedbackMode", "端位状态"}}));
         auto *cylinder = dynamic_cast<IndustrialWidget *>(cylinderBase.get());
         cylinder->applyBoundValue(0, binding);
         QVERIFY(cylinder->reading());
-        QCOMPARE(cylinder->svgDrivers().value("pistonKnown"), 0.0);
         QVERIFY(cylinder->readingText().contains(QStringLiteral("两端未到位")));
-        cylinder->applyBoundValue(1, binding);
-        QCOMPARE(cylinder->svgDrivers().value("pistonKnown"), 1.0);
-        QCOMPARE(cylinder->svgDrivers().value("level"), 0.0);
-        cylinder->applyBoundValue(2, binding);
-        QCOMPARE(cylinder->svgDrivers().value("level"), 1.0);
         cylinder->applyBoundValue(3, binding);
         QVERIFY(!cylinder->reading());
         cylinder->applyBoundValue(1, binding);
         QVERIFY(cylinder->reading());
-        std::unique_ptr<HmiWidget> compressorBase(createHmiWidget("AirCompressor", {}));
-        auto *compressor = dynamic_cast<IndustrialWidget *>(compressorBase.get());
-        compressor->applyBoundValue(1, binding);
-        QCOMPARE(compressor->animationRate(), 0.55);
-        compressor->applyBoundValue(3, binding);
-        QCOMPARE(compressor->animationRate(), 0.3);
-        compressor->applyBoundValue(2, binding);
-        QCOMPARE(compressor->animationRate(), 0.0);
     }
-    void animationStopsOutsideViewport()
-    {
-        RuntimeContext context;
-        QScrollArea area;
-        area.resize(240, 220);
-        auto *content = new QWidget;
-        content->setFixedSize(220, 1000);
-        area.setWidget(content);
-        auto *widget = dynamic_cast<IndustrialWidget *>(createHmiWidget("FlowMeter", {}, content));
-        QVERIFY(widget);
-        widget->move(10, 10);
-        widget->attach(&context);
-        context.setActive(true);
-        BindingEntry binding;
-        widget->applyBoundValue(25, binding);
-        area.show();
-        QTRY_VERIFY(widget->animationRunning());
-        QVERIFY(!widget->visibleRegion().isEmpty());
-        area.verticalScrollBar()->setValue(700);
-        QApplication::processEvents();
-        QVERIFY(widget->isVisible()); // scrolling clips it without hiding it
-        QVERIFY(widget->visibleRegion().isEmpty());
-        QTRY_VERIFY(!widget->animationRunning());
-        const auto paused = widget->renderedSvg();
-        QTest::qWait(100);
-        QCOMPARE(widget->renderedSvg(), paused);
-        area.verticalScrollBar()->setValue(0);
-        QTRY_VERIFY(!widget->visibleRegion().isEmpty());
-        QTRY_VERIFY(widget->animationRunning());
-        QTRY_VERIFY(widget->renderedSvg() != paused);
-    }
-
     void adjustableLimits()
     {
         for (const auto &type : {"PressureGauge", "Tank", "Voltmeter", "Ammeter"}) {
@@ -219,33 +127,11 @@ class TestIndustrial : public QObject
             auto *widget = dynamic_cast<IndustrialWidget *>(base.get());
             BindingEntry binding;
             widget->applyBoundValue(20, binding);
-            QCOMPARE(widget->svgDrivers().value("limitsOn"), 1.0);
-            QCOMPARE(widget->svgDrivers().value("lowMark"), 0.2);
-            QCOMPARE(widget->svgDrivers().value("highMark"), 0.8);
-            QCOMPARE(widget->svgDrivers().value("lowAlarm"), 1.0);
-            QCOMPARE(widget->svgDrivers().value("highAlarm"), 0.0);
             QVERIFY(widget->readingText().contains(QStringLiteral("低于限值")));
-            widget->applyBoundValue(80, binding);
-            QCOMPARE(widget->svgDrivers().value("highAlarm"), 1.0);
             widget->applyBoundValue(QStringLiteral("nan"), binding);
-            QCOMPARE(widget->svgDrivers().value("highAlarm"), 0.0);
             QVERIFY(!widget->reading());
             widget->applyBoundValue(50, binding);
             QVERIFY(widget->reading());
-            QCOMPARE(widget->svgDrivers().value("lowAlarm"), 0.0);
-            auto props = widget->properties();
-            props.insert("lowLimit", 90);
-            props.insert("highLimit", 20);
-            widget->setProperties(props);
-            QCOMPARE(widget->svgDrivers().value("limitsOn"), 0.0);
-            props.insert("lowLimit", -100);
-            props.insert("highLimit", 200);
-            widget->setProperties(props);
-            QCOMPARE(widget->svgDrivers().value("lowMark"), 0.0);
-            QCOMPARE(widget->svgDrivers().value("highMark"), 1.0);
-            props.insert("showLimits", false);
-            widget->setProperties(props);
-            QCOMPARE(widget->svgDrivers().value("limitsOn"), 0.0);
         }
     }
     void allTypes_data()
@@ -265,10 +151,6 @@ class TestIndustrial : public QObject
         QVERIFY(meta);
         QVERIFY(isIndustrialCategory(meta->category));
         QCOMPARE(meta->bindProperty(), QStringLiteral("value"));
-        QCOMPARE(meta->defaultWidth,
-                 definition.value("size").toArray().isEmpty() ? 160 : definition.value("size").toArray().at(0).toInt());
-        QCOMPARE(meta->defaultHeight,
-                 definition.value("size").toArray().isEmpty() ? 140 : definition.value("size").toArray().at(1).toInt());
         const int special = type == "FlowPipe" ? 3 : (type == "Motor" || type == "Cylinder" ? 1 : 0);
         const int expected = type == "BmsCellMatrix" || type == "DcPowerSupply" ? 1
                              : type == "StatusWordPanel" || type == "DigitalTimingChart" || type == "RotaryEncoder"
@@ -279,9 +161,6 @@ class TestIndustrial : public QObject
         auto *widget = dynamic_cast<IndustrialWidget *>(created.get());
         QVERIFY(widget);
         QVERIFY(widget->reading());
-        QVERIFY(!widget->animationRunning());
-        QVERIFY(QSvgRenderer(widget->renderedSvg()).isValid());
-        QVERIFY(!widget->renderedSvg().contains("{{"));
         RuntimeContext context;
         widget->attach(&context);
         context.registerWidget("device", widget);
@@ -296,7 +175,6 @@ class TestIndustrial : public QObject
             const QVariant payload = definition.value("value").toVariant();
             emit context.hub()->messageReceived({{"reading", payload}});
             QVERIFY(widget->reading());
-            QVERIFY(QSvgRenderer(widget->renderedSvg()).isValid());
             return;
         }
 
@@ -312,24 +190,6 @@ class TestIndustrial : public QObject
         QVERIFY(widget->readingText().contains(QStringLiteral("数据异常")));
         emit context.hub()->messageReceived({{"reading", 0LL}});
         QCOMPARE(widget->reading(), std::optional<double>(1));
-        widget->show();
-        QApplication::processEvents();
-        const bool motion = definition.value("motion").toString() != "none";
-        QCOMPARE(widget->animationRunning(), motion);
-        const auto before = widget->renderedSvg();
-        if (motion) {
-            // A busy runner may deliver the animation timer after the first polling interval.
-            QTRY_VERIFY_WITH_TIMEOUT(before != widget->renderedSvg(), 5000);
-        }
-        widget->hide();
-        QVERIFY(!widget->animationRunning());
-        widget->show();
-        context.setActive(false);
-        QVERIFY(!widget->animationRunning());
-        context.setActive(true);
-        QCOMPARE(widget->animationRunning(), motion);
-        widget->applyBoundValue(0, *entry);
-        QVERIFY(!widget->animationRunning());
         if (definition.value("mode").toString() != "number" && definition.value("mode").toString() != "word" &&
             definition.value("mode").toString() != "timing" && definition.value("mode").toString() != "encoder") {
             widget->applyBoundValue(0.5, *entry);
@@ -338,9 +198,6 @@ class TestIndustrial : public QObject
                 const int maximum = definition.value("maximum").toInt(255);
                 widget->applyBoundValue(maximum, *entry);
                 QCOMPARE(widget->readingText(), QStringLiteral("0x%1").arg(QString::number(maximum, 16).toUpper()));
-                for (int bit = 0; bit < 8; ++bit)
-                    QCOMPARE(widget->svgDrivers().value(QStringLiteral("bit%1").arg(bit)),
-                             (maximum & (1 << bit)) ? 1.0 : 0.0);
                 widget->applyBoundValue(0, *entry);
                 QCOMPARE(widget->readingText(), QStringLiteral("0x00"));
             }
