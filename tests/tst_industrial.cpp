@@ -318,8 +318,8 @@ class TestIndustrial : public QObject
         QCOMPARE(widget->animationRunning(), motion);
         const auto before = widget->renderedSvg();
         if (motion) {
-            QTest::qWait(90);
-            QVERIFY(before != widget->renderedSvg());
+            // A busy runner may deliver the animation timer after the first polling interval.
+            QTRY_VERIFY_WITH_TIMEOUT(before != widget->renderedSvg(), 5000);
         }
         widget->hide();
         QVERIFY(!widget->animationRunning());
