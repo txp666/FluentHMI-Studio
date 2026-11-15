@@ -200,6 +200,8 @@ FluentHMIStudio --export <output-dir> <project.uidp>
 
 An exported app starts with the theme (light, dark or follow system), theme colour and language set on Studio's Settings page at export time, as the preview shows them; all three go into `appearance.json` beside the project inside the app, and a headless export uses Studio's saved settings. When the runner opens a project directly, it keeps its own saved settings.
 
+Exported applications scale the complete canvas to fit the window, including controls, text and charts, with centered margins when the aspect ratio differs. Canvas size and widget coordinates remain the design reference, so existing projects need no changes. Export older applications again with the updated Studio to include this behavior.
+
 The Language setting on the Settings page offers Follow system, 简体中文 and English, and takes effect when Studio restarts. Following the system shows Simplified Chinese on a Chinese system and English anywhere else; an exported app set to follow the system follows the system of the computer it runs on.
 
 The runner can render a whole project to an image; the widget overviews in `docs/images` were made this way:

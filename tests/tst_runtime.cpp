@@ -4,6 +4,7 @@
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
+#include "player/player_window.h"
 #include "runtime/appearance.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
@@ -36,6 +37,7 @@
 #include <QtTest/QtTest>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QGraphicsView>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
@@ -596,6 +598,54 @@ class TestRuntime : public QObject
             std::unique_ptr<HmiWidget> widget(createHmiWidget(meta.typeName, {}));
             QVERIFY2(widget, qPrintable(meta.typeName));
             QCOMPARE(widget->typeName(), meta.typeName);
+        }
+    }
+
+    void exportedWindowFitsCanvasAndKeepsInputWorking()
+    {
+        Project project;
+        project.canvasWidth = 600;
+        project.canvasHeight = 400;
+        project.widgets = QJsonArray{
+            QJsonObject{{"id", "run"}, {"type", "PushButton"},
+                        {"geometry", QJsonObject{{"x", 20}, {"y", 20}, {"w", 120}, {"h", 36}}},
+                        {"properties", QJsonObject{{"command", "RUN"}, {"commandNewline", "无"}}}},
+            QJsonObject{{"id", "entry"}, {"type", "LineEdit"},
+                        {"geometry", QJsonObject{{"x", 20}, {"y", 100}, {"w", 200}, {"h", 36}}},
+                        {"properties", QJsonObject{{"sendOnEnter", true}, {"commandNewline", "无"}}}}};
+        FakeLink link;
+        PlayerWindow window(project);
+        RuntimeSurface *surface = window.surface();
+        RuntimeContext *context = surface->context();
+        context->hub()->addLink(&link);
+        auto *view = window.findChild<QGraphicsView *>(QStringLiteral("canvasView"));
+        auto *button = surface->findChild<QPushButton *>();
+        auto *entry = surface->findChild<QLineEdit *>();
+        QVERIFY(view && button && entry);
+        window.show();
+        for (const QSize size : {QSize(360, 300), QSize(1280, 900), QSize(900, 360)}) {
+            window.resize(size);
+            QApplication::processEvents();
+            QCOMPARE(window.surface(), surface);
+            QCOMPARE(surface->context(), context);
+            QCOMPARE(surface->size(), QSize(600, 400));
+            QCOMPARE(view->transform().m11(), view->transform().m22());
+            const QRect shown = view->mapFromScene(QRectF(surface->rect())).boundingRect();
+            QVERIFY(shown.left() >= -1 && shown.top() >= -1);
+            QVERIFY(shown.right() <= view->viewport()->width() + 1);
+            QVERIFY(shown.bottom() <= view->viewport()->height() + 1);
+            const auto point = [view, surface](QWidget *control) {
+                return view->mapFromScene(QPointF(control->mapTo(surface, control->rect().center())));
+            };
+            link.sent.clear();
+            QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, point(button));
+            QCOMPARE(link.sent, QList<QByteArray>{QByteArray("RUN")});
+            entry->clear();
+            QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, point(entry));
+            QTest::keyClicks(view, "42");
+            QTest::keyClick(view, Qt::Key_Return);
+            QCOMPARE(entry->text(), QStringLiteral("42"));
+            QCOMPARE(link.sent, (QList<QByteArray>{QByteArray("RUN"), QByteArray("42")}));
         }
     }
 

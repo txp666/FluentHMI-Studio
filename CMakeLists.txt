@@ -328,7 +328,8 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_industrial PRIVATE fhmi_designer Qt6::Test)
     add_test(NAME industrial COMMAND tst_industrial)
 
-    add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp src/studio/designer_page.cpp resources/widget_icons.qrc)
+    add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp src/studio/designer_page.cpp
+        src/player/player_window.cpp resources/widget_icons.qrc)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)
     target_compile_definitions(tst_runtime PRIVATE
         FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
