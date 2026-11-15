@@ -332,6 +332,7 @@
  "垂直镜像": "Mirror vertically",
  "基础控件": "Basic",
  "复制": "Copy",
+ "地址类型": "Address type",
  "外观": "Appearance",
  "多个主题用逗号分隔，支持 + 和 #": "Separate topics with commas; + and # allowed",
  "多余的数据": "Extra data",
@@ -729,6 +730,7 @@
  "粘贴": "Paste",
  "纵向等距分布": "Distribute vertically",
  "线圈": "Coil",
+ "线圈/寄存器地址": "Coil/register address",
  "线圈地址": "Coil address",
  "线圈数量": "Coil count",
  "线圈起始": "Coil start",
@@ -1122,5 +1124,9 @@
  "P→B，A→T": "P→B, A→T",
  "每圈脉冲必须是正的安全整数": "Pulses per turn must be a positive safe integer",
  "计数 %1 · 圈数 %2 · %3": "Count %1 · Turns %2 · %3",
- "最低 C%1 %2 V · 最高 C%3 %4 V · Δ %5 mV": "Min C%1 %2 V · Max C%3 %4 V · Δ %5 mV"
+ "最低 C%1 %2 V · 最高 C%3 %4 V · Δ %5 mV": "Min C%1 %2 V · Max C%3 %4 V · Δ %5 mV",
+ "开启判定": "ON condition",
+ "判定值": "Comparison value",
+ "非零为开": "Nonzero is ON",
+ "等于指定值": "Equals comparison value"
 }
