@@ -51,7 +51,7 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 - **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 二进制帧（帧头帧尾、长度字段、校验、定长、空闲分帧）、Modbus RTU、Modbus TCP、Modbus ASCII 五种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / JSON / Modbus 四种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
 - **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定选寄存器区和地址；链路卡片选 Modbus 解析、控件绑定寄存器地址即可自动读取：相近的地址合并成块按周期读，一次一条，只读界面上看得见的控件，写命令排在读请求前面；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 - **Modbus RTU / TCP 从站**：串口、TCP、UDP 卡片可以当从站，用自己的数据表应答外部主站，绑定、控件和写命令直接读写这张表，从站寄存器表控件可以查看和修改。
-- **经典 S7 客户端**：独立 S7 连接卡片轮询 DB/M/I/Q 类型化地址，写命令定向到所选 PLC。预览与导出应用共用原生 Snap7 客户端，BOOL 位写保留邻位。[配置与范围](docs/s7.md) · [本地模拟器示例](examples/s7-demo.uidp)
+- **经典 S7 客户端**：独立 S7 连接卡片轮询 DB/M/I/Q 类型化地址，写命令定向到所选 PLC。预览与导出应用共用原生 Snap7 客户端，BOOL 位写保留邻位。[配置与范围](docs/s7.md) · [本地模拟器示例](examples/s7-demo.uidp) · [FluentPLC Simulator 模拟器仓库](https://github.com/txp666/FluentPLC-Simulator)
 - **CAN / CAN FD（仅 Studio）**：CAN 卡片连接 PEAK、ZLG、SocketCAN 或 slcan 适配器，用 DBC 文件或卡片上写的信号解码，绑定、曲线和表格照常显示；控件可以发 DBC 信号或原始报文，单次或周期发送，报文监视按 ID 列出每个报文和它的周期（见 [CAN 适配器](#can-适配器)）。用到 CAN 的工程只能在 Studio 里打开。
 
 不同之处在实现和导出方式：
