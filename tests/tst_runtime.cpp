@@ -1,6 +1,7 @@
 #include "comm/comm_hub.h"
 #include "comm/link.h"
 #include "comm/tcp_link.h"
+#include "core/bit_profile.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
@@ -10,16 +11,17 @@
 #include "runtime/modbus_poller.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
-#include "runtime/widgets/display_widgets.h"
+#include "runtime/widgets/can_widgets.h"
 #include "runtime/widgets/data_widgets.h"
-#include "studio/export_service.h"
-#include "studio/designer_page.h"
-#include "core/bit_profile.h"
+#include "runtime/widgets/display_widgets.h"
 #include "runtime/widgets/industrial_widget.h"
+#include "studio/designer_page.h"
+#include "studio/export_service.h"
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
+#include <FluentQtWidgets/Widgets/Selection.h>
 #include <FluentQtWidgets/Widgets/Slider.h>
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
 
@@ -34,18 +36,22 @@
 #include <QtGui/QImage>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
+#include <QtTest/QAbstractItemModelTester>
 #include <QtTest/QtTest>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QGraphicsView>
 #include <QtWidgets/QGridLayout>
+#include <QtWidgets/QHeaderView>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
+#include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QTabWidget>
+#include <QtWidgets/QTableView>
 #include <QtWidgets/QTextEdit>
 
 #include <tuple>
@@ -317,6 +323,140 @@ class TestRuntime : public QObject
     void initTestCase()
     {
         Q_INIT_RESOURCE(fluentqtwidgets);
+    }
+
+    void canLogRetainsNewestFramesAndCanStopFollowing()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        std::unique_ptr<HmiWidget> widget(
+            createHmiWidget("CanMonitor", {{"displayMode", "滚动日志"}, {"maxMessages", 100}, {"autoScroll", true}}));
+        auto *monitor = dynamic_cast<CanMonitorWidget *>(widget.get());
+        QVERIFY(monitor);
+        monitor->resize(720, 300);
+        monitor->attach(&context);
+        monitor->show();
+        auto *view = monitor->findChild<QTableView *>("canMessages");
+        auto *maximum = monitor->findChild<QSpinBox *>("canMaxMessages");
+        auto *follow = monitor->findChild<FluentQt::CheckBox *>("canAutoScroll");
+        auto *mode = monitor->findChild<FluentQt::ComboBox *>("canDisplayMode");
+        QVERIFY(view && maximum && follow && mode);
+        QAbstractItemModelTester tester(view->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
+        QList<CanFrame> frames;
+        for (int i = 0; i < 150; ++i) {
+            CanFrame frame;
+            frame.id = 0x123;
+            frame.data = QByteArray(1, char(i));
+            frame.timestampMs = 1700000000000LL + i;
+            frames.append(frame);
+        }
+        emit context.hub()->canFrames(nullptr, frames, false);
+        QTRY_COMPARE(view->model()->rowCount(), 100);
+        QCOMPARE(view->model()->index(0, 0).data(Qt::UserRole).toLongLong(), 1700000000050LL);
+        QCOMPARE(view->model()->index(99, 5).data().toString(), QStringLiteral("95"));
+        QTRY_VERIFY(view->verticalScrollBar()->maximum() > 0);
+        QTRY_COMPARE(view->verticalScrollBar()->value(), view->verticalScrollBar()->maximum());
+        follow->setChecked(false);
+        view->verticalScrollBar()->setValue(0);
+        CanFrame next = frames.last();
+        next.data = QByteArray::fromHex("AA");
+        next.timestampMs++;
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QTRY_COMPARE(view->model()->index(99, 5).data().toString(), QStringLiteral("AA"));
+        QCOMPARE(view->verticalScrollBar()->value(), 0);
+
+        // Export flushes the pending batch too, before the next 100 ms repaint.
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        next.data = QByteArray::fromHex("BB");
+        next.timestampMs++;
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QString error;
+        QVERIFY2(monitor->saveCsv(dir.filePath("frames.csv"), &error), qPrintable(error));
+        QFile file(dir.filePath("frames.csv"));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray csv = file.readAll();
+        QVERIFY(csv.startsWith(QByteArray::fromHex("EFBBBF")));
+        QVERIFY(csv.contains("\"BB\""));
+        QVERIFY(!csv.contains("\"32\"")); // oldest retained payload was evicted
+        maximum->setValue(3);
+        QCOMPARE(view->model()->rowCount(), 3);
+        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("95"));
+        mode->setCurrentIndex(0);
+        QCOMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("3"));
+        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("BB"));
+        QVERIFY(!follow->isEnabled());
+        mode->setCurrentIndex(1);
+        QCOMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("BB"));
+        QVERIFY(follow->isEnabled());
+    }
+
+    void canSummaryCapsIdsAndExportsFilteredFdAndRemoteFrames()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("CanMonitor", {{"maxMessages", 3}}));
+        auto *monitor = dynamic_cast<CanMonitorWidget *>(widget.get());
+        QVERIFY(monitor);
+        monitor->attach(&context);
+        monitor->resize(960, 400);
+        monitor->show();
+        auto *view = monitor->findChild<QTableView *>("canMessages");
+        auto *id = monitor->findChild<QLineEdit *>("canIdFilter");
+        auto *type = monitor->findChild<FluentQt::ComboBox *>("canTypeFilter");
+        QVERIFY(view && id && type);
+        QAbstractItemModelTester tester(view->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
+        CanFrame frame;
+        frame.id = 0x102;
+        frame.data = QByteArray::fromHex("01");
+        frame.timestampMs = 1700000000000LL;
+        CanFrame old = frame;
+        old.id = 0x100;
+        CanFrame newer = frame;
+        newer.data = QByteArray::fromHex("02");
+        newer.timestampMs += 20;
+        CanFrame fd = newer;
+        fd.extended = true;
+        fd.fd = fd.brs = true;
+        fd.data.clear();
+        for (int i = 0; i < 64; ++i) {
+            fd.data.append(char(i));
+        }
+        CanFrame remote = newer;
+        remote.id = 0x103;
+        remote.rtr = true;
+        remote.data = QByteArray(8, char(0));
+        emit context.hub()->canFrames(nullptr, {frame, old, newer, fd}, false);
+        emit context.hub()->canFrames(nullptr, {remote}, true);
+        QTRY_COMPARE(view->model()->rowCount(), 3);
+        QCOMPARE(view->model()->index(0, 1).data().toString(), QStringLiteral("0x102"));
+        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("2"));
+        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("20.0"));
+        type->setCurrentIndex(3);
+        id->setText(QStringLiteral("00000102"));
+        QCOMPARE(view->model()->rowCount(), 1);
+        QTRY_VERIFY(view->rowHeight(0) > 2 * view->verticalHeader()->defaultSectionSize());
+        QTemporaryDir dir;
+        QString error;
+        const auto readCsv = [&](const QString &path) {
+            QFile file(path);
+            return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+        };
+        QVERIFY2(monitor->saveCsv(dir.filePath("fd.csv"), &error), qPrintable(error));
+        const QString csv = readCsv(dir.filePath("fd.csv"));
+        QCOMPARE(csv.count(QStringLiteral("\r\n")), 2);
+        QVERIFY(csv.contains(QStringLiteral("\"0x00000102\",\"RX\",\"FD BRS\",\"64\"")));
+        QVERIFY(csv.contains(QString::fromLatin1(fd.data.toHex(' ').toUpper())));
+        QVERIFY(!csv.contains(QLatin1String("0x103")));
+        id->clear();
+        type->setCurrentIndex(2);
+        QCOMPARE(view->model()->rowCount(), 1);
+        QVERIFY2(monitor->saveCsv(dir.filePath("remote.csv"), &error), qPrintable(error));
+        QVERIFY(readCsv(dir.filePath("remote.csv")).contains(QStringLiteral("\"TX\",\"RTR\",\"8\",\"\"")));
+        QVERIFY(!monitor->saveCsv(dir.filePath("missing/frames.csv"), &error));
+        QVERIFY(!error.isEmpty());
     }
 
     void copiedS7GroupRetargetsConnections()

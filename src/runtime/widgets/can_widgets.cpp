@@ -8,6 +8,7 @@
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/FluentIcon.h>
+#include <FluentQtWidgets/Layout/FlowLayout.h>
 #include <FluentQtWidgets/Views/ItemViews.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
@@ -15,19 +16,27 @@
 #include <FluentQtWidgets/Widgets/LineEdit.h>
 #include <FluentQtWidgets/Widgets/Menu.h>
 #include <FluentQtWidgets/Widgets/Selection.h>
+#include <FluentQtWidgets/Widgets/SpinBox.h>
 
 #include <QtCore/QAbstractTableModel>
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QLocale>
+#include <QtCore/QSaveFile>
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QSortFilterProxyModel>
+#include <QtCore/QTextStream>
 #include <QtCore/QTimer>
+#include <QtWidgets/QFileDialog>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
+#include <QtWidgets/QScrollBar>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
 #include <array>
+#include <deque>
 #include <memory>
 #include <tuple>
 
@@ -439,6 +448,7 @@ class CanMonitorModel : public QAbstractTableModel
   public:
     enum Column
     {
+        Time,
         Id,
         Direction,
         Type,
@@ -494,6 +504,9 @@ class CanMonitorModel : public QAbstractTableModel
         }
         beginResetModel();
         m_showSignals = show;
+        for (Row &row : m_rows) {
+            finishRow(row);
+        }
         endResetModel();
     }
 
@@ -503,7 +516,90 @@ class CanMonitorModel : public QAbstractTableModel
         m_rows.clear();
         m_index.clear();
         m_pending.clear();
+        m_pendingLog.clear();
+        m_sequence = 0;
+        m_dirty = false;
         endResetModel();
+    }
+
+    void setMaximumRows(int maximum)
+    {
+        m_maxRows = std::clamp(maximum, 1, 50000);
+        while (int(m_pendingLog.size()) > m_maxRows) {
+            m_pendingLog.pop_front();
+        }
+        refresh();
+        if (m_rows.size() > m_maxRows) {
+            beginResetModel();
+            keepNewest(m_rows);
+            rebuildIndex();
+            endResetModel();
+        }
+    }
+
+    void setScrolling(bool scrolling)
+    {
+        if (m_scrolling == scrolling) {
+            return;
+        }
+        refresh();
+        beginResetModel();
+        m_scrolling = scrolling;
+        if (scrolling) {
+            std::sort(m_rows.begin(), m_rows.end(), [](const Row &a, const Row &b) { return a.sequence < b.sequence; });
+            for (Row &row : m_rows) {
+                row.count = 1;
+                row.intervalCount = 0;
+                row.next = 0;
+            }
+        } else {
+            QHash<quint64, Row> grouped;
+            for (const Row &row : std::as_const(m_rows)) {
+                auto it = grouped.find(row.key());
+                if (it == grouped.end()) {
+                    grouped.insert(row.key(), row);
+                } else {
+                    updateRow(it.value(), row.frame, row.signalSet);
+                    it->sequence = row.sequence;
+                }
+            }
+            m_rows = grouped.values();
+            std::sort(m_rows.begin(), m_rows.end(), [](const Row &a, const Row &b) { return a.order() < b.order(); });
+            for (Row &row : m_rows) {
+                finishRow(row);
+            }
+        }
+        rebuildIndex();
+        endResetModel();
+    }
+
+    QStringList csvHeaders() const
+    {
+        QStringList fields{QStringLiteral("timestamp_ms"), QStringLiteral("id"),     QStringLiteral("direction"),
+                           QStringLiteral("type"),         QStringLiteral("length"), QStringLiteral("data"),
+                           QStringLiteral("period_ms"),    QStringLiteral("count"),  QStringLiteral("name")};
+        if (m_showSignals) {
+            fields << QStringLiteral("signals");
+        }
+        return fields;
+    }
+
+    QStringList csvRow(int at) const
+    {
+        const Row &row = m_rows.at(at);
+        QStringList fields{QString::number(row.frame.timestampMs),
+                           Can::idText(row.id),
+                           row.sent ? QStringLiteral("TX") : QStringLiteral("RX"),
+                           data(index(at, Type), Qt::DisplayRole).toString(),
+                           QString::number(row.frame.data.size()),
+                           row.frame.rtr ? QString() : toHexString(row.frame.data),
+                           row.intervalCount > 0 ? QString::number(row.meanInterval(), 'f', 1) : QString(),
+                           QString::number(row.count),
+                           row.name};
+        if (m_showSignals) {
+            fields << row.signalText;
+        }
+        return fields;
     }
 
     void add(CanLink *link, const QList<CanFrame> &frames, bool sent)
@@ -511,6 +607,19 @@ class CanMonitorModel : public QAbstractTableModel
         std::shared_ptr<const CanSignalSet> signalSet = link ? link->signalSet() : nullptr;
         for (const CanFrame &frame : frames) {
             const CanId id{frame.id, frame.extended};
+            if (m_scrolling) {
+                Row fresh;
+                fresh.sent = sent;
+                fresh.id = id;
+                updateRow(fresh, frame, signalSet);
+                fresh.sequence = ++m_sequence;
+                m_pendingLog.push_back(std::move(fresh));
+                if (int(m_pendingLog.size()) > m_maxRows) {
+                    m_pendingLog.pop_front();
+                }
+                m_dirty = true;
+                continue;
+            }
             const quint64 key = (id.key() << 1) | (sent ? 1 : 0);
             auto it = m_index.find(key);
             Row *row = nullptr;
@@ -527,27 +636,56 @@ class CanMonitorModel : public QAbstractTableModel
                 }
                 row = &*pending;
             }
-            if (row->lastMs > 0) {
-                row->intervals[row->next] = double(frame.timestampMs - row->lastMs);
-                row->next = (row->next + 1) % int(row->intervals.size());
-                row->intervalCount = std::min(row->intervalCount + 1, int(row->intervals.size()));
+            updateRow(*row, frame, signalSet);
+            row->sequence = ++m_sequence;
+            if (m_pending.size() > m_maxRows) {
+                const auto oldest =
+                    std::min_element(m_pending.begin(), m_pending.end(),
+                                     [](const Row &a, const Row &b) { return a.sequence < b.sequence; });
+                m_pending.erase(oldest);
             }
-            row->lastMs = frame.timestampMs;
-            row->frame = frame;
-            row->signalSet = signalSet;
-            ++row->count;
-            row->dirty = true;
             m_dirty = true;
         }
     }
 
     // New rows go in at their place in ID order (the view sorts them as it is asked to); the rest repaint once.
-    void refresh()
+    bool refresh()
     {
         if (!m_dirty) {
-            return;
+            return false;
         }
         m_dirty = false;
+        if (m_scrolling) {
+            const int remove = std::max(0, int(m_rows.size() + m_pendingLog.size()) - m_maxRows);
+            if (remove > 0) {
+                beginRemoveRows(QModelIndex(), 0, remove - 1);
+                m_rows.remove(0, remove);
+                endRemoveRows();
+            }
+            if (!m_pendingLog.empty()) {
+                const int at = int(m_rows.size());
+                beginInsertRows(QModelIndex(), at, at + int(m_pendingLog.size()) - 1);
+                for (Row &row : m_pendingLog) {
+                    finishRow(row);
+                    m_rows.append(std::move(row));
+                }
+                m_pendingLog.clear();
+                endInsertRows();
+            }
+            return true;
+        }
+        if (m_rows.size() + m_pending.size() > m_maxRows) {
+            beginResetModel();
+            m_rows.append(m_pending.values());
+            m_pending.clear();
+            keepNewest(m_rows);
+            for (Row &row : m_rows) {
+                finishRow(row);
+            }
+            rebuildIndex();
+            endResetModel();
+            return true;
+        }
         for (auto it = m_pending.begin(); it != m_pending.end(); ++it) {
             const auto place = std::lower_bound(m_rows.begin(), m_rows.end(), it.value(),
                                                 [](const Row &a, const Row &b) { return a.order() < b.order(); });
@@ -570,16 +708,14 @@ class CanMonitorModel : public QAbstractTableModel
             if (!row.dirty) {
                 continue;
             }
-            row.dirty = false;
-            if (m_showSignals) {
-                row.signalText = row.signalSet ? row.signalSet->signalsText(row.frame) : QString();
-            }
+            finishRow(row);
             first = first < 0 ? i : first;
             last = i;
         }
         if (first >= 0) {
             emit dataChanged(index(first, 0), index(last, columnCount() - 1), {Qt::DisplayRole, SortRole, LinesRole});
         }
+        return true;
     }
 
     int rowCount(const QModelIndex &parent = QModelIndex()) const override
@@ -608,6 +744,8 @@ class CanMonitorModel : public QAbstractTableModel
         }
         if (role == SortRole) {
             switch (index.column()) {
+            case Time:
+                return row.frame.timestampMs;
             case Id:
                 return row.sortKey();
             case Direction:
@@ -627,6 +765,10 @@ class CanMonitorModel : public QAbstractTableModel
             return QVariant();
         }
         switch (index.column()) {
+        case Time:
+            return row.frame.timestampMs > 0
+                       ? QDateTime::fromMSecsSinceEpoch(row.frame.timestampMs).toString(QStringLiteral("HH:mm:ss.zzz"))
+                       : QString();
         case Id:
             return Can::idText(row.id);
         case Direction:
@@ -658,6 +800,8 @@ class CanMonitorModel : public QAbstractTableModel
             return QVariant();
         }
         switch (section) {
+        case Time:
+            return CanLink::tr("时间");
         case Id:
             return QStringLiteral("ID");
         case Direction:
@@ -690,6 +834,7 @@ class CanMonitorModel : public QAbstractTableModel
         std::shared_ptr<const CanSignalSet> signalSet;
         QString signalText;
         quint64 count = 0;
+        quint64 sequence = 0;
         qint64 lastMs = 0;
         std::array<double, 10> intervals{};
         int next = 0;
@@ -725,9 +870,55 @@ class CanMonitorModel : public QAbstractTableModel
         }
     };
 
+    static void updateRow(Row &row, const CanFrame &frame, const std::shared_ptr<const CanSignalSet> &signalSet)
+    {
+        if (row.lastMs > 0 && frame.timestampMs >= row.lastMs) {
+            row.intervals[row.next] = double(frame.timestampMs - row.lastMs);
+            row.next = (row.next + 1) % int(row.intervals.size());
+            row.intervalCount = std::min(row.intervalCount + 1, int(row.intervals.size()));
+        }
+        row.lastMs = frame.timestampMs;
+        row.frame = frame;
+        row.signalSet = signalSet;
+        row.name = signalSet ? signalSet->messageName(row.id) : QString();
+        ++row.count;
+        row.dirty = true;
+    }
+
+    void finishRow(Row &row) const
+    {
+        row.dirty = false;
+        row.signalText = m_showSignals && row.signalSet ? row.signalSet->signalsText(row.frame) : QString();
+    }
+
+    void keepNewest(QList<Row> &rows) const
+    {
+        std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.sequence < b.sequence; });
+        if (rows.size() > m_maxRows) {
+            rows.remove(0, rows.size() - m_maxRows);
+        }
+        if (!m_scrolling) {
+            std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.order() < b.order(); });
+        }
+    }
+
+    void rebuildIndex()
+    {
+        m_index.clear();
+        if (!m_scrolling) {
+            for (int i = 0; i < m_rows.size(); ++i) {
+                m_index.insert(m_rows.at(i).key(), i);
+            }
+        }
+    }
+
     QList<Row> m_rows;
     QHash<quint64, int> m_index;  // key -> row
     QHash<quint64, Row> m_pending; // seen since the last refresh, not in m_rows yet
+    std::deque<Row> m_pendingLog;
+    int m_maxRows = 1000;
+    quint64 m_sequence = 0;
+    bool m_scrolling = false;
     bool m_showSignals = false;
     bool m_dirty = false;
 };
@@ -769,9 +960,11 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     auto *filterLayout = new QHBoxLayout(m_filterRow);
     filterLayout->setContentsMargins(0, 0, 0, 0);
     m_idFilter = new FluentQt::LineEdit(m_filterRow);
+    m_idFilter->setObjectName(QStringLiteral("canIdFilter"));
     m_idFilter->setPlaceholderText(tr("筛选 ID，如 100-1FF, 18FF50E5"));
     m_idFilter->setClearButtonEnabled(true);
     m_typeFilter = new FluentQt::ComboBox(m_filterRow);
+    m_typeFilter->setObjectName(QStringLiteral("canTypeFilter"));
     // Not translated: these are the names of the type column.
     m_typeFilter->addItems({tr("全部类型"), QStringLiteral("Data"), QStringLiteral("RTR"), QStringLiteral("FD")});
     filterLayout->addWidget(m_idFilter, 1);
@@ -784,6 +977,7 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     // Rows are updated ten times a second; with this the proxy keeps the sort as they change.
     m_sorted->setDynamicSortFilter(true);
     m_view = new FluentQt::TableView(this);
+    m_view->setObjectName(QStringLiteral("canMessages"));
     m_view->setModel(m_sorted);
     m_view->setSortingEnabled(true);
     m_view->sortByColumn(CanMonitorModel::Id, Qt::AscendingOrder);
@@ -791,21 +985,64 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_view->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_view->verticalHeader()->setVisible(false);
     m_view->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    m_view->setWordWrap(false);
+    m_view->setWordWrap(true);
     m_view->setContextMenuPolicy(Qt::CustomContextMenu);
-    layout->addWidget(m_view);
+    layout->addWidget(m_view, 1);
+
+    auto *toolbar = new FluentQt::FlowLayout(0, 6, 4);
+    toolbar->setVerticalAlignment(Qt::AlignVCenter);
+    m_displayMode = comboOf(this, enumOptions(meta, "displayMode"));
+    m_displayMode->setObjectName(QStringLiteral("canDisplayMode"));
+    toolbar->addWidget(m_displayMode);
+    auto *limit = new QWidget(this);
+    auto *limitLayout = new QHBoxLayout(limit);
+    limitLayout->setContentsMargins(0, 0, 0, 0);
+    limitLayout->addWidget(new FluentQt::CaptionLabel(tr("上限"), limit));
+    m_maxMessages = new FluentQt::SpinBox(limit);
+    m_maxMessages->setObjectName(QStringLiteral("canMaxMessages"));
+    m_maxMessages->setRange(1, 50000);
+    m_maxMessages->setKeyboardTracking(false);
+    m_maxMessages->setValue(1000);
+    m_maxMessages->setFixedWidth(160);
+    fluentToolTip(m_maxMessages, tr("最大报文数量，超出时移除最早记录"));
+    limitLayout->addWidget(m_maxMessages);
+    toolbar->addWidget(limit);
+    m_autoScroll = new FluentQt::CheckBox(tr("自动滚动"), this);
+    m_autoScroll->setObjectName(QStringLiteral("canAutoScroll"));
+    toolbar->addWidget(m_autoScroll);
+    auto *save = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Save), this);
+    save->setObjectName(QStringLiteral("canExportCsv"));
+    fluentToolTip(save, tr("导出当前筛选后的报文 (CSV)"));
+    toolbar->addWidget(save);
+    layout->addLayout(toolbar);
+    connect(save, &QToolButton::clicked, this, [this]() { chooseExportFile(); });
+    connect(m_displayMode, &FluentQt::ComboBox::currentIndexChanged, this, [this]() { updateDisplayMode(); });
+    connect(m_maxMessages, qOverload<int>(&QSpinBox::valueChanged), this,
+            [this](int maximum) { m_model->setMaximumRows(maximum); });
+    connect(m_autoScroll, &QCheckBox::toggled, this, [this](bool checked) {
+        if (checked && m_displayMode->currentIndex() == 1) {
+            m_view->scrollToBottom();
+        }
+    });
     connect(m_view, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         auto *menu = new FluentQt::RoundMenu(this);
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         connect(menu->addAction(FluentQt::FluentIcon::Delete, tr("清空")), &QAction::triggered, m_model,
                 [this]() { m_model->clear(); });
+        connect(menu->addAction(FluentQt::FluentIcon::Save, tr("导出报文")), &QAction::triggered, this,
+                [this]() { chooseExportFile(); });
         menu->exec(m_view->viewport()->mapToGlobal(position), true);
     });
     connect(m_idFilter, &FluentQt::LineEdit::textChanged, this, [this]() { updateFilter(); });
     connect(m_typeFilter, &FluentQt::ComboBox::currentIndexChanged, this, [this]() { updateFilter(); });
     m_refresh = new QTimer(this);
     m_refresh->setInterval(kMonitorRefreshMs);
-    connect(m_refresh, &QTimer::timeout, m_model, [this]() { m_model->refresh(); });
+    connect(m_refresh, &QTimer::timeout, m_model, [this]() {
+        if (m_model->refresh() && m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked()) {
+            m_view->scrollToBottom();
+        }
+    });
+    connect(m_view->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]() { fitRowHeights(); });
     // Whatever moves or changes a row (a new one, a longer frame, a sort) can change which height it needs.
     for (auto signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
         connect(m_sorted, signal, this, [this]() { fitRowHeights(); });
@@ -813,6 +1050,68 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     connect(m_sorted, &QAbstractItemModel::dataChanged, this, [this]() { fitRowHeights(); });
     connect(m_sorted, &QAbstractItemModel::layoutChanged, this, [this]() { fitRowHeights(); });
     connect(m_sorted, &QAbstractItemModel::modelReset, this, [this]() { fitRowHeights(); });
+}
+
+void CanMonitorWidget::updateDisplayMode()
+{
+    const bool scrolling = m_displayMode->currentIndex() == 1;
+    m_model->setScrolling(scrolling);
+    m_view->setSortingEnabled(!scrolling);
+    m_sorted->sort(scrolling ? -1 : CanMonitorModel::Id, Qt::AscendingOrder);
+    m_autoScroll->setEnabled(scrolling);
+    if (scrolling && m_autoScroll->isChecked()) {
+        m_view->scrollToBottom();
+    }
+}
+
+bool CanMonitorWidget::saveCsv(const QString &path, QString *error)
+{
+    // Include frames waiting for the next repaint; the proxy supplies the user's filter and sort order.
+    m_model->refresh();
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        if (error) {
+            *error = file.errorString();
+        }
+        return false;
+    }
+    QTextStream stream(&file);
+    stream.setGenerateByteOrderMark(true); // UTF-8, also readable by Excel with Chinese names/signals.
+    const auto writeRow = [&stream](QStringList fields) {
+        for (QString &field : fields) {
+            field.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+            field = QLatin1Char('"') + field + QLatin1Char('"');
+        }
+        stream << fields.join(QLatin1Char(',')) << QStringLiteral("\r\n");
+    };
+    writeRow(m_model->csvHeaders());
+    for (int row = 0; row < m_sorted->rowCount(); ++row) {
+        writeRow(m_model->csvRow(m_sorted->mapToSource(m_sorted->index(row, 0)).row()));
+    }
+    stream.flush();
+    if (stream.status() != QTextStream::Ok || !file.commit()) {
+        if (error) {
+            *error = file.errorString();
+        }
+        return false;
+    }
+    return true;
+}
+
+void CanMonitorWidget::chooseExportFile()
+{
+    QString path =
+        QFileDialog::getSaveFileName(this, tr("导出报文"), QStringLiteral("can-messages.csv"), tr("CSV文件 (*.csv)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    if (!path.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive)) {
+        path += QStringLiteral(".csv");
+    }
+    QString error;
+    if (!saveCsv(path, &error) && context()) {
+        context()->notify(tr("保存失败"), error, NotifyType::Error);
+    }
 }
 
 void CanMonitorWidget::updateFilter()
@@ -835,22 +1134,41 @@ void CanMonitorWidget::fitRowHeights()
         m_heightsQueued = false;
         QHeaderView *header = m_view->verticalHeader();
         const int base = header->defaultSectionSize();
-        for (int row = 0; row < m_sorted->rowCount(); ++row) {
+        QFont itemFont;
+        itemFont.setFamilies(FluentQt::FluentConfig::instance()->fontFamilies());
+        itemFont.setPixelSize(13);
+        const int lineHeight = QFontMetrics(itemFont).lineSpacing();
+        const int first = std::max(0, m_view->rowAt(0));
+        const int bottom = m_view->rowAt(m_view->viewport()->height() - 1);
+        const int last = bottom >= 0 ? bottom
+                                     : std::min(m_sorted->rowCount() - 1,
+                                                first + m_view->viewport()->height() / std::max(1, base) + 1);
+        for (int row = first; row <= last; ++row) {
             const int lines = m_sorted->index(row, 0).data(CanMonitorModel::LinesRole).toInt();
-            // The delegate knows what its lines and padding take; a one-line row keeps the default height.
+            // sizeHintForIndex() can omit multiline text when no cell width is supplied by the view.
             const int height =
                 lines > 1
-                    ? std::max(base, m_view->sizeHintForIndex(m_sorted->index(row, CanMonitorModel::Data)).height())
+                    ? std::max(base + (lines - 1) * lineHeight,
+                               m_view->sizeHintForIndex(m_sorted->index(row, CanMonitorModel::Data)).height())
                     : base;
             if (header->sectionSize(row) != height) {
                 header->resizeSection(row, height);
             }
+        }
+        if (m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked()) {
+            m_view->scrollToBottom();
         }
     });
 }
 
 void CanMonitorWidget::apply()
 {
+    const QSignalBlocker modeBlock(m_displayMode), maximumBlock(m_maxMessages), scrollBlock(m_autoScroll);
+    selectValue(m_displayMode, text("displayMode"));
+    m_maxMessages->setValue(std::clamp(integer("maxMessages"), 1, 50000));
+    m_autoScroll->setChecked(flag("autoScroll"));
+    m_model->setMaximumRows(m_maxMessages->value());
+    updateDisplayMode();
     m_model->setShowSignals(flag("showSignals"));
     const bool showFilter = flag("showFilter");
     m_filterRow->setVisible(showFilter);
@@ -873,9 +1191,8 @@ void CanMonitorWidget::apply()
     const auto advance = [&](const QString &text) {
         return std::max(item.horizontalAdvance(text), own.horizontalAdvance(text));
     };
-    // FluentQtWidgets' table pads each cell 16 px a side, and the style a pixel more; a header has 5 px a side and the
-    // sort arrow.
-    const int cellPad = 36;
+    // Allow the Fluent cell padding and font fallback rounding; headers also need room for the sort arrow.
+    const int cellPad = 44;
     const int headPad = 36;
     const auto fit = [&](int column, int contentWidth) {
         const QString title = m_model->headerData(column, Qt::Horizontal, Qt::DisplayRole).toString();
@@ -885,6 +1202,7 @@ void CanMonitorWidget::apply()
     // Hex is measured with D, one of its widest digits (0x18FF50E5 is wider than 0x18FF1001); an extended ID starts
     // with 0 or 1.
     const int widths[] = {
+        fit(CanMonitorModel::Time, advance(QStringLiteral("00:00:00.000"))),
         fit(CanMonitorModel::Id, advance(QStringLiteral("0x1DDDDDDD"))),
         fit(CanMonitorModel::Direction, advance(QStringLiteral("00"))),
         fit(CanMonitorModel::Type, advance(QStringLiteral("FD BRS"))),

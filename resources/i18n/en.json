@@ -1183,5 +1183,13 @@
  "请选择 S7 连接": "Select an S7 connection",
  "连接类型": "Connection type",
  "连接类型（1 PG / 2 OP / 3 Basic）": "Connection type (1 PG / 2 OP / 3 Basic)",
- "重连间隔(ms)": "Reconnect interval (ms)"
+ "重连间隔(ms)": "Reconnect interval (ms)",
+ "按 ID 汇总": "Summary by ID",
+ "滚动日志": "Scrolling log",
+ "最大报文数量": "Maximum messages",
+ "上限": "Limit",
+ "最大报文数量，超出时移除最早记录": "Maximum retained messages; oldest records are removed when full",
+ "导出当前筛选后的报文 (CSV)": "Export retained, filtered messages (CSV)",
+ "导出报文": "Export messages",
+ "CSV文件 (*.csv)": "CSV files (*.csv)"
 }

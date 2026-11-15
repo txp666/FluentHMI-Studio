@@ -30,4 +30,10 @@
                 "commandTemplate": "SetMotorSpeed={value}, SetDerect=1", "canCycle": 100}}
 ```
 
-`CanMonitor` 按 ID 列出收发报文。`DataSendCard` 可发 `ID#数据`，如 `102#11223344`。[可运行的 CAN 工程](../../examples/tutorials/12-CAN收发测试.uidp)和[它的 DBC](../../examples/tutorials/12-CAN收发测试.dbc)应放在同一目录。
+`CanMonitor` 的 `displayMode` 可选 `"按 ID 汇总"`（默认）或 `"滚动日志"`。汇总模式按 ID、标准/扩展格式和收发方向合并，显示最新数据、平均周期与次数；滚动模式按到达顺序逐帧追加，并显示报文时间。切换到滚动模式时保留各汇总项的最新一帧，后续报文逐帧记录；切回汇总时合并保留的记录。
+
+`maxMessages` 设置最大保留条数，默认 1000，范围 1–50000。滚动模式移除最早记录，汇总模式保留最近更新的 ID。运行时也可以切换模式、修改条数上限，并通过 `autoScroll`（默认 `true`）控制是否跟随最新报文；关闭自动滚动后可翻阅历史。
+
+点击保存图标或右键选择「导出报文」，将当前筛选和排序后的保留记录导出为 UTF-8 CSV，包含毫秒时间戳、ID、收发方向、帧类型、长度、完整数据、周期、次数、报文名，以及开启「显示信号」时的解码值。CAN FD 的 64 字节数据完整导出；清空或超出上限移除的记录不包含在导出中。预览和独立导出应用均支持这些功能。
+
+`DataSendCard` 可发 `ID#数据`，如 `102#11223344`。[可运行的 CAN 工程](../../examples/tutorials/12-CAN收发测试.uidp)和[它的 DBC](../../examples/tutorials/12-CAN收发测试.dbc)应放在同一目录。
