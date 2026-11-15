@@ -33,6 +33,7 @@ int main(int argc, char *argv[])
                               QStringLiteral("/FluentHMI");
     QDir().mkpath(configDir);
     FluentQt::FluentConfig::instance()->setFileName(QDir(configDir).filePath(QStringLiteral("fluent.json")));
+    FluentQt::FluentConfig::instance()->setThemeMode(FluentQt::Theme::Auto);
     FluentQt::FluentConfig::instance()->load();
     // The language setting takes effect here, before the first window exists; FluentQtWidgets' own texts
     // (On/Off, the colour dialog) follow it.
