@@ -5,7 +5,7 @@
 | 控件 | 发什么、何时发 |
 | --- | --- |
 | `PushButton` | 点击发送 `command`。Modbus 模式使用 `mbValue`。选 `"05 写单线圈"` 时，`1` 或 `65280` 写开（`0xFF00`），`0` 写关（`0x0000`） |
-| `ToggleSwitch` | 用户拨动时发送 `onCommand` 或 `offCommand` |
+| `ToggleSwitch` | 用户拨动时发送 `onCommand` 或 `offCommand`。Modbus 模式下，`mbArea` 为 `"线圈"`（默认）时用 FC05 写开/关，为 `"保持寄存器"` 时用 FC06 写 `1` / `0` |
 | `Slider`、`SpinBox` | `sendOnChange` 打开时发送当前数值。拖动滑块在松手时发送，键盘或滚轮每步发送。Modbus 模式下改变值也可写入 |
 | `LineEdit` | `sendOnEnter` 打开时，按回车发送输入的文字 |
 | `ComboBox` | `sendOnSelect` 打开时，选择一项就发送 `commands` 中对应行的命令。该行为空时发送选项文字 |
@@ -26,5 +26,9 @@
 ```
 
 普通字节命令发往已连接的相应链路。MQTT 发布到 `defaultPublish`，UDP 发送数据报，两者都会保留命令的换行设置。设备需要整条消息恰为 `ON` 时，将 `commandNewline` 设为 `"无"`。
+
+开关读写保持寄存器时，在发送属性中选择 `commandMode: "Modbus"`、`mbArea: "保持寄存器"`，并设置 `mbSlave`、`mbAddress`；在数据绑定中选择 `parseMode: "Modbus"`、`mbArea: "保持寄存器"`，将 `mbRegIndex` 设为同一地址，`mbSlaveFilter` 设为同一从站。地址从 0 开始。发送属性和数据绑定分别设置，便于读取状态地址、写入控制地址。
+
+开关属性中的「开启判定」（`onCondition`）默认 `"非零为开"`，读取 `0` 时关闭、非 `0` 时开启。选 `"等于指定值"` 后显示「判定值」（`onValue`，默认 `"1"`），只有收到的数值等于该值才开启，例如设 `"5"` 可将状态码 5 判为开启，也可设 `"0"`。支持负数、小数和数字文本；转换表达式先执行，再做开启判定。无效读数或无效判定值保留原状态。收到数据只更新开关状态，不触发写入或切换通知。判定用于接收状态，寄存器写入仍为开启 `1`、关闭 `0`。
 
 [完整工程模板](../uidp-format.md) · [链路与 Modbus](connections.md) · [控件属性与可选值](../uidp-widgets.md)

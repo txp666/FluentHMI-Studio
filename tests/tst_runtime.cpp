@@ -702,6 +702,96 @@ class TestRuntime : public QObject
         QCOMPARE(click(QStringLiteral("06 写单寄存器"), 1), QList<QByteArray>{QByteArray::fromHex("010600000001480a")});
     }
 
+    void toggleWritesCoilOrHoldingRegister_data()
+    {
+        QTest::addColumn<QString>("area");
+        QTest::addColumn<QByteArray>("on");
+        QTest::addColumn<QByteArray>("off");
+        for (const QString &area : {QString(), QStringLiteral("线圈")}) {
+            QTest::newRow(area.isEmpty() ? "legacy" : "coil")
+                << area << QByteArray::fromHex("0705002aff00ad94") << QByteArray::fromHex("0705002a0000ec64");
+        }
+        QTest::newRow("holding-register") << ModbusArea::HoldingRegisters << QByteArray::fromHex("0706002a000169a4")
+                                          << QByteArray::fromHex("0706002a0000a864");
+    }
+
+    void toggleWritesCoilOrHoldingRegister()
+    {
+        QFETCH(QString, area);
+        QFETCH(QByteArray, on);
+        QFETCH(QByteArray, off);
+        FakeLink link;
+        RuntimeContext context;
+        context.hub()->addLink(&link);
+        QJsonObject props{{"commandMode", "Modbus"}, {"mbSlave", 7}, {"mbAddress", 42}};
+        if (!area.isEmpty()) {
+            props.insert("mbArea", area);
+        }
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("ToggleSwitch", props));
+        widget->attach(&context);
+        auto *toggle = widget->findChild<FluentQt::SwitchButton *>();
+        QVERIFY(toggle);
+        toggle->setChecked(true);
+        QCOMPARE(link.sent, QList<QByteArray>{on});
+        toggle->setChecked(false);
+        QCOMPARE(link.sent, (QList<QByteArray>{on, off}));
+    }
+
+    void toggleReceiveCondition()
+    {
+        FakeLink link;
+        RuntimeContext context;
+        context.hub()->addLink(&link);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("ToggleSwitch", {}));
+        widget->attach(&context);
+        auto *toggle = widget->findChild<FluentQt::SwitchButton *>();
+        QVERIFY(toggle);
+        QSignalSpy changes(toggle, &FluentQt::SwitchButton::checkedChanged);
+        BindingEntry binding;
+        for (const QString &target : {QString(), QStringLiteral("5"), QStringLiteral("0"), QStringLiteral("2.5")}) {
+            QJsonObject props{{"commandMode", "Modbus"}};
+            if (!target.isEmpty()) {
+                props.insert("onCondition", QStringLiteral("等于指定值"));
+                props.insert("onValue", target);
+            }
+            widget->setProperties(props);
+            for (double value : {0.0, 1.0, 5.0, -1.0, 2.5}) {
+                widget->applyBoundValue(value, binding);
+                QCOMPARE(toggle->isChecked(), target.isEmpty() ? value != 0 : value == target.toDouble());
+            }
+        }
+        widget->applyBoundValue(2.5, binding);
+        widget->applyBoundValue(QStringLiteral("invalid"), binding);
+        QVERIFY(toggle->isChecked());
+        QVERIFY(changes.isEmpty());
+        QVERIFY(link.sent.isEmpty());
+
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets(QJsonArray{QJsonObject{
+                                       {"id", "switch"},
+                                       {"type", "ToggleSwitch"},
+                                       {"properties", QJsonObject{{"onCondition", "等于指定值"}, {"onValue", "5"}}}}},
+                                   &error),
+                 qPrintable(error));
+        PropertyEditor editor;
+        editor.setScene(&scene);
+        editor.showItem(scene.findItem(QStringLiteral("switch")));
+        editor.show();
+        QApplication::processEvents();
+        auto *condition = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("开启判定")));
+        auto *onValue = qobject_cast<QLineEdit *>(fieldFor(&editor, QStringLiteral("判定值")));
+        QVERIFY(condition && onValue && onValue->isVisible());
+        QCOMPARE(onValue->text(), QStringLiteral("5"));
+        condition->setCurrentText(QStringLiteral("非零为开"));
+        QApplication::processEvents();
+        QVERIFY(!onValue->isVisible());
+        condition->setCurrentText(QStringLiteral("等于指定值"));
+        QApplication::processEvents();
+        QVERIFY(onValue->isVisible());
+        QCOMPARE(onValue->text(), QStringLiteral("5"));
+    }
+
     // The receive log shows text the way the link that received it spells it.
     void receiveLogDecodesWithTheLinksEncoding()
     {

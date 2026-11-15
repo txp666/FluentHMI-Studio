@@ -214,7 +214,17 @@ void ToggleSwitchWidget::apply()
 
 void ToggleSwitchWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if (const auto checked = bindingBoolean(value)) {
+    std::optional<bool> checked;
+    if (text("onCondition") == QStringLiteral("等于指定值")) { // i18n: value
+        const auto number = bindingFloat(value);
+        const auto expected = bindingFloat(text("onValue"));
+        if (number && expected) {
+            checked = *number == *expected;
+        }
+    } else {
+        checked = bindingBoolean(value);
+    }
+    if (checked) {
         const QSignalBlocker blocker(m_switch);
         m_switch->setChecked(*checked);
     }
@@ -230,10 +240,14 @@ void ToggleSwitchWidget::onAttached()
     if (modbus || hasCommands) {
         live(connect(m_switch, &FluentQt::SwitchButton::checkedChanged, this, [this, modbus](bool checked) {
             if (modbus) {
-                // Modbus switches always write a single coil (FC05).
+                // Old projects omit mbArea and keep writing a coil. A holding register uses FC06 and 0/1.
+                const bool holding = text("mbArea") == ModbusArea::HoldingRegisters;
                 QJsonObject props = properties();
-                props.insert(QStringLiteral("mbFunc"), QStringLiteral("05 写单线圈")); // i18n: value
-                context()->send(CommandEncoder::modbusFromProperties(props, QString::number(checked ? 0xFF00 : 0)));
+                props.insert(QStringLiteral("mbFunc"), holding ? QStringLiteral("06 写单寄存器") // i18n: value
+                                                               : QStringLiteral("05 写单线圈")); // i18n: value
+                props.insert(QStringLiteral("mbDataType"), QStringLiteral("uint16"));
+                const int value = checked ? (holding ? 1 : 0xFF00) : 0;
+                context()->send(CommandEncoder::modbusFromProperties(props, QString::number(value)));
                 return;
             }
             const QString command = text(checked ? "onCommand" : "offCommand").trimmed();

@@ -60,7 +60,7 @@ const QHash<QString, QSet<QString>> &modeVisibility()
           QStringLiteral("commandTemplate"), QStringLiteral("commandJsonNewline")}},
         {QStringLiteral("Modbus"),
          {QStringLiteral("mbSlave"), QStringLiteral("mbFunc"), QStringLiteral("mbAddress"), QStringLiteral("mbValue"),
-          QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder")}},
+          QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder"), QStringLiteral("mbArea")}},
         // A message with signals takes Signal=value assignments in the template, a raw ID HEX mode's bytes.
         {QStringLiteral("CAN"),
          {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
@@ -79,7 +79,7 @@ const QSet<QString> &modeFields()
         QStringLiteral("byteOrder"),      QStringLiteral("mbSlave"),         QStringLiteral("mbFunc"),
         QStringLiteral("mbAddress"),      QStringLiteral("mbValue"),         QStringLiteral("mbDataType"),
         QStringLiteral("mbRegOrder"),     QStringLiteral("canId"),           QStringLiteral("canFd"),
-        QStringLiteral("canCycle")};
+        QStringLiteral("canCycle"),       QStringLiteral("mbArea")};
     return fields;
 }
 
@@ -1440,6 +1440,11 @@ void PropertyEditor::updateVisibility()
         return;
     }
     const WidgetMeta &meta = m_item->meta();
+    if (meta.typeName == QLatin1String("ToggleSwitch")) {
+        setRowVisible(QStringLiteral("onValue"),
+                      m_item->propertyValue(QStringLiteral("onCondition")).toString() ==
+                          QStringLiteral("等于指定值")); // i18n: value
+    }
     if (meta.prop(QStringLiteral("parserConfig"))) {
         const QString parser = m_item->propertyValue(QStringLiteral("defaultParser")).toString();
         setFrameRowsVisible(QStringLiteral("parserConfig."), parser);

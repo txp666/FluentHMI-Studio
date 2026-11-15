@@ -283,13 +283,20 @@ QList<WidgetMeta> basicWidgets()
 
     QList<PropDef> toggle{str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("开关")),
                           boolean(QStringLiteral("checked"), QT_TR_NOOP("默认开启"), false),
+                          choice(QStringLiteral("onCondition"), QT_TR_NOOP("开启判定"),
+                                 QStringLiteral("非零为开"),                                  // i18n: value
+                                 {QStringLiteral("非零为开"), QStringLiteral("等于指定值")}), // i18n: value
+                          str(QStringLiteral("onValue"), QT_TR_NOOP("判定值"), QStringLiteral("1")),
                           mode,
                           command(QStringLiteral("onCommand"), QT_TR_NOOP("开启命令")),
                           command(QStringLiteral("offCommand"), QT_TR_NOOP("关闭命令")),
                           tpl,
                           jsonNewline};
     toggle += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
-    toggle += {slave, integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈地址"), 0, 0, 65535)};
+    toggle += {slave,
+               choice(QStringLiteral("mbArea"), QT_TR_NOOP("地址类型"), QStringLiteral("线圈"), // i18n: value
+                      {QStringLiteral("线圈"), ModbusArea::HoldingRegisters}),                  // i18n: value
+               integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈/寄存器地址"), 0, 0, 65535)};
     toggle += canCommand();
     toggle += notification(QT_TR_NOOP("切换通知"), QT_TR_NOOP("开关已切换"), QStringLiteral("信息")); // i18n: value
 
