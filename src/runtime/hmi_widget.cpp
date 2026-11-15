@@ -1,4 +1,5 @@
 #include "runtime/hmi_widget.h"
+#include "runtime/widgets/s7_config_card.h"
 
 #include "core/i18n.h"
 #include "core/industrial_catalog.h"
@@ -177,6 +178,7 @@ const QHash<QString, Factory> &factories()
         {QStringLiteral("ModbusSlaveTable"), make<ModbusSlaveTableWidget>()},
         {QStringLiteral("DataRecvCard"), make<DataRecvCardWidget>()},
         {QStringLiteral("DataSendCard"), make<DataSendCardWidget>()},
+        {QStringLiteral("S7ConfigCard"), make<S7ConfigCardWidget>()},
         {QStringLiteral("SerialConfigCard"), make<SerialConfigCardWidget>()},
         {QStringLiteral("TcpConfigCard"), make<TcpConfigCardWidget>()},
         {QStringLiteral("MqttConfigCard"), make<MqttConfigCardWidget>()},

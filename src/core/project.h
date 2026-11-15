@@ -18,7 +18,7 @@ namespace fhmi {
 class Project
 {
   public:
-    static constexpr const char *FormatVersion = "1.0";
+    static constexpr const char *FormatVersion = "1.1";
     static constexpr const char *FileSuffix = "uidp";
 
     Project();
@@ -38,7 +38,8 @@ class Project
     QJsonObject toJson() const;
 
     // Rejects invalid documents before anything replaces the current project.
-    static bool validate(const QJsonObject &document, QString *error);
+    // A clipboard selection may refer to an S7 card outside that selection. Saved projects always require it.
+    static bool validate(const QJsonObject &document, QString *error, bool allowExternalS7References = false);
     static bool fromJson(const QJsonObject &document, Project *out, QString *error);
     // A document toJson() wrote, unchecked: the designer's undo history holds edits in progress, such as a
     // separator cleared to be retyped, which fromJson() would refuse.

@@ -5,6 +5,7 @@
 #include "designer/property_editor.h"
 #include "designer/widget_palette.h"
 #include "runtime/hmi_widget.h"
+#include "core/s7.h"
 
 #include <FluentQtWidgets/Dialogs/Dialog.h>
 #include <FluentQtWidgets/FluentIcon.h>
@@ -560,7 +561,7 @@ void DesignerPage::copy()
         return;
     }
     const QByteArray json =
-        QJsonDocument(QJsonObject{{QStringLiteral("version"), QLatin1String(Project::FormatVersion)},
+        QJsonDocument(QJsonObject{{QStringLiteral("version"), S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0")},
                                   {QStringLiteral("widgets"), widgets}})
             .toJson(QJsonDocument::Compact);
     auto *mime = new QMimeData;
@@ -584,9 +585,10 @@ void DesignerPage::paste()
     }
     // Checked as opening a project checks them; a link card's frame format against this project's mode.
     const QJsonObject document{
+        {QStringLiteral("version"), S7::usesS7(widgets.value_or(QJsonArray())) ? QStringLiteral("1.1") : QStringLiteral("1.0")},
         {QStringLiteral("widgets"), widgets.value_or(QJsonArray())},
         {QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()}}}};
-    if (!widgets || widgets->isEmpty() || !Project::validate(document, nullptr)) {
+    if (!widgets || widgets->isEmpty() || !Project::validate(document, nullptr, true)) {
         emit warning(tr("剪贴板里没有可粘贴的控件"), QString());
         return;
     }

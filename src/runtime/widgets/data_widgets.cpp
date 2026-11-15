@@ -943,6 +943,19 @@ void RealtimeChartWidget::clearReference()
 
 void RealtimeChartWidget::onAttached()
 {
+    QList<S7::Need> s7Needs;
+    for(const Curve &curve:m_curves) if(curve.binding.s7) s7Needs.append({curve.binding.sourceCardId,*curve.binding.s7});
+    context()->setS7CurveNeeds(this,s7Needs);
+    live(connect(context(),&RuntimeContext::s7Sample,this,[this](const S7::Sample &sample) {
+        if(sample.quality!=QLatin1String("good"))return;
+        for(size_t i=0;i<m_curves.size();++i) {
+            const auto &binding=m_curves[i].binding;
+            if(binding.s7 && binding.sourceCardId==sample.sourceCardId && binding.s7->address.canonical==sample.address
+                && binding.s7->type.name==sample.dataType)
+                if(const auto y=binding.chartSample(sample.value))appendSample(int(i),*y);
+        }
+    }));
+
     // Modbus curves are read by automatic polling (ModbusPoller), at its default period.
     QList<ModbusNeed> needs;
     for (const Curve &curve : m_curves) {
@@ -1014,6 +1027,7 @@ void RealtimeChartWidget::onAttached()
 void RealtimeChartWidget::onDetached()
 {
     context()->setCurveNeeds(this, {});
+    context()->setS7CurveNeeds(this, {});
     for (const auto &history : m_histories) {
         history->clear();
     }

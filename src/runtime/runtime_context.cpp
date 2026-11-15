@@ -4,12 +4,43 @@
 #include "comm/modbus_slave.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
+#include <QtCore/QTimer>
 
 namespace fhmi {
 
 RuntimeContext::RuntimeContext(QObject *parent) : QObject(parent), m_hub(new CommHub(this))
 {
     m_poller = new ModbusPoller(this);
+    m_s7 = new S7Client(this);
+    m_s7Timer = new QTimer(this);
+    m_s7Timer->setInterval(100);
+    connect(m_s7Timer,&QTimer::timeout,this,[this] {
+        QList<S7::Need> needs;
+        for(const auto &binding:m_bindings) {
+            const auto widget=m_widgets.value(binding.widgetId);
+            if(binding.s7 && widget && widget->isVisible()) needs.append({binding.sourceCardId,*binding.s7});
+        }
+        for(const auto &curves:m_s7Curves) needs.append(curves);
+        m_s7->setNeeds(needs);
+    });
+    connect(m_s7,&S7Client::sampleReceived,this,[this](const S7::Sample &sample) {
+        if(!m_active)return;
+        for(const auto &binding:m_bindings) {
+            if(!binding.s7 || binding.sourceCardId!=sample.sourceCardId || binding.s7->address.canonical!=sample.address
+                || binding.s7->type.name!=sample.dataType)continue;
+            if(auto widget=m_widgets.value(binding.widgetId)) {
+                widget->setProperty("s7Quality",sample.quality);
+                widget->setProperty("s7Timestamp",sample.timestamp);
+                if(sample.quality!=QLatin1String("good")) widget->setToolTip(tr("S7 数据不可用：%1").arg(sample.quality));
+                else { widget->setToolTip(QString());push(binding,sample.value); }
+            }
+        }
+        emit s7Sample(sample);
+    });
+    connect(m_s7,&S7Client::logMessage,m_hub,&CommHub::linkInfo);
+    connect(m_s7,&S7Client::writeFinished,this,[this](const QString &,bool success,const QString &error) {
+        if(!success)notify(tr("S7 写入"),error,NotifyType::Error);
+    });
     m_steady.start();
     connect(m_hub, &CommHub::messageReceived, this, &RuntimeContext::onMessage);
     connect(m_hub, &CommHub::rawReceived, this, &RuntimeContext::onRaw);
@@ -25,6 +56,7 @@ RuntimeContext::RuntimeContext(QObject *parent) : QObject(parent), m_hub(new Com
 void RuntimeContext::registerWidget(const QString &id, HmiWidget *widget)
 {
     if (!id.isEmpty()) {
+        widget->setProperty("fhmiWidgetId",id);
         m_widgets.insert(id, widget);
     }
 }
@@ -43,6 +75,8 @@ void RuntimeContext::clear()
     m_bindings.clear();
     m_canBindings.clear();
     m_curveNeeds.clear();
+    m_s7Curves.clear();
+    m_s7->clear();
     m_poller->reset();
 }
 
@@ -85,6 +119,11 @@ void RuntimeContext::setCurveNeeds(const QObject *chart, const QList<ModbusNeed>
     }
 }
 
+void RuntimeContext::setS7CurveNeeds(const QObject *chart, const QList<S7::Need> &needs)
+{
+    if(needs.isEmpty())m_s7Curves.remove(chart);else m_s7Curves.insert(chart,needs);
+}
+
 void RuntimeContext::setActive(bool active)
 {
     m_active = active;
@@ -95,6 +134,7 @@ void RuntimeContext::setActive(bool active)
         }
     }
     m_poller->setActive(active);
+    if(active)m_s7Timer->start();else {m_s7Timer->stop();m_s7->setNeeds({});}
     if (active) {
         m_hub->deliverSlaveStart(); // the bound controls start from the slaves' tables
     }
@@ -102,6 +142,12 @@ void RuntimeContext::setActive(bool active)
 
 bool RuntimeContext::send(const CommandResult &result, QList<QByteArray> *sent)
 {
+    if(result.command && result.command->kind==EncodedCommand::Kind::S7) {
+        QString error;
+        if(!m_s7->write(result.command->s7,&error)) {notify(tr("S7 写入"),error,NotifyType::Warning);return false;}
+        if(sent)sent->append(result.command->s7.bytes);
+        return true;
+    }
     bool wroteSlaves = false;
     if (result.command && result.command->kind == EncodedCommand::Kind::Modbus) {
         for (ModbusSlave *slave : m_hub->modbusSlaves()) {

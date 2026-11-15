@@ -58,6 +58,7 @@ const QHash<QString, QSet<QString>> &modeVisibility()
         {QStringLiteral("JSON"),
          {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
           QStringLiteral("commandTemplate"), QStringLiteral("commandJsonNewline")}},
+        {QStringLiteral("S7"), {QStringLiteral("commandTargetId"), QStringLiteral("s7Command")}},
         {QStringLiteral("Modbus"),
          {QStringLiteral("mbSlave"), QStringLiteral("mbFunc"), QStringLiteral("mbAddress"), QStringLiteral("mbValue"),
           QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder"), QStringLiteral("mbArea")}},
@@ -79,7 +80,7 @@ const QSet<QString> &modeFields()
         QStringLiteral("byteOrder"),      QStringLiteral("mbSlave"),         QStringLiteral("mbFunc"),
         QStringLiteral("mbAddress"),      QStringLiteral("mbValue"),         QStringLiteral("mbDataType"),
         QStringLiteral("mbRegOrder"),     QStringLiteral("canId"),           QStringLiteral("canFd"),
-        QStringLiteral("canCycle"),       QStringLiteral("mbArea")};
+        QStringLiteral("canCycle"), QStringLiteral("commandTargetId"), QStringLiteral("s7Command"), QStringLiteral("mbArea")};
     return fields;
 }
 
@@ -111,6 +112,22 @@ QJsonArray currentWidgets(const Project *project, const DesignScene *scene)
         return scene->widgetsJson();
     }
     return project ? project->widgets : QJsonArray();
+}
+
+FluentQt::ComboBox *s7Sources(const QJsonArray &widgets, const QString &current, QWidget *parent)
+{
+    auto *box=new FluentQt::ComboBox(parent);
+    box->addItem(PropertyEditor::tr("请选择 S7 连接"),QIcon(),QString());
+    visitWidgets(widgets,[box](const QJsonObject &widget) {
+        if(widget.value(QStringLiteral("type")).toString()==QLatin1String("S7ConfigCard")) {
+            const QString id=widget.value(QStringLiteral("id")).toString();
+            box->addItem(id,QIcon(),id);
+        }
+        return true;
+    });
+    if(!current.isEmpty() && box->findData(current)<0)box->addItem(current,QIcon(),current);
+    selectValue(box,current);
+    return box;
 }
 
 bool hasCanCard(const QJsonArray &widgets)
@@ -205,6 +222,7 @@ const QHash<QString, QSet<QString>> &chartParseVisibility()
         {ParseMode::HexBytes,
          {QStringLiteral("curveByteOffset"), QStringLiteral("curveDataType"), QStringLiteral("curveByteOrder"),
           QStringLiteral("curveFrameHeader"), QStringLiteral("curveFrameTail")}},
+        {ParseMode::S7, {QStringLiteral("curveSourceCardId"), QStringLiteral("curveS7")}},
         {ParseMode::Modbus,
          {QStringLiteral("curveMbArea"), QStringLiteral("curveRegIndex"), QStringLiteral("curveMbDataType"),
           QStringLiteral("curveMbRegOrder"), QStringLiteral("curveMbFcFilter"), QStringLiteral("curveMbSlaveFilter")}},
@@ -221,6 +239,8 @@ const QHash<QString, QString> &curveFields()
 {
     static const QHash<QString, QString> table = {
         {QStringLiteral("curveName"), QStringLiteral("name")},
+        {QStringLiteral("curveSourceCardId"),QStringLiteral("sourceCardId")},
+        {QStringLiteral("curveS7"),QStringLiteral("s7")},
         {QStringLiteral("curveExpression"), QStringLiteral("expression")},
         {QStringLiteral("curveParseMode"), QStringLiteral("parseMode")},
         {QStringLiteral("curveKey"), QStringLiteral("key")},
@@ -546,6 +566,12 @@ void PropertyEditor::setRowVisible(const QString &key, bool visible)
 
 QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &value, const Commit &commit)
 {
+    if(def.name==QLatin1String("commandTargetId") || def.name==QLatin1String("curveSourceCardId")) {
+        auto *box=s7Sources(currentWidgets(m_project,m_scene),value.toString(),m_content);
+        connect(box,&FluentQt::ComboBox::currentIndexChanged,this,[box,commit]{commit(selectedValue(box));});
+        return box;
+    }
+
     if(def.name==QLatin1String("pulsesPerTurn")) {
         auto *edit=new FluentQt::LineEdit(m_content);edit->setText(QString::number(value.toDouble(1024),'f',0));
         edit->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("[0-9]+")),edit));
@@ -1105,6 +1131,11 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
     if (m_loading || !m_item) {
         return;
     }
+    if ((name==QLatin1String("commandMode") || name==QLatin1String("curveParseMode")) && value.toString()==QLatin1String("S7")) {
+        const QString objectName = name==QLatin1String("commandMode") ? QStringLiteral("s7Command") : QStringLiteral("curveS7");
+        const auto *def=m_item->meta().prop(objectName);
+        if(def && !m_item->properties().contains(storageKey(objectName)))m_item->setPropertyValue(storageKey(objectName),def->defaultValue);
+    }
     const QString key = storageKey(name);
     const int curves = m_item->propertyValue(QStringLiteral("curveCount")).toInt(1);
     m_item->setPropertyValue(key, value);
@@ -1228,6 +1259,26 @@ void PropertyEditor::buildItemForm()
                 addRow(props, QStringLiteral("curveCanProblem"), QString(), newProblemLabel(m_content));
             }
         }
+        for(const QString &root: {QStringLiteral("s7Command"),QStringLiteral("curveS7")}) {
+            const auto *objectDef=meta.prop(root);if(!objectDef)continue;
+            const QJsonObject object=itemValue(*objectDef).toObject();
+            QList<PropDef> fields{
+                {QStringLiteral("address"),tr("S7 地址"),PropType::String,QStringLiteral("DB1.DBD4"),{},std::nullopt,std::nullopt,false,{}},
+                {QStringLiteral("dataType"),tr("S7 数据类型"),PropType::Enum,QStringLiteral("REAL"),S7::dataTypes(),std::nullopt,std::nullopt,false,{}}};
+            if(root==QLatin1String("curveS7")) fields.append({QStringLiteral("period"),tr("采集周期(ms)"),PropType::Int,0,{},0,60000,false,{}});
+            else {
+                fields.append({QStringLiteral("value"),tr("写入值"),PropType::String,QStringLiteral("1"),{},std::nullopt,std::nullopt,false,{}});
+                fields.append({QStringLiteral("onValue"),tr("开启写入值"),PropType::String,QStringLiteral("1"),{},std::nullopt,std::nullopt,false,{}});
+                fields.append({QStringLiteral("offValue"),tr("关闭写入值"),PropType::String,QStringLiteral("0"),{},std::nullopt,std::nullopt,false,{}});
+            }
+            for(const auto &field:fields) {
+                auto *editor=createEditor(field,object.value(field.name).isUndefined()?field.defaultValue:object.value(field.name),[this,root,name=field.name,defaults=objectDef->defaultValue](const QJsonValue &value) {
+                    auto object=m_item->properties().value(storageKey(root)).toObject();if(object.isEmpty())object=defaults.toObject();
+                    object.insert(name,value);commitProperty(root,object,name);
+                });
+                addRow(props,root+QLatin1Char('.')+field.name,field.label,editor);
+            }
+        }
     }
     if (meta.prop(QStringLiteral("bitProfile"))) buildBitProfilesForm();
     // A link card with a mode of its own frames with its own settings, edited like the project's.
@@ -1292,13 +1343,19 @@ void PropertyEditor::buildBindingForm()
     };
 
     const QString mode = value("parseMode", ParseMode::KeyValue).toString();
-    QStringList modes{ParseMode::KeyValue, ParseMode::JsonPath, ParseMode::HexBytes, ParseMode::Modbus};
+    QStringList modes{ParseMode::KeyValue, ParseMode::JsonPath, ParseMode::HexBytes, ParseMode::Modbus, ParseMode::S7};
     // CAN信号 reads the frames of a CAN card's links, so it is offered only where there is one, and kept where a
     // binding already uses it.
     if (mode == ParseMode::CanSignal || hasCanCard(currentWidgets(m_project, m_scene))) {
         modes.append(ParseMode::CanSignal);
     }
     add("parseMode", tr("解析模式"), combo(modes, mode));
+    const auto s7=binding.value(QStringLiteral("s7")).toObject();
+    add("sourceCardId",tr("S7 来源连接"),s7Sources(currentWidgets(m_project,m_scene),value("sourceCardId",QString()).toString(),m_content));
+    add("s7Address",tr("S7 地址"),line(s7.value(QStringLiteral("address")).toString(QStringLiteral("DB1.DBD4")),QStringLiteral("DB1.DBD4")));
+    add("s7DataType",tr("S7 数据类型"),combo(S7::dataTypes(),s7.value(QStringLiteral("dataType")).toString(QStringLiteral("REAL"))));
+    add("s7Period",tr("S7 采集周期(ms)"),spin(0,60000,s7.value(QStringLiteral("period")).toInt(0)));
+
     add("key", tr("绑定字段"), line(value("key", QString()).toString(), tr("字段名 (如 temperature)")));
     // The signal keys of the project's CAN cards, so a DBC's names need not be typed out.
     complete(static_cast<FluentQt::LineEdit *>(m_bindingEditors.value(QStringLiteral("key"))),
@@ -1387,7 +1444,7 @@ void PropertyEditor::commitBinding(const QString &field)
     // up; the runtime uses it once the ID parses and the signal is valid.
     const bool configured = (mode == ParseMode::KeyValue && !textOf("key").isEmpty()) ||
                             (mode == ParseMode::JsonPath && !textOf("jsonPath").isEmpty()) ||
-                            mode == ParseMode::HexBytes || mode == ParseMode::Modbus ||
+                            mode == ParseMode::HexBytes || mode == ParseMode::Modbus || mode == ParseMode::S7 ||
                             (mode == ParseMode::CanSignal && !textOf("canId").isEmpty());
     if (!configured) {
         m_item->setBinding({});
@@ -1419,6 +1476,8 @@ void PropertyEditor::commitBinding(const QString &field)
             binding.insert(QStringLiteral("canFactor"), numberOf("canFactor"));
             binding.insert(QStringLiteral("canOffset"), numberOf("canOffset"));
         }
+        binding.insert(QStringLiteral("sourceCardId"),textOf("sourceCardId"));
+        binding.insert(QStringLiteral("s7"),QJsonObject{{QStringLiteral("address"),textOf("s7Address")},{QStringLiteral("dataType"),textOf("s7DataType")},{QStringLiteral("period"),intOf("s7Period")}});
         const QString expression = textOf("expression");
         binding.insert(QStringLiteral("expression"), expression.isEmpty() ? QJsonValue() : QJsonValue(expression));
         m_item->setBinding(binding);
@@ -1470,6 +1529,12 @@ void PropertyEditor::updateVisibility()
         for (const QString &field : modeFields()) {
             setRowVisible(field, shown.contains(field));
         }
+        for(const QString &field:{QStringLiteral("address"),QStringLiteral("dataType"),QStringLiteral("value"),QStringLiteral("onValue"),QStringLiteral("offValue")}) {
+            const bool toggle=meta.typeName==QLatin1String("ToggleSwitch");
+            const bool shown=mode==QLatin1String("S7") && (field==QLatin1String("address") || field==QLatin1String("dataType")
+                || (toggle ? field==QLatin1String("onValue")||field==QLatin1String("offValue") : field==QLatin1String("value")&&meta.typeName==QLatin1String("PushButton")));
+            setRowVisible(QStringLiteral("s7Command.")+field,shown);
+        }
         if (mode == QLatin1String("CAN")) {
             // The link ignores these for a message with signals; show them only where they still matter.
             const CanTargetKind kind = canTargetKind(canNames(m_project, currentWidgets(m_project, m_scene)),
@@ -1480,7 +1545,7 @@ void PropertyEditor::updateVisibility()
         }
         const QString toggle = sendToggle(meta.typeName);
         // A Modbus-mode control sends whether or not its toggle is on, so its settings stay visible.
-        if (!toggle.isEmpty() && !m_item->propertyValue(toggle).toBool() && mode != QLatin1String("Modbus")) {
+        if (!toggle.isEmpty() && !m_item->propertyValue(toggle).toBool() && mode != QLatin1String("Modbus") && mode != QLatin1String("S7")) {
             for (const QString &field : modeFields()) {
                 setRowVisible(field, false);
             }
@@ -1517,6 +1582,8 @@ void PropertyEditor::updateVisibility()
                 setRowVisible(field, shown.contains(field));
             }
         }
+        for(const QString &field:{QStringLiteral("address"),QStringLiteral("dataType"),QStringLiteral("period")})
+            setRowVisible(QStringLiteral("curveS7.")+field,mode==ParseMode::S7);
         // Only once the curve has an ID to judge: an empty one is a field still to fill, not a mistake.
         QString problem;
         if (mode == ParseMode::CanSignal &&
@@ -1534,6 +1601,8 @@ void PropertyEditor::updateVisibility()
     if (!m_bindingEditors.isEmpty()) {
         const auto *combo = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("parseMode")));
         const QString mode = combo ? selectedValue(combo) : ParseMode::KeyValue;
+        for(const char *field:{"sourceCardId","s7Address","s7DataType","s7Period"})
+            setRowVisible(QStringLiteral("binding.")+QLatin1String(field),mode==ParseMode::S7);
         setRowVisible(QStringLiteral("binding.key"), mode == ParseMode::KeyValue);
         setRowVisible(QStringLiteral("binding.jsonPath"), mode == ParseMode::JsonPath);
         for (const char *field : {"byteOffset", "dataType", "byteOrder", "frameHeader", "frameTail"}) {

@@ -71,6 +71,28 @@ def find_built(build_dir, name, config):
     sys.exit(f"{name} not found in {build_dir}; build the {config} configuration first")
 
 
+def snap7_library(build_dir, config):
+    manifest = build_dir / f"snap7-path-{config}.txt"
+    if not manifest.is_file():
+        sys.exit(f"Snap7 build manifest not found: {manifest}")
+    library = Path(manifest.read_text(encoding="utf-8").strip())
+    if not library.is_file():
+        sys.exit(f"Snap7 runtime not found: {library}")
+    return library
+
+
+def snap7_notices(destination):
+    folder = destination / "licenses" / "snap7"
+    folder.mkdir(parents=True, exist_ok=True)
+    for source, name in ((ROOT / "third_party/snap7/gpl.txt", "GPL-3.0.txt"),
+                         (ROOT / "third_party/snap7/lgpl-3.0.txt", "LGPL-3.0.txt"),
+                         (ROOT / "third_party/SNAP7-NOTICE.md", "NOTICE.md"),
+                         (ROOT / "patches/snap7-macos.patch", "snap7-macos.patch"),
+                         (ROOT / "patches/snap7-connect-timeout.patch", "snap7-connect-timeout.patch")):
+        shutil.copy2(source, folder / name)
+    return [f"licenses/snap7/{p.name}" for p in sorted(folder.iterdir())]
+
+
 def user_env(**extra):
     """The environment to run packaged programs in: what they would see on a user's machine."""
     env = {key: value for key, value in os.environ.items() if key not in BUILD_ONLY_ENV}
@@ -345,7 +367,9 @@ def package_windows(build_dir, output_dir, version, config):
     shutil.copy2(find_built(build_dir, "FluentHMIRuntime.exe", config), stage)
     listed = run([deploy, *deploy_args, "--list", "relative", stage / "FluentHMIRuntime.exe"],
                  capture_output=True, text=True).stdout
-    runtime_files = ["FluentHMIRuntime.exe"] + [line.strip().replace("\\", "/") for line in listed.splitlines()
+    sdk = snap7_library(build_dir, config)
+    shutil.copy2(sdk, stage / "snap7.dll")
+    runtime_files = ["FluentHMIRuntime.exe", "snap7.dll"] + snap7_notices(stage) + [line.strip().replace("\\", "/") for line in listed.splitlines()
                                                 if line.strip()]
     shutil.copy2(find_built(build_dir, "FluentHMIStudio.exe", config), stage)
     run([deploy, *deploy_args, stage / "FluentHMIStudio.exe"])
@@ -353,6 +377,7 @@ def package_windows(build_dir, output_dir, version, config):
         print(f"bundling {dll.name}")
         shutil.copy2(dll, stage)
         runtime_files.append(dll.name)
+    runtime_files = list(dict.fromkeys(runtime_files))
     unknown = [f for f in runtime_files if not (stage / f).is_file()]
     if unknown:
         sys.exit("windeployqt listed files that are not in the package:\n  " + "\n  ".join(unknown))
@@ -463,7 +488,7 @@ def bundle_linux_libs(binaries, lib_dir, qt_prefix):
         needed.update(ldd(binary))
     names = []
     for soname, resolved in sorted(needed.items()):
-        listed = soname.startswith(LINUX_BUNDLED_SYSTEM_LIBS)
+        listed = soname.startswith(LINUX_BUNDLED_SYSTEM_LIBS) or soname.startswith("libsnap7.so")
         if resolved is None:
             if listed:
                 sys.exit(f"{soname} is not installed here, and the package carries it")
@@ -593,7 +618,7 @@ def package_linux(build_dir, output_dir, version, config):
     # The runtime's libraries first, as on Windows: runtime-files.txt lists what the runtime takes, so an exported
     # application copies those files and leaves the studio's own behind.
     runtime_libs = bundle_linux_libs([runtime] + [source for source, _ in plugins], stage / "lib", qt_prefix)
-    runtime_files = ["FluentHMIRuntime", "qt.conf"] + [rel for _, rel in plugins] + [f"lib/{n}" for n in runtime_libs]
+    runtime_files = ["FluentHMIRuntime", "qt.conf"] + snap7_notices(stage) + [rel for _, rel in plugins] + [f"lib/{n}" for n in runtime_libs]
     # The studio's own: offscreen, for --export where there is no display (a board over SSH).
     offscreen = qt_prefix / "plugins" / "platforms" / "libqoffscreen.so"
     shutil.copy2(offscreen, stage / "plugins" / "platforms")

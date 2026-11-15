@@ -41,6 +41,7 @@
 | 多控件共用位名和颜色，显示数字时序、电芯数组或电源反馈 | [共享位定义与复合反馈](uidp/electronics.md#共享位定义与复合反馈) | [动态控件全景](../examples/industrial/动态控件全景.uidp)的「信号与诊断」页 |
 | 接串口 / TCP / UDP / MQTT，设置帧头、长度、校验 | [链路与帧格式](uidp/connections.md) | [HEX 电机控制板](../examples/tutorials/03-电机控制板.uidp) |
 | 读 PLC 寄存器，或在桌面模拟从站 | [Modbus 轮询与从站](uidp/connections.md#modbus-主站与从站) | [PLC 压力监控](../examples/tutorials/10-PLC恒压供水.uidp)、[温控仪模拟器](../examples/tutorials/11-温控仪模拟器.uidp) |
+| 连接经典 S7 PLC，按类型读写绝对地址 | [S7 连接、绑定与命令](s7.md) | [本地 S7 模拟器](../examples/s7-demo.uidp) |
 | 按钮、输入框或滑块向设备发命令 | [命令格式与触发时机](uidp/commands.md) | [AT 指令助手](../examples/tutorials/05-AT指令调试助手.uidp) |
 | 在 Studio 连接 CAN 总线，使用 DBC | [CAN 卡片、信号与命令](uidp/can.md) | [CAN 收发测试](../examples/tutorials/12-CAN收发测试.uidp)及[配套 DBC](../examples/tutorials/12-CAN收发测试.dbc) |
 | 查控件属性名、默认值、范围或最小尺寸 | [Studio 控件参考](uidp-widgets.md) · [Python 版控件参考](https://raw.githubusercontent.com/txp666/PyQt-UI-Designer/main/docs/uidp-widgets.md) | 下方按类别列出控件名 |
@@ -61,6 +62,6 @@
 - 布局容器：`HBoxLayout` 水平布局（300×80）、`VBoxLayout` 垂直布局（200×200）、`FlexLayout` 弹性布局（400×200）、`GroupBox` 分组框（280×180）、`TabWidget` 选项卡（350×250）、`Separator` 分割线（200×2）、`CardContainer` 卡片容器（300×200）
 - 显示控件：`LEDIndicator` LED指示灯（140×30）、`NumericDisplay` 数值显示（160×90）、`ProgressBar` 进度条（250×20）、`ProgressRingDisplay` 进度环（120×130）、`ImageDisplay` 图片显示（200×150）
 - 图表控件：`RealtimeChart` 实时曲线（400×280）、`GaugeMeter` 仪表盘（180×180）、`DataTable` 数据表格（350×250）
-- 通信控件：`SerialConfigCard` 串口配置卡片（360×320）、`TcpConfigCard` TCP 配置卡片（360×250）、`UdpConfigCard` UDP 配置卡片（360×220）、`MqttConfigCard` MQTT 配置卡片（380×390）、`CanConfigCard` CAN 配置卡片（380×270）、`DataSendCard` 数据发送卡片（350×140）、`DataRecvCard` 数据接收卡片（350×250）、`LogBox` 日志显示框（400×200）、`CanMonitor` 报文监视（560×280）、`ModbusSlaveTable` 从站寄存器表（260×300）
+- 通信控件：`S7ConfigCard` S7 连接卡片（420×240）、`SerialConfigCard` 串口配置卡片（360×320）、`TcpConfigCard` TCP 配置卡片（360×250）、`UdpConfigCard` UDP 配置卡片（360×220）、`MqttConfigCard` MQTT 配置卡片（380×390）、`CanConfigCard` CAN 配置卡片（380×270）、`DataSendCard` 数据发送卡片（350×140）、`DataRecvCard` 数据接收卡片（350×250）、`LogBox` 日志显示框（400×200）、`CanMonitor` 报文监视（560×280）、`ModbusSlaveTable` 从站寄存器表（260×300）
 - [工业设备与工业仪表的类型和默认值](uidp/industrial.md)
 - [汽车电子、电子 DIY 与嵌入式的类型和状态](uidp/electronics.md)

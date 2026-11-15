@@ -616,6 +616,24 @@ int nextTransaction()
     return (transaction.fetch_add(1) + 1) & 0xFFFF;
 }
 
+CommandResult s7FromProperties(const QJsonObject &props, const std::optional<QString> &value)
+{
+    const auto settings = props.value(QStringLiteral("s7Command")).toObject();
+    QString error;
+    const auto point = S7::point(settings, &error);
+    const QString target = props.value(QStringLiteral("commandTargetId")).toString();
+    if (!point) return CommandResult::failure(error);
+    if (target.isEmpty()) return CommandResult::failure(QCoreApplication::translate("fhmi", "请选择 S7 目标连接"));
+    if (point->address.area == S7::MemoryArea::Input)
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "S7 输入区 I 只读，请选择 DB、M 或 Q 写入"));
+    EncodedCommand command; command.kind = EncodedCommand::Kind::S7;
+    command.s7.targetId = target; command.s7.point = *point;
+    const QVariant raw = value ? QVariant(*value) : settings.value(QStringLiteral("value")).isUndefined()
+        ? QVariant(QStringLiteral("1")) : settings.value(QStringLiteral("value")).toVariant();
+    if (!S7::encodeValue(raw, point->type, &command.s7.bytes, &error)) return CommandResult::failure(error);
+    return CommandResult::ok(command);
+}
+
 CommandResult modbusFromProperties(const QJsonObject &props, const std::optional<QString> &value)
 {
     const auto slave = integerProp(props, "mbSlave", 1);
@@ -691,6 +709,7 @@ CommandResult encode(const QJsonObject &props, const QString &value)
     const QString header = prop(props, "frameHeader", QString());
     const QString tail = prop(props, "frameTail", QString());
 
+    if (mode == QLatin1String("S7")) return s7FromProperties(props, value);
     if (mode == QLatin1String("Modbus")) {
         return modbusFromProperties(props, value);
     }
@@ -715,6 +734,7 @@ CommandResult encode(const QJsonObject &props, const QString &value)
         return CommandResult::ok(command);
     }
 
+    if (mode != QStringLiteral("文本")) return CommandResult::failure(QCoreApplication::translate("fhmi", "未知发送模式：%1").arg(mode)); // i18n: value
     QString text = templ.contains(QStringLiteral("{value}")) ? QString(templ).replace(QStringLiteral("{value}"), value)
                                                              : templ;
     text += newline(prop(props, "commandNewline", QStringLiteral("\\r\\n")));

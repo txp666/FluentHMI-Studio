@@ -1,3 +1,6 @@
 [submodule "third_party/FluentQtWidgets"]
 	path = third_party/FluentQtWidgets
 	url = https://github.com/txp666/FluentQtWidgets.git
+[submodule "third_party/snap7"]
+	path = third_party/snap7
+	url = https://github.com/davenardella/snap7.git

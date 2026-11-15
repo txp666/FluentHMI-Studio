@@ -19,6 +19,7 @@ class PushButtonWidget : public HmiWidget
 {
   public:
     PushButtonWidget(const WidgetMeta &meta, QWidget *parent);
+    void applyBoundValue(const QVariant &value, const BindingEntry &binding) override;
 
   protected:
     void apply() override;
@@ -45,6 +46,7 @@ class LineEditWidget : public HmiWidget
 {
   public:
     LineEditWidget(const WidgetMeta &meta, QWidget *parent);
+    void applyBoundValue(const QVariant &value, const BindingEntry &binding) override;
 
   protected:
     void apply() override;
@@ -58,6 +60,7 @@ class ComboBoxWidget : public HmiWidget
 {
   public:
     ComboBoxWidget(const WidgetMeta &meta, QWidget *parent);
+    void applyBoundValue(const QVariant &value, const BindingEntry &binding) override;
 
   protected:
     void apply() override;

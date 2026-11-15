@@ -77,6 +77,9 @@ QString WidgetMeta::bindProperty() const
     }
     static const QHash<QString, QString> mapping = {
         {QStringLiteral("Label"), QStringLiteral("text")},
+        {QStringLiteral("PushButton"), QStringLiteral("text")},
+        {QStringLiteral("LineEdit"), QStringLiteral("text")},
+        {QStringLiteral("ComboBox"), QStringLiteral("currentIndex")},
         {QStringLiteral("LEDIndicator"), QStringLiteral("on")},
         {QStringLiteral("NumericDisplay"), QStringLiteral("value")},
         {QStringLiteral("ProgressBar"), QStringLiteral("value")},

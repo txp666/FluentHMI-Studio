@@ -210,6 +210,8 @@ int CommHub::sendCanFrame(const CanFrame &frame, QString *error)
 int CommHub::send(const EncodedCommand &command, QList<QByteArray> *sent, QString *error)
 {
     switch (command.kind) {
+    case EncodedCommand::Kind::S7:
+        return 0; // Addressed PLC operations never enter byte/Modbus broadcasts.
     case EncodedCommand::Kind::Modbus:
         return sendModbus(command.modbus, sent);
     case EncodedCommand::Kind::Can:

@@ -5,7 +5,7 @@
   <p align="center"><a href="README.md">English</a> · 简体中文 · <a href="https://hmi.modusignal.cn/">官网</a> · <a href="https://hmi.modusignal.cn/guide/">使用说明</a></p>
 </p>
 
-FluentHMI Studio 是 [modusignal](https://github.com/txp666/modusignal) 工具系列中的原生 C++/Qt 6 可视化上位机设计器。拖拽控件、配置属性、绑定串口、TCP、MQTT、UDP 或 CAN 数据，然后导出成**不需要编译器**就能运行的独立桌面应用。它与 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 和 modusignal「自定义设备」中支持的功能共享 `.uidp` 工程格式；导出方式与实测差异见[与 Python 版相比](#与-python-版相比)。
+FluentHMI Studio 是 [modusignal](https://github.com/txp666/modusignal) 工具系列中的原生 C++/Qt 6 可视化上位机设计器。拖拽控件、配置属性、绑定串口、TCP、MQTT、UDP、CAN 或经典 S7 数据，然后导出成**不需要编译器**就能运行的独立桌面应用。它与 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 和 modusignal「自定义设备」中支持的功能共享 `.uidp` 工程格式；导出方式与实测差异见[与 Python 版相比](#与-python-版相比)。
 
 ## 界面预览
 
@@ -47,10 +47,11 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 两者使用同一种工程格式，控件和协议规则一致：
 
-- **工程格式兼容**：直接读写 `.uidp`（版本 1.0），控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 一一对应。`examples/` 里的示例工程可以打开、预览并保存。[工业泵站与回放示例](examples/industrial)
+- **工程格式兼容**：读取 `.uidp` 1.0 和 1.1；含 S7 功能的工程保存为 1.1，其他工程保持 1.0。控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 对齐。`examples/` 里的示例工程可以打开、预览并保存。[工业泵站与回放示例](examples/industrial)
 - **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 二进制帧（帧头帧尾、长度字段、校验、定长、空闲分帧）、Modbus RTU、Modbus TCP、Modbus ASCII 五种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / JSON / Modbus 四种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
 - **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定选寄存器区和地址；链路卡片选 Modbus 解析、控件绑定寄存器地址即可自动读取：相近的地址合并成块按周期读，一次一条，只读界面上看得见的控件，写命令排在读请求前面；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 - **Modbus RTU / TCP 从站**：串口、TCP、UDP 卡片可以当从站，用自己的数据表应答外部主站，绑定、控件和写命令直接读写这张表，从站寄存器表控件可以查看和修改。
+- **经典 S7 客户端**：独立 S7 连接卡片轮询 DB/M/I/Q 类型化地址，写命令定向到所选 PLC。预览与导出应用共用原生 Snap7 客户端，BOOL 位写保留邻位。[配置与范围](docs/s7.md) · [本地模拟器示例](examples/s7-demo.uidp)
 - **CAN / CAN FD（仅 Studio）**：CAN 卡片连接 PEAK、ZLG、SocketCAN 或 slcan 适配器，用 DBC 文件或卡片上写的信号解码，绑定、曲线和表格照常显示；控件可以发 DBC 信号或原始报文，单次或周期发送，报文监视按 ID 列出每个报文和它的周期（见 [CAN 适配器](#can-适配器)）。用到 CAN 的工程只能在 Studio 里打开。
 
 不同之处在实现和导出方式：
@@ -237,7 +238,7 @@ macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHM
 
 ## 当前状态（0.6.0）
 
-已完成：110 种控件，含 25 种工业设备、12 种仪表、13 种汽车电子、14 种电子 DIY 和14 种嵌入式控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
+已完成：111 种控件，含 25 种工业设备、12 种仪表、13 种汽车电子、14 种电子 DIY 和14 种嵌入式控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
 
 MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQTT 模块）：支持用户名密码、QoS 0/1/2、`+`/`#` 通配符订阅，TLS 使用系统证书库；连接成功后若断开会自动重连。与 Python 版一致，每条消息视为一帧，纯数值载荷还会以主题名为键再给出一份。
 
@@ -257,7 +258,7 @@ MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQT
 | [modusignal](https://github.com/txp666/modusignal) | 浏览器设备调试台与 `.uidp` 自定义设备编辑器，通信受浏览器能力限制 |
 | [FluentPLC Simulator](https://github.com/txp666/FluentPLC-Simulator) | 独立桌面与命令行经典 S7comm 服务端，用于测试 S7 客户端 |
 
-三种 HMI 工具可在各自支持的控件与通信范围内交换 `.uidp` 工程。FluentPLC Simulator 使用独立的 `.plcsim.json` 格式；FluentHMI Studio、PyQt UI Designer 和 modusignal 当前均未实现 S7 客户端。
+三种 HMI 工具可在各自支持的控件与通信范围内交换 `.uidp` 工程。FluentPLC Simulator 使用独立的 `.plcsim.json` 格式；FluentPLC Simulator 可用于测试 Studio 的经典 S7 客户端。S7 工程需要支持 `.uidp` 1.1 的桌面 HMI 版本；modusignal 当前不支持 S7。
 
 ## 许可
 

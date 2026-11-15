@@ -78,7 +78,7 @@ PropDef parserConfig()
 
 const QStringList kCommandModes = {QStringLiteral("文本"), // i18n: value
                                    QStringLiteral("HEX"), QStringLiteral("JSON"), QStringLiteral("Modbus"),
-                                   QStringLiteral("CAN")};
+                                   QStringLiteral("CAN"), QStringLiteral("S7")};
 const QStringList kHexTypes = {
     QStringLiteral("HEX字符串"), QStringLiteral("uint8"),  QStringLiteral("int8"), // i18n: value
     QStringLiteral("uint16"),    QStringLiteral("int16"),  QStringLiteral("uint32"),
@@ -179,6 +179,17 @@ QList<PropDef> canCommand()
                       QStringLiteral("大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次"))}; // i18n: ignore
 }
 
+QList<PropDef> s7Command()
+{
+    return {str(QStringLiteral("commandTargetId"), QT_TR_NOOP("S7 目标连接"), QString()),
+            PropDef{QStringLiteral("s7Command"), QT_TR_NOOP("S7 写入"), PropType::Object,
+                    QJsonObject{{QStringLiteral("address"),QStringLiteral("DB1.DBD4")},
+                                {QStringLiteral("dataType"),QStringLiteral("REAL")},
+                                {QStringLiteral("value"),QStringLiteral("1")},
+                                {QStringLiteral("onValue"),QStringLiteral("1")},
+                                {QStringLiteral("offValue"),QStringLiteral("0")}}, {}, std::nullopt, std::nullopt, false, {}}};
+}
+
 QList<PropDef> notification(const QString &event, const QString &content, const QString &type)
 {
     return {boolean(QStringLiteral("notify"), event, false),
@@ -237,6 +248,7 @@ QList<WidgetMeta> basicWidgets()
                regOrder,
                mbValue};
     button += canCommand();
+    button += s7Command();
     button += notification(QT_TR_NOOP("按下通知"), QT_TR_NOOP("按钮已按下"), QStringLiteral("成功")); // i18n: value
 
     QList<PropDef> label{
@@ -263,6 +275,7 @@ QList<WidgetMeta> basicWidgets()
                         kInputFunctions),
                  address, dataType, regOrder};
     lineEdit += canCommand();
+    lineEdit += s7Command();
 
     QList<PropDef> combo{text(QStringLiteral("items"), QT_TR_NOOP("选项"), QT_TR_NOOP("选项1\n选项2\n选项3")),
                          integer(QStringLiteral("currentIndex"), QT_TR_NOOP("默认选项"), 0, 0, 99),
@@ -280,6 +293,7 @@ QList<WidgetMeta> basicWidgets()
               regOrder,
               mbValue};
     combo += canCommand();
+    combo += s7Command();
 
     QList<PropDef> toggle{str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("开关")),
                           boolean(QStringLiteral("checked"), QT_TR_NOOP("默认开启"), false),
@@ -298,6 +312,7 @@ QList<WidgetMeta> basicWidgets()
                       {QStringLiteral("线圈"), ModbusArea::HoldingRegisters}),                  // i18n: value
                integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈/寄存器地址"), 0, 0, 65535)};
     toggle += canCommand();
+    toggle += s7Command();
     toggle += notification(QT_TR_NOOP("切换通知"), QT_TR_NOOP("开关已切换"), QStringLiteral("信息")); // i18n: value
 
     const auto ranged = [&](int value, bool suffix) {
@@ -314,6 +329,7 @@ QList<WidgetMeta> basicWidgets()
                          kWriteFunctions),
                   address, dataType, regOrder};
         props += canCommand();
+    props += s7Command();
         return props;
     };
 
@@ -435,7 +451,7 @@ QList<WidgetMeta> chartWidgets()
 {
     const QStringList parseModes = {QStringLiteral("键值匹配"), QStringLiteral("JSON路径"),  // i18n: value
                                     QStringLiteral("HEX字节提取"), QStringLiteral("Modbus"), // i18n: value
-                                    ParseMode::CanSignal};
+                                    ParseMode::CanSignal, ParseMode::S7};
     const QStringList mbTypes = {QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"),
                                  QStringLiteral("int32"), QStringLiteral("float32")};
     return {
@@ -450,6 +466,9 @@ QList<WidgetMeta> chartWidgets()
              str(QStringLiteral("curveName"), QT_TR_NOOP("曲线名称"), QT_TR_NOOP("曲线1")),
              choice(QStringLiteral("curveParseMode"), QT_TR_NOOP("解析模式"), QStringLiteral("键值匹配"), // i18n: value
                     parseModes),
+             str(QStringLiteral("curveSourceCardId"), QT_TR_NOOP("S7 来源连接"), QString()),
+             PropDef{QStringLiteral("curveS7"), QT_TR_NOOP("S7 采集"), PropType::Object,
+                     QJsonObject{{QStringLiteral("address"),QStringLiteral("DB1.DBD4")},{QStringLiteral("dataType"),QStringLiteral("REAL")},{QStringLiteral("period"),0}}, {}, std::nullopt, std::nullopt, false, {}},
              str(QStringLiteral("curveKey"), QT_TR_NOOP("匹配键"), QString()),
              str(QStringLiteral("curveJsonPath"), QT_TR_NOOP("JSON路径"), QString()),
              integer(QStringLiteral("curveByteOffset"), QT_TR_NOOP("字节偏移"), 0, 0, 9999),
@@ -503,6 +522,18 @@ QList<WidgetMeta> chartWidgets()
 QList<WidgetMeta> commWidgets()
 {
     return {
+        meta(QStringLiteral("S7ConfigCard"), QT_TR_NOOP("S7 连接卡片"), WidgetCategory::Comm, QStringLiteral("globe"), 420, 240,
+             {str(QStringLiteral("title"),QT_TR_NOOP("标题"),QStringLiteral("S7 PLC")),
+              str(QStringLiteral("host"),QT_TR_NOOP("地址"),QStringLiteral("127.0.0.1")),
+              integer(QStringLiteral("port"),QT_TR_NOOP("端口"),102,1,65535),
+              integer(QStringLiteral("rack"),QT_TR_NOOP("机架"),0,0,7),
+              integer(QStringLiteral("slot"),QT_TR_NOOP("插槽"),1,0,31),
+              integer(QStringLiteral("connectionType"),QT_TR_NOOP("连接类型（1 PG / 2 OP / 3 Basic）"),1,1,3),
+              integer(QStringLiteral("period"),QT_TR_NOOP("默认轮询(ms)"),500,1,60000),
+              integer(QStringLiteral("timeout"),QT_TR_NOOP("响应超时(ms)"),1000,1,60000),
+              boolean(QStringLiteral("autoConnect"),QT_TR_NOOP("自动连接"),false),
+              boolean(QStringLiteral("autoReconnect"),QT_TR_NOOP("自动重连"),true),
+              integer(QStringLiteral("reconnectInterval"),QT_TR_NOOP("重连间隔(ms)"),1000,1,60000)},300,230),
         meta(
             QStringLiteral("SerialConfigCard"), QT_TR_NOOP("串口配置卡片"), WidgetCategory::Comm,
             QStringLiteral("serial_port"), 360, 320,
