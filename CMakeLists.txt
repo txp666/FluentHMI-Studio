@@ -30,6 +30,7 @@ endif()
 include("${FLUENTQTWIDGETS_ROOT}/cmake/FqwLocateQt.cmake")
 fqw_locate_qt(6.12)
 find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Widgets Svg Network SerialPort)
+include(cmake/Snap7.cmake)
 
 set(CMAKE_DISABLE_FIND_PACKAGE_Qt6Multimedia ON CACHE BOOL "" FORCE)
 set(CMAKE_DISABLE_FIND_PACKAGE_Qt6MultimediaWidgets ON CACHE BOOL "" FORCE)
@@ -57,6 +58,9 @@ endfunction()
 # Qt Core only, so every rule here is unit-testable without a GUI.
 # ---------------------------------------------------------------------------
 add_library(fhmi_core STATIC
+    src/core/s7.h src/core/s7.cpp
+    src/core/s7_address.h src/core/s7_address.cpp
+    src/core/s7_codec.h src/core/s7_codec.cpp
     src/core/industrial_catalog.cpp
     src/core/industrial_catalog.h
     src/core/bit_profile.cpp
@@ -105,6 +109,7 @@ target_link_libraries(fhmi_core PUBLIC Qt6::Core)
 # fhmi_comm: transport links (serial, TCP, MQTT, UDP, CAN) behind one hub.
 # ---------------------------------------------------------------------------
 add_library(fhmi_comm STATIC
+    src/comm/s7/s7_client.h src/comm/s7/s7_client.cpp
     src/comm/can/can_backend.cpp
     src/comm/can/can_backend.h
     src/comm/can/can_link.cpp
@@ -138,7 +143,7 @@ add_library(fhmi_comm STATIC
     src/comm/udp_link.cpp
     src/comm/udp_link.h
 )
-target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort)
+target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort PRIVATE snap7)
 # SocketCAN needs the Linux kernel's CAN headers. The PCAN and ZLG backends build everywhere (they only load their
 # vendor libraries at connect time); CanBackend::create() offers each where its vendor supports it.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -150,6 +155,7 @@ endif()
 # exported applications all build their controls from this one library.
 # ---------------------------------------------------------------------------
 add_library(fhmi_runtime STATIC
+    src/runtime/widgets/s7_config_card.cpp src/runtime/widgets/s7_config_card.h
     src/runtime/widgets/industrial_widget.cpp
     src/runtime/widgets/industrial_widget.h
     src/runtime/appearance.cpp
@@ -260,6 +266,29 @@ set_target_properties(FluentHMIStudio PROPERTIES
 )
 # The studio exports applications by copying the runtime, so build them together.
 add_dependencies(FluentHMIStudio FluentHMIRuntime)
+# Native S7 travels with each runner, including exports made from a build tree.
+foreach(app IN ITEMS FluentHMIStudio FluentHMIRuntime)
+    if(APPLE)
+        set(s7_license_dir "$<TARGET_BUNDLE_CONTENT_DIR:${app}>/Resources/licenses/snap7")
+        add_custom_command(TARGET ${app} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:${app}>/Frameworks"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:snap7>" "$<TARGET_BUNDLE_CONTENT_DIR:${app}>/Frameworks/$<TARGET_SONAME_FILE_NAME:snap7>")
+        set_property(TARGET ${app} APPEND PROPERTY BUILD_RPATH "@executable_path/../Frameworks")
+    else()
+        set(s7_license_dir "$<TARGET_FILE_DIR:${app}>/licenses/snap7")
+        if(WIN32)
+            add_custom_command(TARGET ${app} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:snap7>" "$<TARGET_FILE_DIR:${app}>")
+        else()
+            set_property(TARGET ${app} APPEND PROPERTY BUILD_RPATH "$ORIGIN")
+        endif()
+    endif()
+    add_custom_command(TARGET ${app} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${s7_license_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SNAP7_ROOT}/gpl.txt" "${s7_license_dir}/GPL-3.0.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SNAP7_ROOT}/lgpl-3.0.txt" "${s7_license_dir}/LGPL-3.0.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/third_party/SNAP7-NOTICE.md" "${s7_license_dir}/NOTICE.md"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/patches/snap7-macos.patch" "${CMAKE_CURRENT_SOURCE_DIR}/patches/snap7-connect-timeout.patch" "${s7_license_dir}")
+endforeach()
 # On Windows, Qt's DLLs and plugins go beside the executables, which share the build folder, so they start without
 # Qt on PATH (F5 in VS Code, a double click). The tests there then load Qt from that folder too, and some run on the
 # offscreen platform. Packages are deployed by scripts/package.py instead.
@@ -297,6 +326,10 @@ file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/FluentHMIStudio-version.txt" CONTENT "
 if(FHMI_BUILD_TESTS)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    add_executable(tst_s7 tests/tst_s7.cpp)
+    target_link_libraries(tst_s7 PRIVATE fhmi_comm snap7 Qt6::Test)
+    add_test(NAME s7 COMMAND tst_s7)
+    set_tests_properties(s7 PROPERTIES TIMEOUT 20)
     foreach(test_name IN ITEMS protocol_parser binding command_encoder project chart_file)
         add_executable(tst_${test_name} tests/tst_${test_name}.cpp)
         target_link_libraries(tst_${test_name} PRIVATE fhmi_core Qt6::Test)

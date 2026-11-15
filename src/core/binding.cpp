@@ -187,6 +187,8 @@ QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
     };
     QJsonObject binding{
         {QStringLiteral("parseMode"), field("parseMode", ParseMode::KeyValue)},
+        {QStringLiteral("sourceCardId"), field("sourceCardId", QString())},
+        {QStringLiteral("s7"), field("s7", QJsonObject())},
         {QStringLiteral("expression"), field("expression", QString())},
         {QStringLiteral("key"), field("key", QString())},
         {QStringLiteral("jsonPath"), field("jsonPath", QString())},
@@ -321,7 +323,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     const auto can = mode == ParseMode::CanSignal ? canSignalOf(binding) : std::nullopt;
     const bool configured = (mode == ParseMode::KeyValue && !key.isEmpty()) ||
                             (mode == ParseMode::JsonPath && !jsonPath.isEmpty()) || mode == ParseMode::HexBytes ||
-                            mode == ParseMode::Modbus || can.has_value();
+                            mode == ParseMode::Modbus || (mode == ParseMode::S7 && S7::point(binding.value(QStringLiteral("s7")).toObject()).has_value()) || can.has_value();
     if (!configured) {
         return std::nullopt;
     }
@@ -331,6 +333,8 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     const QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
 
     BindingEntry entry;
+    entry.sourceCardId = binding.value(QStringLiteral("sourceCardId")).toString();
+    if (mode == ParseMode::S7) entry.s7 = S7::point(binding.value(QStringLiteral("s7")).toObject());
     entry.widgetId = widget.value(QStringLiteral("id")).toString();
     entry.typeName = type;
     entry.propName = meta && !meta->bindProperty().isEmpty() ? meta->bindProperty() : QStringLiteral("text");

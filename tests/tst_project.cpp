@@ -17,7 +17,7 @@ class TestProject : public QObject
     void registryHasEveryDesignerWidget()
     {
         // As PyQt UI Designer, without the Modbus card, plus the CAN card and monitor only Studio has.
-        QCOMPARE(WidgetRegistry::instance().all().size(), 110);
+        QCOMPARE(WidgetRegistry::instance().all().size(), 111);
         const WidgetMeta *button = WidgetRegistry::instance().find("PushButton");
         QVERIFY(button);
         QCOMPARE(button->defaultProperties().value("text").toString(), QStringLiteral("按钮"));
@@ -33,6 +33,32 @@ class TestProject : public QObject
             const QString path = it.next();
             QTest::newRow(qPrintable(QFileInfo(path).fileName())) << path;
         }
+    }
+
+    void s7VersionAndReferences()
+    {
+        Project project;
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.0"));
+        const QJsonObject card{{"type", "S7ConfigCard"}, {"id", "plc"}};
+        const QJsonObject display{{"type", "NumericDisplay"}, {"id", "value"},
+                                 {"binding", QJsonObject{{"parseMode", "S7"}, {"sourceCardId", "plc"},
+                                                         {"s7", QJsonObject{{"address", "DB1.DBD4"}, {"dataType", "REAL"}}}}}};
+        project.widgets = {card, display};
+        auto document = project.toJson();
+        QCOMPARE(document.value("version").toString(), QStringLiteral("1.1"));
+        QString error;
+        QVERIFY2(Project::validate(document, &error), qPrintable(error));
+        document.insert("version", "1.0");
+        QVERIFY(!Project::validate(document, &error));
+        document.insert("version", "1.1");
+        document.insert("widgets", QJsonArray{display});
+        QVERIFY(!Project::validate(document, &error));
+        // A selection can retain a connection outside that selection; a full project cannot.
+        QVERIFY2(Project::validate(document, &error, true), qPrintable(error));
+        project.widgets = {QJsonObject{{"type", "PushButton"}, {"id", "button"},
+                                      {"properties", QJsonObject{{"commandMode", "文本"},
+                                                                  {"s7Command", QJsonObject{{"address", "DB1.DBD4"}, {"dataType", "REAL"}}}}}}};
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.0"));
     }
 
     void examplesLoadAndRoundTrip()

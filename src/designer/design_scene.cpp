@@ -65,21 +65,40 @@ void collectIds(const QJsonArray &widgets, QSet<QString> *ids)
 }
 
 // Gives a widget whose id the project already has (or that has none) a new one, children too.
-QJsonObject withFreeIds(QJsonObject widget, const QSet<QString> &taken, QSet<QString> *used)
+QJsonObject withFreeIds(QJsonObject widget, const QSet<QString> &taken, QSet<QString> *used, QHash<QString,QString> *remap)
 {
     const QString id = widget.value(QStringLiteral("id")).toString();
     if (id.isEmpty() || taken.contains(id)) {
         const QString fresh = freeId(widget.value(QStringLiteral("type")).toString(), *used);
         used->insert(fresh);
         widget.insert(QStringLiteral("id"), fresh);
+        if(!id.isEmpty())remap->insert(id,fresh);
     }
     QJsonArray children = widget.value(QStringLiteral("children")).toArray();
     if (!children.isEmpty()) {
         for (qsizetype i = 0; i < children.size(); ++i) {
-            children[i] = withFreeIds(children.at(i).toObject(), taken, used);
+            children[i] = withFreeIds(children.at(i).toObject(), taken, used,remap);
         }
         widget.insert(QStringLiteral("children"), children);
     }
+    return widget;
+}
+
+QJsonObject remapS7(QJsonObject widget,const QHash<QString,QString> &ids)
+{
+    auto binding=widget.value(QStringLiteral("binding")).toObject();
+    const QString source=binding.value(QStringLiteral("sourceCardId")).toString();
+    if(ids.contains(source)){binding.insert(QStringLiteral("sourceCardId"),ids.value(source));widget.insert(QStringLiteral("binding"),binding);}
+    auto props=widget.value(QStringLiteral("properties")).toObject();
+    for(const QString &key:{QStringLiteral("commandTargetId"),QStringLiteral("_curve_0_sourceCardId"),QStringLiteral("_curve_1_sourceCardId"),
+                           QStringLiteral("_curve_2_sourceCardId"),QStringLiteral("_curve_3_sourceCardId"),QStringLiteral("_curve_4_sourceCardId"),
+                           QStringLiteral("_curve_5_sourceCardId"),QStringLiteral("_curve_6_sourceCardId"),QStringLiteral("_curve_7_sourceCardId")}) {
+        const QString id=props.value(key).toString();if(ids.contains(id))props.insert(key,ids.value(id));
+    }
+    widget.insert(QStringLiteral("properties"),props);
+    auto children=widget.value(QStringLiteral("children")).toArray();
+    for(int i=0;i<children.size();++i)children[i]=remapS7(children.at(i).toObject(),ids);
+    if(!children.isEmpty())widget.insert(QStringLiteral("children"),children);
     return widget;
 }
 
@@ -310,7 +329,15 @@ bool DesignScene::renameItem(CanvasItem *item, const QString &id, QString *error
         *error = tr("控件 ID “%1” 已被使用").arg(trimmed);
         return false;
     }
+    const QString previous=item->widgetId();
     item->setWidgetId(trimmed);
+    for(auto *widget:allItems()) {
+        const auto updated=remapS7(widget->toJson(),{{previous,trimmed}});
+        widget->setBinding(updated.value(QStringLiteral("binding")).toObject());
+        const auto props=updated.value(QStringLiteral("properties")).toObject();
+        for(auto it=props.begin();it!=props.end();++it)
+            if(widget->propertyValue(it.key())!=it.value())widget->setPropertyValue(it.key(),it.value());
+    }
     emit modified();
     return true;
 }
@@ -396,9 +423,10 @@ QList<CanvasItem *> DesignScene::paste(const QJsonArray &widgets, CanvasItem *co
     QSet<QString> used = taken;
     collectIds(widgets, &used);
     QList<QJsonObject> pasted;
+    QHash<QString,QString> remap;
     QRectF bounds;
     for (const QJsonValue &value : widgets) {
-        QJsonObject widget = withFreeIds(value.toObject(), taken, &used);
+        QJsonObject widget = withFreeIds(value.toObject(), taken, &used,&remap);
         widget.remove(QStringLiteral("tabIndex"));
         const WidgetMeta *meta = WidgetRegistry::instance().find(widget.value(QStringLiteral("type")).toString());
         if (!meta) {
@@ -415,6 +443,7 @@ QList<CanvasItem *> DesignScene::paste(const QJsonArray &widgets, CanvasItem *co
     if (pasted.isEmpty()) {
         return {};
     }
+    for(auto &widget:pasted)widget=remapS7(widget,remap);
     const qreal shift = qreal(m_gridSize) * step;
     const QSizeF area = container ? container->size() : QSizeF(m_canvasSize);
     QPointF topLeft = container ? QPointF(shift, shift) : bounds.topLeft() + QPointF(shift, shift);

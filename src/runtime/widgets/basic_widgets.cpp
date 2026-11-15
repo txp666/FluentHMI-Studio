@@ -67,11 +67,19 @@ void PushButtonWidget::apply()
     m_button->setEnabled(flag("enabled"));
 }
 
+void PushButtonWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
+{
+    const QSignalBlocker blocker(m_button);
+    m_button->setText(displayString(value));
+}
+
 void PushButtonWidget::onAttached()
 {
     live(connect(m_button, &QPushButton::clicked, this, [this]() {
         QJsonObject props = properties();
-        if (text("commandMode") == QLatin1String("Modbus")) {
+        if (text("commandMode") == QLatin1String("S7")) {
+            context()->send(CommandEncoder::s7FromProperties(props));
+        } else if (text("commandMode") == QLatin1String("Modbus")) {
             // A button reads by default: its function code falls back to FC03.
             if (!props.contains(QStringLiteral("mbFunc"))) {
                 props.insert(QStringLiteral("mbFunc"), QStringLiteral("03 读保持寄存器")); // i18n: value
@@ -132,9 +140,16 @@ void LineEditWidget::apply()
     m_edit->setReadOnly(flag("readOnly"));
 }
 
+void LineEditWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
+{
+    if(m_edit->hasFocus() && !m_edit->isReadOnly())return;
+    const QSignalBlocker blocker(m_edit);
+    m_edit->setText(displayString(value));
+}
+
 void LineEditWidget::onAttached()
 {
-    const bool modbus = text("commandMode") == QLatin1String("Modbus");
+    const bool modbus = text("commandMode") == QLatin1String("Modbus") || text("commandMode") == QLatin1String("S7");
     if (!flag("sendOnEnter") && !modbus) {
         return;
     }
@@ -168,9 +183,15 @@ void ComboBoxWidget::apply()
     }
 }
 
+void ComboBoxWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
+{
+    const QSignalBlocker blocker(m_combo);
+    if (const auto index = bindingInteger(value)) m_combo->setCurrentIndex(*index);
+}
+
 void ComboBoxWidget::onAttached()
 {
-    if (!flag("sendOnSelect") && text("commandMode") != QLatin1String("Modbus")) {
+    if (!flag("sendOnSelect") && text("commandMode") != QLatin1String("Modbus") && text("commandMode") != QLatin1String("S7")) {
         return;
     }
     live(connect(m_combo, &FluentQt::ComboBox::currentIndexChanged, this, [this](int index) {
@@ -236,9 +257,17 @@ void ToggleSwitchWidget::onAttached()
     live(connect(m_switch, &FluentQt::SwitchButton::checkedChanged, this,
                  [this](bool checked) { context()->writeModbusSlaves(this, checked ? 1 : 0); }));
     const bool modbus = text("commandMode") == QLatin1String("Modbus");
+    const bool s7 = text("commandMode") == QLatin1String("S7");
     const bool hasCommands = !text("onCommand").trimmed().isEmpty() || !text("offCommand").trimmed().isEmpty();
-    if (modbus || hasCommands) {
-        live(connect(m_switch, &FluentQt::SwitchButton::checkedChanged, this, [this, modbus](bool checked) {
+    if (modbus || s7 || hasCommands) {
+        live(connect(m_switch, &FluentQt::SwitchButton::checkedChanged, this, [this, modbus, s7](bool checked) {
+            if (s7) {
+                const auto command = prop("s7Command").toObject();
+                const auto configured=command.value(checked ? QStringLiteral("onValue") : QStringLiteral("offValue"));
+                const QString value=configured.isUndefined()?QString(checked?QStringLiteral("1"):QStringLiteral("0")):configured.toVariant().toString();
+                context()->send(CommandEncoder::s7FromProperties(properties(),value));
+                return;
+            }
             if (modbus) {
                 // Old projects omit mbArea and keep writing a coil. A holding register uses FC06 and 0/1.
                 const bool holding = text("mbArea") == ModbusArea::HoldingRegisters;
@@ -316,7 +345,7 @@ void SliderWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 // Each of those values also goes into the Modbus slaves' tables, sendOnChange or not.
 void SliderWidget::onAttached()
 {
-    m_sends = flag("sendOnChange") || text("commandMode") == QLatin1String("Modbus");
+    m_sends = flag("sendOnChange") || text("commandMode") == QLatin1String("Modbus") || text("commandMode") == QLatin1String("S7");
     // FluentQt's slider never sets QSlider::isSliderDown(), and a drag that starts on the groove
     // emits no pressed/released signals, so the mouse is watched on the slider and its handle.
     m_slider->installEventFilter(this);
@@ -389,7 +418,7 @@ void SpinBoxWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 void SpinBoxWidget::onAttached()
 {
     // Every step goes into the Modbus slaves' tables, sendOnChange or not.
-    const bool sends = flag("sendOnChange") || text("commandMode") == QLatin1String("Modbus");
+    const bool sends = flag("sendOnChange") || text("commandMode") == QLatin1String("Modbus") || text("commandMode") == QLatin1String("S7");
     live(connect(m_spin, qOverload<int>(&QSpinBox::valueChanged), this, [this, sends](int value) {
         context()->writeModbusSlaves(this, value);
         if (sends) {

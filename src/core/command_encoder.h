@@ -1,4 +1,5 @@
 #pragma once
+#include "core/s7.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QJsonObject>
@@ -38,11 +39,13 @@ struct EncodedCommand
 {
     enum class Kind
     {
+        S7,
         Bytes,
         Modbus,
         Can, // goes to CAN links only, as Bytes and Modbus go to the others
     };
     Kind kind = Kind::Bytes;
+    fhmi::S7::Command s7;
     QByteArray bytes;
     ModbusRequest modbus;
     CanCommand can;
@@ -91,6 +94,8 @@ int nextTransaction();
 
 // A Modbus request from widget properties (mbSlave, mbFunc, mbAddress, mbValue, mbDataType,
 // mbRegOrder). `value` overrides mbValue.
+CommandResult s7FromProperties(const QJsonObject &props, const std::optional<QString> &value = std::nullopt);
+
 CommandResult modbusFromProperties(const QJsonObject &props, const std::optional<QString> &value = std::nullopt);
 
 // What a widget sends for `value` in its configured mode ("文本", "HEX", "JSON", "Modbus" or "CAN"),

@@ -1,0 +1,313 @@
+{
+  "version": "1.1",
+  "appName": "S7 local demo",
+  "canvas": {
+    "width": 1040,
+    "height": 830,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line",
+    "parserConfig": {
+      "separator": ","
+    }
+  },
+  "widgets": [
+    {
+      "id": "s7Local",
+      "type": "S7ConfigCard",
+      "geometry": {
+        "x": 20,
+        "y": 20,
+        "w": 420,
+        "h": 240
+      },
+      "properties": {
+        "title": "Local S7 simulator",
+        "host": "127.0.0.1",
+        "port": 1102,
+        "rack": 0,
+        "slot": 1,
+        "connectionType": 1,
+        "period": 200,
+        "timeout": 1000,
+        "autoConnect": false,
+        "autoReconnect": true,
+        "reconnectInterval": 1000
+      }
+    },
+    {
+      "id": "temperature",
+      "type": "GaugeMeter",
+      "geometry": {
+        "x": 480,
+        "y": 20,
+        "w": 240,
+        "h": 220
+      },
+      "properties": {
+        "title": "Temperature",
+        "minimum": 20,
+        "maximum": 80,
+        "unit": "°C"
+      },
+      "binding": {
+        "parseMode": "S7",
+        "sourceCardId": "s7Local",
+        "s7": {
+          "address": "DB1.DBD4",
+          "dataType": "REAL",
+          "period": 0
+        }
+      }
+    },
+    {
+      "id": "speed",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 760,
+        "y": 30,
+        "w": 240,
+        "h": 90
+      },
+      "properties": {
+        "title": "Speed",
+        "decimals": "0",
+        "unit": "rpm"
+      },
+      "binding": {
+        "parseMode": "S7",
+        "sourceCardId": "s7Local",
+        "s7": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "period": 0
+        }
+      }
+    },
+    {
+      "id": "heartbeat",
+      "type": "LEDIndicator",
+      "geometry": {
+        "x": 790,
+        "y": 150,
+        "w": 80,
+        "h": 80
+      },
+      "properties": {
+        "label": "Heartbeat"
+      },
+      "binding": {
+        "parseMode": "S7",
+        "sourceCardId": "s7Local",
+        "s7": {
+          "address": "M0.0",
+          "dataType": "BOOL",
+          "period": 0
+        }
+      }
+    },
+    {
+      "id": "startSwitch",
+      "type": "ToggleSwitch",
+      "geometry": {
+        "x": 30,
+        "y": 290,
+        "w": 280,
+        "h": 40
+      },
+      "properties": {
+        "label": "Start / stop",
+        "commandMode": "S7",
+        "commandTargetId": "s7Local",
+        "s7Command": {
+          "address": "DB1.DBX0.1",
+          "dataType": "BOOL",
+          "value": "1",
+          "onValue": "1",
+          "offValue": "0"
+        }
+      },
+      "binding": {
+        "parseMode": "S7",
+        "sourceCardId": "s7Local",
+        "s7": {
+          "address": "DB1.DBX0.0",
+          "dataType": "BOOL",
+          "period": 0
+        }
+      }
+    },
+    {
+      "id": "startButton",
+      "type": "PushButton",
+      "geometry": {
+        "x": 330,
+        "y": 290,
+        "w": 170,
+        "h": 40
+      },
+      "properties": {
+        "text": "Start",
+        "commandMode": "S7",
+        "commandTargetId": "s7Local",
+        "s7Command": {
+          "address": "DB1.DBX0.1",
+          "dataType": "BOOL",
+          "value": "1",
+          "onValue": "1",
+          "offValue": "0"
+        }
+      }
+    },
+    {
+      "id": "speedInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 30,
+        "y": 355,
+        "w": 200,
+        "h": 40
+      },
+      "properties": {
+        "placeholderText": "Speed (rpm)",
+        "commandMode": "S7",
+        "commandTargetId": "s7Local",
+        "s7Command": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "value": "1",
+          "onValue": "1",
+          "offValue": "0"
+        }
+      },
+      "binding": {
+        "parseMode": "S7",
+        "sourceCardId": "s7Local",
+        "s7": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "period": 0
+        }
+      }
+    },
+    {
+      "id": "speedSpin",
+      "type": "SpinBox",
+      "geometry": {
+        "x": 260,
+        "y": 355,
+        "w": 190,
+        "h": 40
+      },
+      "properties": {
+        "minimum": 0,
+        "maximum": 2000,
+        "commandMode": "S7",
+        "commandTargetId": "s7Local",
+        "s7Command": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "value": "1",
+          "onValue": "1",
+          "offValue": "0"
+        }
+      },
+      "binding": {
+        "parseMode": "S7",
+        "sourceCardId": "s7Local",
+        "s7": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "period": 0
+        }
+      }
+    },
+    {
+      "id": "speedSlider",
+      "type": "Slider",
+      "geometry": {
+        "x": 480,
+        "y": 355,
+        "w": 320,
+        "h": 40
+      },
+      "properties": {
+        "minimum": 0,
+        "maximum": 2000,
+        "showRange": true,
+        "commandMode": "S7",
+        "commandTargetId": "s7Local",
+        "s7Command": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "value": "1",
+          "onValue": "1",
+          "offValue": "0"
+        }
+      },
+      "binding": {
+        "parseMode": "S7",
+        "sourceCardId": "s7Local",
+        "s7": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "period": 0
+        }
+      }
+    },
+    {
+      "id": "speedPreset",
+      "type": "ComboBox",
+      "geometry": {
+        "x": 830,
+        "y": 355,
+        "w": 170,
+        "h": 40
+      },
+      "properties": {
+        "items": "Low\nMedium\nHigh",
+        "commands": "500\n1200\n1800",
+        "commandMode": "S7",
+        "commandTargetId": "s7Local",
+        "s7Command": {
+          "address": "DB1.DBW12",
+          "dataType": "INT",
+          "value": "1",
+          "onValue": "1",
+          "offValue": "0"
+        }
+      }
+    },
+    {
+      "id": "trends",
+      "type": "RealtimeChart",
+      "geometry": {
+        "x": 20,
+        "y": 440,
+        "w": 1000,
+        "h": 360
+      },
+      "properties": {
+        "title": "Temperature and pressure",
+        "curveCount": 2,
+        "_curve_0_name": "Temperature",
+        "_curve_0_parseMode": "S7",
+        "_curve_0_sourceCardId": "s7Local",
+        "_curve_0_s7": {
+          "address": "DB1.DBD4",
+          "dataType": "REAL",
+          "period": 0
+        },
+        "_curve_1_name": "Pressure",
+        "_curve_1_parseMode": "S7",
+        "_curve_1_sourceCardId": "s7Local",
+        "_curve_1_s7": {
+          "address": "DB1.DBD8",
+          "dataType": "REAL",
+          "period": 0
+        }
+      }
+    }
+  ]
+}

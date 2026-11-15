@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/can_signal.h"
+#include "core/s7.h"
 #include "core/protocol_parser.h"
 
 #include <QtCore/QJsonObject>
@@ -23,6 +24,7 @@ namespace ParseMode {
 inline const QString KeyValue = QStringLiteral("键值匹配");    // i18n: value
 inline const QString JsonPath = QStringLiteral("JSON路径");    // i18n: value
 inline const QString HexBytes = QStringLiteral("HEX字节提取"); // i18n: value
+inline const QString S7 = QStringLiteral("S7");
 inline const QString Modbus = QStringLiteral("Modbus");
 inline const QString CanSignal = QStringLiteral("CAN信号"); // i18n: value
 } // namespace ParseMode
@@ -64,6 +66,8 @@ class BindingEntry
     // has no binding, or the binding is not configured enough to match anything.
     static std::optional<BindingEntry> fromWidget(const QJsonObject &widget);
 
+    QString sourceCardId;
+    std::optional<S7::Point> s7;
     QString widgetId;
     QString typeName;
     QString propName;
@@ -93,7 +97,7 @@ class BindingEntry
     CanSignalDef canSignal;
 
     // Which feed a binding reads: parsed messages, the bytes of a byte link, or CAN frames (extractFromCan).
-    bool usesParsedData() const { return parseMode != ParseMode::HexBytes && parseMode != ParseMode::CanSignal; }
+    bool usesParsedData() const { return parseMode != ParseMode::HexBytes && parseMode != ParseMode::CanSignal && parseMode != ParseMode::S7; }
     bool usesRawData() const { return parseMode == ParseMode::HexBytes; }
 
     // An invalid QVariant means "no value in this message".

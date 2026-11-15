@@ -689,6 +689,10 @@ QString ExportService::exportApplication(const Project &project, const QString &
         }
     } else if (buildTree) {
         files << runtimeInfo.fileName();
+        // Third-party runtime dependencies are needed even for a build-tree export.
+        files += runtimeDir.entryList({QStringLiteral("snap7.dll"),QStringLiteral("libsnap7.so*")},QDir::Files);
+        if(QFileInfo::exists(runtimeDir.filePath(QStringLiteral("licenses"))))files << QStringLiteral("licenses");
+
     }
     if (files.isEmpty()) {
         if (!copyTree(runtimeDir.absolutePath(), appDir, error)) {

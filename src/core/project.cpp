@@ -1,4 +1,5 @@
 #include "core/project.h"
+#include "core/s7.h"
 #include "core/bit_profile.h"
 
 #include "core/binding.h"
@@ -184,7 +185,7 @@ Project::Project()
 QJsonObject Project::toJson() const
 {
     QJsonObject document{
-        {QStringLiteral("version"), QLatin1String(FormatVersion)},
+        {QStringLiteral("version"), S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0")},
         {QStringLiteral("appName"), appName},
         {QStringLiteral("canvas"),
          QJsonObject{{QStringLiteral("width"), canvasWidth},
@@ -200,10 +201,10 @@ QJsonObject Project::toJson() const
     return document;
 }
 
-bool Project::validate(const QJsonObject &data, QString *error)
+bool Project::validate(const QJsonObject &data, QString *error, bool allowExternalS7References)
 {
-    if (data.value(QStringLiteral("version")).toString(QLatin1String(FormatVersion)) !=
-        QLatin1String(FormatVersion)) {
+    const QString version = data.value(QStringLiteral("version")).toString(QStringLiteral("1.0"));
+    if (version != QLatin1String("1.0") && version != QLatin1String("1.1")) {
         return fail(error, QCoreApplication::translate("fhmi", "不支持的项目版本"));
     }
     const QJsonValue appName = data.value(QStringLiteral("appName"));
@@ -246,7 +247,10 @@ bool Project::validate(const QJsonObject &data, QString *error)
     }
     QSet<QString> ids;
     const QJsonValue widgetList = data.value(QStringLiteral("widgets"));
-    return widgetList.isUndefined() ? true : validateWidgets(widgetList, 0, ids, parser, error);
+    if (!widgetList.isUndefined() && !validateWidgets(widgetList, 0, ids, parser, error)) return false;
+    if (S7::usesS7(widgetList.toArray()) && version != QLatin1String("1.1"))
+        return fail(error, QCoreApplication::translate("fhmi", "S7 工程需要使用 1.1 格式"));
+    return S7::validateWidgets(widgetList.toArray(), error, allowExternalS7References);
 }
 
 bool Project::fromJson(const QJsonObject &data, Project *out, QString *error)

@@ -5,7 +5,7 @@
   <p align="center">English · <a href="README_zh.md">简体中文</a> · <a href="https://hmi.modusignal.cn/">Website</a> · <a href="https://hmi.modusignal.cn/guide/">User guide</a></p>
 </p>
 
-FluentHMI Studio is the native C++/Qt 6 visual HMI designer in the [modusignal](https://github.com/txp666/modusignal) tool family. Drag widgets onto a canvas, configure their properties, bind them to serial, TCP, MQTT, UDP or CAN data, then export a standalone desktop app with **no compiler needed**. It shares the `.uidp` project format with [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) and the supported Custom Device features in modusignal. See [Compared with the Python version](#compared-with-the-python-version) for their export models and measured differences.
+FluentHMI Studio is the native C++/Qt 6 visual HMI designer in the [modusignal](https://github.com/txp666/modusignal) tool family. Drag widgets onto a canvas, configure their properties, bind them to serial, TCP, MQTT, UDP, CAN or classic S7 data, then export a standalone desktop app with **no compiler needed**. It shares the `.uidp` project format with [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) and the supported Custom Device features in modusignal. See [Compared with the Python version](#compared-with-the-python-version) for their export models and measured differences.
 
 > **Language**: the interface is in English or Simplified Chinese (Settings → Language).
 
@@ -49,10 +49,11 @@ The guide includes a working serial project that you can copy. For other devices
 
 Both use the same project format, and their widget and protocol rules match:
 
-- **Compatible project format**: it reads and writes `.uidp` (version 1.0) directly, and its widget types, property names, default values and enum options match PyQt UI Designer one to one. The projects in `examples/` open, preview, and save back unchanged. [Industrial pump station and feedback replay](examples/industrial)
+- **Compatible project format**: it reads `.uidp` versions 1.0 and 1.1. Projects with S7 features use 1.1; other projects keep 1.0. Widget types, property names, default values and enum options match PyQt UI Designer. The projects in `examples/` open, preview, and save back unchanged. [Industrial pump station and feedback replay](examples/industrial)
 - **Same parsing and binding rules**: the five parsers (line text with key-value / JSON / CSV; binary HEX frames with header and footer, length field, checksum, fixed length or idle-gap framing; Modbus RTU; Modbus TCP; Modbus ASCII), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the four command encodings (text / HEX / JSON / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
 - **Same Modbus features for PLCs**: read requests sent from here are remembered, so the registers in a reply are also named by address (holding register 100 is `hr100`) and a binding picks a register table and an address; pick a Modbus parser on the link card and bind a register address, and it is read automatically: nearby addresses are merged into blocks read at their periods, one request at a time, only for the controls on screen, with writes sent ahead of queued reads; FC16 writes int16, 32-bit integers and float32 values by data type.
 - **Modbus RTU / TCP slave**: a serial, TCP or UDP card can act as a slave and answer an external master from its own data table; bindings, controls and write commands read and write that table, and the slave register table widget shows and edits it.
+- **Classic S7 client**: separate S7 connection cards poll typed DB/M/I/Q addresses and route writes to the selected PLC. Preview and exported apps use the same native Snap7 client; BOOL writes preserve adjacent bits. [Setup and limits](docs/s7.md) · [Local simulator example](examples/s7-demo.uidp)
 - **CAN / CAN FD (Studio only)**: a CAN card connects to a PEAK, ZLG, SocketCAN or slcan adapter and decodes frames with a DBC file or signals written on the card, so the usual bindings, charts and tables show them; controls send DBC signals or raw frames, once or cyclically, and a monitor lists every ID with its period (see [CAN adapters](#can-adapters)). Projects that use it open in Studio only.
 
 The differences are in how they are built and how they export apps:
@@ -239,7 +240,7 @@ To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`,
 
 ## Current status (0.6.0)
 
-Done: 110 widgets, including 25 industrial devices, 12 instruments, 13 Automotive electronics, 14 Electronics DIY and 14 Embedded systems widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP / CAN preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows, macOS and Linux (x64 and arm64 .deb) packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
+Done: 111 widgets, including 25 industrial devices, 12 instruments, 13 Automotive electronics, 14 Electronics DIY and 14 Embedded systems widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP / CAN preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, Windows, macOS and Linux (x64 and arm64 .deb) packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 
 The MQTT link is a built-in MQTT 3.1.1 client (based on QSslSocket, so the Qt MQTT module isn't needed): it supports username and password, QoS 0/1/2, `+`/`#` wildcard subscriptions, and TLS with the system certificate store, and it reconnects automatically if a connection that succeeded drops. As in the Python version, each message is treated as one frame, and a payload that is a single plain number is also given with the topic name as its key.
 
@@ -259,7 +260,7 @@ Roadmap:
 | [modusignal](https://github.com/txp666/modusignal) | Browser device debugger and `.uidp` Custom Device editor, within browser transport limits |
 | [FluentPLC Simulator](https://github.com/txp666/FluentPLC-Simulator) | Independent desktop and CLI classic S7comm server for testing S7 clients |
 
-The HMI tools share `.uidp` projects where their widgets and transports are supported. FluentPLC Simulator uses its own `.plcsim.json` format. S7 client support is not currently implemented in FluentHMI Studio, PyQt UI Designer or modusignal.
+The HMI tools share `.uidp` projects where their widgets and transports are supported. FluentPLC Simulator uses its own `.plcsim.json` format. FluentPLC Simulator can test Studio's classic S7 client. S7 projects require a desktop HMI version that supports `.uidp` 1.1; modusignal does not currently support S7.
 
 ## License
 

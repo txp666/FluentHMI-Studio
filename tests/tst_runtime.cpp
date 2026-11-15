@@ -319,6 +319,35 @@ class TestRuntime : public QObject
         Q_INIT_RESOURCE(fluentqtwidgets);
     }
 
+    void copiedS7GroupRetargetsConnections()
+    {
+        const QJsonObject bit{{"address", "DB1.DBX0.1"}, {"dataType", "BOOL"}};
+        const QJsonArray group{
+            QJsonObject{{"type", "S7ConfigCard"}, {"id", "plc"}},
+            QJsonObject{{"type", "ToggleSwitch"}, {"id", "switch"},
+                        {"binding", QJsonObject{{"parseMode", "S7"}, {"sourceCardId", "plc"}, {"s7", bit}}},
+                        {"properties", QJsonObject{{"commandMode", "S7"}, {"commandTargetId", "plc"}, {"s7Command", bit}}}},
+            QJsonObject{{"type", "RealtimeChart"}, {"id", "trend"},
+                        {"properties", QJsonObject{{"_curve_0_parseMode", "S7"}, {"_curve_0_sourceCardId", "plc"}, {"_curve_0_s7", bit}}}}};
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets(group, &error), qPrintable(error));
+        const auto copied = scene.paste(group, nullptr, 1);
+        QCOMPARE(copied.size(), 3);
+        const QString newPlc = copied.at(0)->widgetId();
+        QVERIFY(newPlc != QLatin1String("plc"));
+        QCOMPARE(copied.at(1)->binding().value("sourceCardId").toString(), newPlc);
+        QCOMPARE(copied.at(1)->propertyValue("commandTargetId").toString(), newPlc);
+        QCOMPARE(copied.at(2)->propertyValue("_curve_0_sourceCardId").toString(), newPlc);
+        const auto controlOnly = scene.paste({group.at(1)}, nullptr, 1);
+        QCOMPARE(controlOnly.size(), 1);
+        QCOMPARE(controlOnly.first()->propertyValue("commandTargetId").toString(), QStringLiteral("plc"));
+        QVERIFY(scene.renameItem(scene.findItem("plc"), "renamed", &error));
+        QCOMPARE(scene.findItem("switch")->binding().value("sourceCardId").toString(), QStringLiteral("renamed"));
+        QCOMPARE(controlOnly.first()->propertyValue("commandTargetId").toString(), QStringLiteral("renamed"));
+        QCOMPARE(copied.at(1)->propertyValue("commandTargetId").toString(), newPlc);
+    }
+
     void chartExpressionPanelStoresCurrentCurve()
     {
         DesignScene scene;
@@ -2078,6 +2107,9 @@ class TestRuntime : public QObject
                                                  {"properties", QJsonObject{{"imagePath", "logo.png"}}}}};
         project.widgets.append(QJsonObject{{"id","word"},{"type","StatusWordPanel"},{"properties",QJsonObject{{"bitProfile","default"}}}});
         project.widgets.append(QJsonObject{{"id","timing"},{"type","DigitalTimingChart"},{"properties",QJsonObject{{"bitProfile","default"}}}});
+        project.widgets.append(QJsonObject{{"id","plc"},{"type","S7ConfigCard"},{"properties",QJsonObject{{"port",1102}}}});
+        project.widgets.append(QJsonObject{{"id","start"},{"type","PushButton"},{"properties",QJsonObject{
+            {"commandMode","S7"},{"commandTargetId","plc"},{"s7Command",QJsonObject{{"address","DB1.DBX0.1"},{"dataType","BOOL"},{"value","1"}}}}}});
         // A studio set to orange once exported a cyan application.
         auto *config = FluentQt::FluentConfig::instance();
         auto *theme = FluentQt::ThemeManager::instance();
@@ -2094,6 +2126,7 @@ class TestRuntime : public QObject
 #ifdef Q_OS_MACOS
         const QDir resources(created + "/Contents/Resources");
         QVERIFY(QFileInfo::exists(created + "/Contents/MacOS/FluentHMIRuntime"));
+        QVERIFY(QFileInfo::exists(created + "/Contents/Frameworks/libsnap7.1.dylib"));
 #elif defined(Q_OS_LINUX)
         // A tar.gz of the application's folder, whose program and start.sh stay executable.
         QVERIFY(created.endsWith(QStringLiteral(".tar.gz")));
@@ -2109,6 +2142,15 @@ class TestRuntime : public QObject
         Project exported;
         QVERIFY2(Project::load(resources.filePath("project.uidp"), &exported, &error), qPrintable(error));
         QCOMPARE(exported.appName, project.appName);
+        QCOMPARE(exported.toJson().value(QStringLiteral("version")).toString(),QStringLiteral("1.1"));
+        QCOMPARE(exported.widgets.at(3),project.widgets.at(3));
+        QCOMPARE(exported.widgets.at(4),project.widgets.at(4));
+        QVERIFY(QFileInfo::exists(resources.filePath("licenses/snap7/NOTICE.md")));
+#ifdef Q_OS_WIN
+        QVERIFY(QFileInfo::exists(resources.filePath("snap7.dll")));
+#elif defined(Q_OS_LINUX)
+        QVERIFY(QFileInfo::exists(resources.filePath("libsnap7.so.1")) || QFileInfo::exists(resources.filePath("lib/libsnap7.so.1")));
+#endif
         QCOMPARE(exported.bitProfiles,project.bitProfiles);
         QCOMPARE(exported.widgets.at(1).toObject().value("properties").toObject().value("bitProfile").toString(),QStringLiteral("default"));
         QCOMPARE(exported.widgets.at(2).toObject().value("properties").toObject().value("bitProfile").toString(),QStringLiteral("default"));

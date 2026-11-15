@@ -1,6 +1,7 @@
 #pragma once
 
 #include "comm/comm_hub.h"
+#include "comm/s7/s7_client.h"
 #include "core/binding.h"
 #include "core/command_encoder.h"
 
@@ -35,6 +36,8 @@ class RuntimeContext : public QObject
     explicit RuntimeContext(QObject *parent = nullptr);
 
     CommHub *hub() const { return m_hub; }
+    S7Client *s7Client() const { return m_s7; }
+    void setS7CurveNeeds(const QObject *chart, const QList<S7::Need> &needs);
     // Reads the Modbus bindings and curves while the context is active; every running project has one, set
     // up by its link cards.
     ModbusPoller *modbusPoller() const { return m_poller; }
@@ -74,6 +77,7 @@ class RuntimeContext : public QObject
 
   signals:
     void activeChanged(bool active);
+    void s7Sample(const fhmi::S7::Sample &sample);
     void bitProfilesChanged();
     void notificationRequested(const QString &title, const QString &content, const QString &type, int durationMs);
 
@@ -84,6 +88,9 @@ class RuntimeContext : public QObject
     void push(const BindingEntry &binding, const QVariant &raw);
 
     CommHub *m_hub = nullptr;
+    S7Client *m_s7 = nullptr;
+    QTimer *m_s7Timer = nullptr;
+    QHash<const QObject *, QList<S7::Need>> m_s7Curves;
     ModbusPoller *m_poller = nullptr;
     QHash<QString, QPointer<HmiWidget>> m_widgets;
     std::vector<BindingEntry> m_bindings;
