@@ -5,7 +5,7 @@
   <p align="center"><a href="README.md">English</a> · 简体中文 · <a href="https://hmi.modusignal.cn/">官网</a> · <a href="https://hmi.modusignal.cn/guide/">使用说明</a></p>
 </p>
 
-FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 的 C++/Qt 6 重写版：拖拽控件、配置属性、绑定串口、TCP、MQTT、UDP 或 CAN 数据，然后把设计导出成一个**不需要编译器**就能运行的独立应用。和 Python 版相比，安装包更小，启动约快一倍，导出不到一秒，还能在应用内更新（见[与 Python 版相比](#与-python-版相比)）。
+FluentHMI Studio 是 [modusignal](https://github.com/txp666/modusignal) 工具系列中的原生 C++/Qt 6 可视化上位机设计器。拖拽控件、配置属性、绑定串口、TCP、MQTT、UDP 或 CAN 数据，然后导出成**不需要编译器**就能运行的独立桌面应用。它与 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) 和 modusignal「自定义设备」中支持的功能共享 `.uidp` 工程格式；导出方式与实测差异见[与 Python 版相比](#与-python-版相比)。
 
 ## 界面预览
 
@@ -23,7 +23,7 @@ FluentHMI Studio 是 [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Design
 
 ### 全部控件
 
-28 种控件在浅色和深色主题下的样子：
+部分基础控件在浅色和深色主题下的样子：
 
 ![控件一览（浅色）](docs/images/widgets-zh-light.jpg)
 
@@ -247,6 +247,17 @@ MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQT
 
 - 导出 C++/CMake 源码工程，供需要二次开发的用户使用
 - Developer ID 签名与公证、Windows 代码签名
+
+## 相关项目
+
+| 项目 | 定位 |
+| --- | --- |
+| [FluentHMI Studio](https://github.com/txp666/FluentHMI-Studio) | 原生 C++/Qt 6 上位机设计器，导出独立运行时应用 |
+| [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) | Python/PyQt5 上位机设计器，导出可编辑 Python 源码并用 Nuitka 打包 |
+| [modusignal](https://github.com/txp666/modusignal) | 浏览器设备调试台与 `.uidp` 自定义设备编辑器，通信受浏览器能力限制 |
+| [FluentPLC Simulator](https://github.com/txp666/FluentPLC-Simulator) | 独立桌面与命令行经典 S7comm 服务端，用于测试 S7 客户端 |
+
+三种 HMI 工具可在各自支持的控件与通信范围内交换 `.uidp` 工程。FluentPLC Simulator 使用独立的 `.plcsim.json` 格式；FluentHMI Studio、PyQt UI Designer 和 modusignal 当前均未实现 S7 客户端。
 
 ## 许可
 

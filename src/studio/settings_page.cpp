@@ -21,6 +21,21 @@ namespace fhmi {
 
 namespace {
 
+FluentQt::PushSettingCard *createLinkCard(const QString &title, const QString &description, const QString &url,
+                                        const QString &objectName, FluentQt::FluentIcon icon, QWidget *parent)
+{
+    auto *card = new FluentQt::PushSettingCard(SettingsPage::tr("打开"), icon, title, description, parent);
+    card->setObjectName(objectName + QStringLiteral("Card"));
+    card->setProperty("targetUrl", url);
+    card->setToolTip(url);
+    card->button()->setObjectName(objectName + QStringLiteral("Button"));
+    card->button()->setProperty("targetUrl", url);
+    card->button()->setToolTip(url);
+    QObject::connect(card, &FluentQt::PushSettingCard::clicked, card,
+                     [url]() { QDesktopServices::openUrl(QUrl(url)); });
+    return card;
+}
+
 #ifdef Q_OS_WIN
 // Mica needs Windows 11, so on Windows 10 the switch stays off and disabled.
 FluentQt::SwitchSettingCard *createMicaCard(QWidget *parent)
@@ -127,22 +142,62 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
     layout->addWidget(appearance);
 
     auto *about = new FluentQt::SettingCardGroup(tr("关于"), content);
-    auto *repo = new FluentQt::PushSettingCard(tr("打开"), FluentQt::FluentIcon::GitHub, tr("项目主页"),
-                                               QStringLiteral("github.com/txp666/FluentHMI-Studio"), about);
-    connect(repo, &FluentQt::PushSettingCard::clicked, this, []() {
-        QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/txp666/FluentHMI-Studio")));
-    });
+    about->setObjectName(QStringLiteral("aboutGroup"));
+    auto *projectInfo = new FluentQt::SettingCard(
+        FluentQt::FluentIcon::Application, QStringLiteral("FluentHMI Studio"),
+        tr("原生 C++/Qt 6 上位机设计器，支持实时预览和独立应用导出。"), about);
+    projectInfo->setObjectName(QStringLiteral("projectInfoCard"));
+    auto *license = new FluentQt::SettingCard(FluentQt::FluentIcon::Document, tr("开源许可"),
+                                               QStringLiteral("GPL-3.0"), about);
+    license->setObjectName(QStringLiteral("projectLicenseCard"));
     m_checkUpdate = new FluentQt::PrimaryPushSettingCard(tr("检查更新"), FluentQt::FluentIcon::Info, tr("版本"),
                                                          tr("当前版本 v%1").arg(QStringLiteral(FHMI_VERSION)), about);
+    m_checkUpdate->setObjectName(QStringLiteral("checkUpdateCard"));
+    m_checkUpdate->button()->setObjectName(QStringLiteral("checkUpdateButton"));
     connect(m_checkUpdate, &FluentQt::PushSettingCard::clicked, this, &SettingsPage::checkUpdateRequested);
     auto *checkAtStartup = new FluentQt::SwitchSettingCard(FluentQt::FluentIcon::Update, tr("启动时检查更新"),
                                                            tr("启动后在后台检查 GitHub 上是否有新版本"), about);
     checkAtStartup->setChecked(UpdateController::checkAtStartup());
     connect(checkAtStartup, &FluentQt::SwitchSettingCard::checkedChanged, this, &UpdateController::setCheckAtStartup);
+    about->addSettingCard(projectInfo);
+    about->addSettingCard(license);
     about->addSettingCard(m_checkUpdate);
     about->addSettingCard(checkAtStartup);
-    about->addSettingCard(repo);
     layout->addWidget(about);
+
+    auto *repository = new FluentQt::SettingCardGroup(tr("代码仓库"), content);
+    repository->setObjectName(QStringLiteral("repositoryGroup"));
+    // Fixed HTTPS destinations are opened only after a user clicks a card's
+    // button. Repository information never triggers a request during startup.
+    repository->addSettingCard(createLinkCard(
+        tr("GitHub 仓库"), QStringLiteral("https://github.com/txp666/FluentHMI-Studio"),
+        QStringLiteral("https://github.com/txp666/FluentHMI-Studio"), QStringLiteral("repository"),
+        FluentQt::FluentIcon::GitHub, repository));
+    repository->addSettingCard(createLinkCard(
+        tr("问题反馈"), tr("报告问题或提交功能建议"),
+        QStringLiteral("https://github.com/txp666/FluentHMI-Studio/issues"), QStringLiteral("issues"),
+        FluentQt::FluentIcon::Question, repository));
+    repository->addSettingCard(createLinkCard(
+        tr("发布版本"), tr("查看发布说明和下载安装包"),
+        QStringLiteral("https://github.com/txp666/FluentHMI-Studio/releases"), QStringLiteral("releases"),
+        FluentQt::FluentIcon::Download, repository));
+    layout->addWidget(repository);
+
+    auto *related = new FluentQt::SettingCardGroup(tr("相关工具"), content);
+    related->setObjectName(QStringLiteral("relatedToolsGroup"));
+    related->addSettingCard(createLinkCard(
+        QStringLiteral("PyQt UI Designer"), tr("Python/PyQt5 设计器，支持源码导出和 Nuitka 打包。"),
+        QStringLiteral("https://github.com/txp666/PyQt-UI-Designer"), QStringLiteral("pyqtDesignerRepository"),
+        FluentQt::FluentIcon::Code, related));
+    related->addSettingCard(createLinkCard(
+        QStringLiteral("modusignal"), tr("浏览器设备调试与 .uidp 自定义设备编辑。"),
+        QStringLiteral("https://github.com/txp666/modusignal"), QStringLiteral("modusignalRepository"),
+        FluentQt::FluentIcon::Globe, related));
+    related->addSettingCard(createLinkCard(
+        QStringLiteral("FluentPLC Simulator"), tr("桌面与命令行经典 S7comm 测试服务端。"),
+        QStringLiteral("https://github.com/txp666/FluentPLC-Simulator"), QStringLiteral("plcSimulatorRepository"),
+        FluentQt::FluentIcon::Application, related));
+    layout->addWidget(related);
     layout->addStretch();
 
     scroll->setWidget(content);

@@ -5,7 +5,7 @@
   <p align="center">English · <a href="README_zh.md">简体中文</a> · <a href="https://hmi.modusignal.cn/">Website</a> · <a href="https://hmi.modusignal.cn/guide/">User guide</a></p>
 </p>
 
-FluentHMI Studio is a C++/Qt 6 rewrite of [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer): drag widgets onto a canvas, set their properties, bind them to serial, TCP, MQTT, UDP or CAN data, then export the design as a standalone app, with **no compiler needed**. Compared with the Python version, the download is smaller, it starts about twice as fast, exports take under a second, and it can update itself from inside the app (see [Compared with the Python version](#compared-with-the-python-version)).
+FluentHMI Studio is the native C++/Qt 6 visual HMI designer in the [modusignal](https://github.com/txp666/modusignal) tool family. Drag widgets onto a canvas, configure their properties, bind them to serial, TCP, MQTT, UDP or CAN data, then export a standalone desktop app with **no compiler needed**. It shares the `.uidp` project format with [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) and the supported Custom Device features in modusignal. See [Compared with the Python version](#compared-with-the-python-version) for their export models and measured differences.
 
 > **Language**: the interface is in English or Simplified Chinese (Settings → Language).
 
@@ -25,7 +25,7 @@ The same project runs live once it is connected to a device, and exported apps u
 
 ### All widgets
 
-The 28 widgets in the light and dark themes:
+A selection of the core widgets in the light and dark themes:
 
 ![All widgets (light)](docs/images/widgets-en-light.jpg)
 
@@ -249,6 +249,17 @@ Roadmap:
 
 - Exporting a C++/CMake source project for people who need to develop it further
 - Developer ID signing and notarization, Windows code signing
+
+## Related projects
+
+| Project | Role |
+| --- | --- |
+| [FluentHMI Studio](https://github.com/txp666/FluentHMI-Studio) | Native C++/Qt 6 HMI designer with standalone runtime export |
+| [PyQt UI Designer](https://github.com/txp666/PyQt-UI-Designer) | Python/PyQt5 HMI designer with editable Python source export and Nuitka packaging |
+| [modusignal](https://github.com/txp666/modusignal) | Browser device debugger and `.uidp` Custom Device editor, within browser transport limits |
+| [FluentPLC Simulator](https://github.com/txp666/FluentPLC-Simulator) | Independent desktop and CLI classic S7comm server for testing S7 clients |
+
+The HMI tools share `.uidp` projects where their widgets and transports are supported. FluentPLC Simulator uses its own `.plcsim.json` format. S7 client support is not currently implemented in FluentHMI Studio, PyQt UI Designer or modusignal.
 
 ## License
 

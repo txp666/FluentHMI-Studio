@@ -1128,5 +1128,17 @@
  "开启判定": "ON condition",
  "判定值": "Comparison value",
  "非零为开": "Nonzero is ON",
- "等于指定值": "Equals comparison value"
+ "等于指定值": "Equals comparison value",
+ "原生 C++/Qt 6 上位机设计器，支持实时预览和独立应用导出。": "Native C++/Qt 6 HMI designer with live preview and standalone app export.",
+ "开源许可": "Open-source license",
+ "代码仓库": "Repository",
+ "GitHub 仓库": "GitHub repository",
+ "问题反馈": "Issues",
+ "报告问题或提交功能建议": "Report a problem or suggest a feature",
+ "发布版本": "Releases",
+ "查看发布说明和下载安装包": "View release notes and download packages",
+ "相关工具": "Related tools",
+ "Python/PyQt5 设计器，支持源码导出和 Nuitka 打包。": "Python/PyQt5 designer with source export and Nuitka packaging.",
+ "浏览器设备调试与 .uidp 自定义设备编辑。": "Browser device debugging and .uidp Custom Device editing.",
+ "桌面与命令行经典 S7comm 测试服务端。": "Desktop and CLI classic S7comm server for testing clients."
 }
