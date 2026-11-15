@@ -663,10 +663,15 @@ QList<WidgetMeta> commWidgets()
              240, 120),
         meta(QStringLiteral("LogBox"), QT_TR_NOOP("日志显示框"), WidgetCategory::Comm, QStringLiteral("document"), 400,
              200, {integer(QStringLiteral("maxLines"), QT_TR_NOOP("最大行数"), 500, 50, 50000)}, 200, 80),
-        // One row per CAN ID seen on the project's CAN links.
+        // Bounded CAN summary or chronological frame log.
         meta(QStringLiteral("CanMonitor"), QT_TR_NOOP("报文监视"), WidgetCategory::Comm, QStringLiteral("view"), 560,
              280,
-             {described(boolean(QStringLiteral("showSignals"), QT_TR_NOOP("显示信号"), false),
+             {choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("按 ID 汇总"), // i18n: value
+                     {QStringLiteral("按 ID 汇总"), QStringLiteral("滚动日志")}),                         // i18n: value
+              described(integer(QStringLiteral("maxMessages"), QT_TR_NOOP("最大报文数量"), 1000, 1, 50000),
+                        QStringLiteral("超出上限时移除最早记录；汇总模式按最近更新的 ID 保留")), // i18n: ignore
+              boolean(QStringLiteral("autoScroll"), QT_TR_NOOP("自动滚动"), true),
+              described(boolean(QStringLiteral("showSignals"), QT_TR_NOOP("显示信号"), false),
                         QStringLiteral("多一列，列出 DBC 和 canSignals 解出的信号值")), // i18n: ignore
               described(boolean(QStringLiteral("showFilter"), QT_TR_NOOP("显示筛选"), true),
                         QStringLiteral("在表格上方显示按 ID 和类型筛选"))}, // i18n: ignore

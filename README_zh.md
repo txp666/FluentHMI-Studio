@@ -52,7 +52,7 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 - **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定选寄存器区和地址；链路卡片选 Modbus 解析、控件绑定寄存器地址即可自动读取：相近的地址合并成块按周期读，一次一条，只读界面上看得见的控件，写命令排在读请求前面；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 - **Modbus RTU / TCP 从站**：串口、TCP、UDP 卡片可以当从站，用自己的数据表应答外部主站，绑定、控件和写命令直接读写这张表，从站寄存器表控件可以查看和修改。
 - **经典 S7 客户端**：独立 S7 连接卡片轮询 DB/M/I/Q 类型化地址，写命令定向到所选 PLC。预览与导出应用共用原生 Snap7 客户端，BOOL 位写保留邻位。[配置与范围](docs/s7.md) · [本地模拟器示例](examples/s7-demo.uidp) · [FluentPLC Simulator 模拟器仓库](https://github.com/txp666/FluentPLC-Simulator)
-- **CAN / CAN FD（仅 Studio）**：CAN 卡片连接 PEAK、ZLG、SocketCAN 或 slcan 适配器，用 DBC 文件或卡片上写的信号解码，绑定、曲线和表格照常显示；控件可以发 DBC 信号或原始报文，单次或周期发送，报文监视按 ID 列出每个报文和它的周期（见 [CAN 适配器](#can-适配器)）。用到 CAN 的工程只能在 Studio 里打开。
+- **CAN / CAN FD（仅 Studio）**：CAN 卡片连接 PEAK、ZLG、SocketCAN 或 slcan 适配器，用 DBC 文件或卡片上写的信号解码，绑定、曲线和表格照常显示；控件可以发 DBC 信号或原始报文，单次或周期发送。报文监视支持按 ID 汇总或滚动日志、最大保留数量、可选自动滚动和 CSV 导出（见 [CAN 适配器](#can-适配器)和[监视器设置](docs/uidp/can.md)）。用到 CAN 的工程只能在 Studio 里打开。
 
 不同之处在实现和导出方式：
 
@@ -236,9 +236,9 @@ macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHM
 
 发布新版本：修改 `CMakeLists.txt` 中 `project(... VERSION ...)`，可选地添加 `docs/release-notes/vX.Y.Z.md`，然后推送 `vX.Y.Z` 标签。`Release` 工作流会在 Windows、macOS（universal）和 Linux（x64 和 arm64，在 Ubuntu 24.04 上）上构建、测试、打包。对每个 .deb，它检查包名、版本、架构和依赖，让 apt 解析依赖，安装后用它导出示例工程，再在只装了上面所列系统库的干净 Ubuntu 24.04 容器里运行这个导出的应用。全部通过后才发布 GitHub Release。手动运行，或者由修改了打包的 pull request 触发时，只打包和检查，不发布。
 
-## 当前状态（0.6.0）
+## 当前状态（0.7.0）
 
-已完成：111 种控件，含 25 种工业设备、12 种仪表、13 种汽车电子、14 种电子 DIY 和14 种嵌入式控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
+已完成：111 种控件，含 25 种工业设备、12 种仪表、13 种汽车电子、14 种电子 DIY 和14 种嵌入式控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN / 经典 S7 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、CAN 报文汇总与滚动日志、最大保留数量和 CSV 导出、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
 
 MQTT 链路是自带的 MQTT 3.1.1 客户端（基于 QSslSocket，无需 Qt MQTT 模块）：支持用户名密码、QoS 0/1/2、`+`/`#` 通配符订阅，TLS 使用系统证书库；连接成功后若断开会自动重连。与 Python 版一致，每条消息视为一帧，纯数值载荷还会以主题名为键再给出一份。
 
