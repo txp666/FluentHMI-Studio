@@ -1557,6 +1557,8 @@ void PropertyEditor::updateVisibility()
         }
     }
     if (meta.typeName == QLatin1String("CanConfigCard")) {
+        setRowVisible(QStringLiteral("canTxInitialMaxAge"),
+                      !m_item->propertyValue(QStringLiteral("canTxInitialState")).toString().trimmed().isEmpty());
         // The ZLG fields for a ZLG adapter, the data phase for CAN FD.
         const bool zlg = m_item->propertyValue(QStringLiteral("defaultAdapter")).toString() == QLatin1String("ZLG");
         for (const char *field : {"zlgModel", "defaultDeviceIndex", "defaultChannel", "termination"}) {

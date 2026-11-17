@@ -1225,5 +1225,19 @@
  "计算": "Calculate",
  "计算位时序并回填到卡片": "Calculate bit timing and fill the card",
  "请输入 1–1000000 bps 的波特率，例如 500k 或 1M": "Enter a bitrate from 1 to 1000000 bps, e.g. 500k or 1M",
- "速率误差": "Bitrate error"
+ "速率误差": "Bitrate error",
+ "%1 的反馈已过期，不能初始化 %2，请等待新反馈": "Feedback from %1 is stale; wait for new feedback before initializing %2",
+ "两个报文没有编码一致的同名信号": "The two messages have no identically encoded signals with matching names",
+ "初值反馈最大间隔(ms)": "Initial feedback max. age (ms)",
+ "发送初值反馈最大间隔须为 1–60000 ms": "Initial transmit feedback age must be between 1 and 60000 ms",
+ "发送初值映射": "Initial transmit state mapping",
+ "发送初值映射第 %1 行无效：%2": "Invalid initial transmit state mapping on line %1: %2",
+ "发送初值来源 %1 被接收过滤器排除，请先允许接收此报文": "The receive filter excludes initial state source %1; allow this message first",
+ "发送初值目标报文长度不匹配": "Initial transmit target message length does not match",
+ "同一目标报文只能设置一个初值来源": "A target message can have only one initial state source",
+ "同名信号 %1 的编码不一致或超出报文长度": "The encoding of signal %1 differs between messages or extends beyond the message",
+ "尚未收到 %1 的完整状态，不能初始化 %2，请先接收反馈": "No complete feedback from %1 has been received; receive feedback before initializing %2",
+ "应为 目标报文=反馈报文，例如 HMI=IO": "Use target message=feedback message, e.g. HMI=IO",
+ "目标信号 %1 与其他映射信号重叠": "Target signal %1 overlaps another mapped signal",
+ "目标和来源均须有 DBC 或内联信号定义": "Both target and source messages must have DBC or inline signal definitions"
 }

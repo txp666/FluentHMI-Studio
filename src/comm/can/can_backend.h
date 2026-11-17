@@ -37,6 +37,8 @@ struct CanSettings
     QString customTiming; // PCAN: BRP,TSEG1,TSEG2,SJW[;...]; ZLG: SJA BTR/BRP, or model-specific ZCANPRO result
     bool listenOnly = false;
     bool termination = false;
+    QString txInitialState; // explicit target=feedback mappings for first signal-based transmission only
+    int txInitialMaxAgeMs = 2000;
 };
 
 // A channel the card offers for an adapter: the value stored in CanSettings::channel, and what the user sees.

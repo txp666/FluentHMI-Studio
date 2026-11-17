@@ -46,6 +46,11 @@ CanLink::~CanLink()
     dropTable();
 }
 
+std::unique_ptr<CanBackend> CanLink::createBackend(const QString &adapter, QString *error)
+{
+    return CanBackend::create(adapter, error);
+}
+
 bool CanLink::open(const CanSettings &settings, const QString &dbcPath, const QString &inlineSignals,
                    const QString &filter, QString *error)
 {
@@ -81,7 +86,17 @@ bool CanLink::openChannel(const CanSettings &settings, const QString &dbcPath, c
     if (!parsedFilter) {
         return false;
     }
-    std::unique_ptr<CanBackend> backend = CanBackend::create(settings.adapter, error);
+    const auto initialState = CanInitialState::build(*signalSet, settings.txInitialState, error);
+    if (!initialState || !initialState->acceptsFilter(*parsedFilter, error)) {
+        return false;
+    }
+    if (settings.txInitialMaxAgeMs < 1 || settings.txInitialMaxAgeMs > 60000) {
+        if (error) {
+            *error = tr("发送初值反馈最大间隔须为 1–60000 ms");
+        }
+        return false;
+    }
+    std::unique_ptr<CanBackend> backend = createBackend(settings.adapter, error);
     if (!backend) {
         return false;
     }
@@ -93,6 +108,9 @@ bool CanLink::openChannel(const CanSettings &settings, const QString &dbcPath, c
         close();
         emit errorOccurred(message);
     });
+    m_initialState = *initialState;
+    m_receiveClock.start();
+    m_filter = *parsedFilter;
     if (!backend->open(settings, error)) {
         return false;
     }
@@ -135,6 +153,8 @@ void CanLink::dropTable()
         }
     }
     m_table.clear();
+    m_initialState.clearReceived();
+    m_receiveClock.invalidate();
 }
 
 QString CanLink::description() const
@@ -190,6 +210,10 @@ std::optional<CanLink::Prepared> CanLink::prepare(const CanCommand &command, QSt
                     signal->putRawBits(frame.data, signal->initialBits());
                 }
             }
+            if (!m_initialState.initialize(target->id, frame.data, m_receiveClock.isValid() ? m_receiveClock.elapsed() : 0,
+                                           m_settings.txInitialMaxAgeMs, error)) {
+                return std::nullopt;
+            }
         }
         for (const auto &[name, value] : *assignments) {
             const CanSignalDef *signal = nullptr;
@@ -236,8 +260,33 @@ bool CanLink::commit(const Prepared &prepared, QString *error)
         return false;
     }
     const quint64 key = CanId{prepared.frame.id, prepared.frame.extended}.key();
+    const bool hadEntry = m_table.contains(key);
+    const CanFrame previous = hadEntry ? m_table.value(key).frame : CanFrame{};
+    const quint64 previousRevision = hadEntry ? m_table.value(key).revision : 0;
+    const quint64 revision = ++m_writeRevision;
+    m_table[key].frame = prepared.frame;
+    m_table[key].revision = revision;
+    const QPointer<CanLink> alive(this);
+    const bool accepted = sendFrame(prepared.frame, error);
+    if (!alive) {
+        return accepted;
+    }
+    if (!m_table.contains(key) || m_table.value(key).revision != revision) {
+        return accepted; // a synchronous handler closed the link or issued a newer command
+    }
+    if (!accepted) {
+        if (hadEntry && m_table.contains(key)) {
+            m_table[key].frame = previous;
+            m_table[key].revision = previousRevision;
+        } else {
+            m_table.remove(key);
+        }
+        return false;
+    }
+    if (!m_backend || !m_table.contains(key)) {
+        return true; // a sent-frame handler closed the link; do not restart its cyclic timer
+    }
     Entry &entry = m_table[key];
-    entry.frame = prepared.frame;
     if (prepared.periodMs > 0) {
         if (!entry.timer) {
             entry.timer = new QTimer(this);
@@ -249,7 +298,7 @@ bool CanLink::commit(const Prepared &prepared, QString *error)
             entry.timer->start(prepared.periodMs);
         }
     }
-    return sendFrame(prepared.frame, error);
+    return true;
 }
 
 bool CanLink::sendFrame(const CanFrame &frame, QString *error)
@@ -287,6 +336,9 @@ void CanLink::onReceived(const QList<CanFrame> &frames)
     accepted.reserve(frames.size());
     for (const CanFrame &frame : frames) {
         if (!frame.error && m_filter.accepts(frame.id, frame.extended)) {
+            if (m_receiveClock.isValid()) {
+                m_initialState.observe(frame, m_receiveClock.elapsed());
+            }
             accepted.append(frame);
         }
     }

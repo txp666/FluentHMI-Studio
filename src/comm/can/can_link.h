@@ -1,11 +1,13 @@
 #pragma once
 
 #include "comm/can/can_backend.h"
+#include "comm/can/can_initial_state.h"
 #include "comm/link.h"
 #include "core/can_signal.h"
 #include "core/command_encoder.h"
 
 #include <QtCore/QHash>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QPointer>
 
 #include <memory>
@@ -68,6 +70,7 @@ class CanLink : public Link
 
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
+    virtual std::unique_ptr<CanBackend> createBackend(const QString &adapter, QString *error);
 
   private:
     bool openChannel(const CanSettings &settings, const QString &dbcPath, const QString &inlineSignals,
@@ -77,6 +80,7 @@ class CanLink : public Link
     {
         CanFrame frame;
         QTimer *timer = nullptr;
+        quint64 revision = 0;
     };
 
     void onReceived(const QList<CanFrame> &frames);
@@ -91,6 +95,9 @@ class CanLink : public Link
     CanFilter m_filter;
     CanSettings m_settings;
     QHash<quint64, Entry> m_table; // by CanId::key()
+    CanInitialState m_initialState;
+    QElapsedTimer m_receiveClock;
+    quint64 m_writeRevision = 0;
     quint64 m_received = 0;
     quint64 m_sent = 0;
     CanBusState m_state = CanBusState::Normal;

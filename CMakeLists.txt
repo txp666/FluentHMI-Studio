@@ -122,6 +122,8 @@ add_library(fhmi_comm STATIC
     src/comm/can/can_backend.h
     src/comm/can/can_diagnostics.cpp
     src/comm/can/can_diagnostics.h
+    src/comm/can/can_initial_state.cpp
+    src/comm/can/can_initial_state.h
     src/comm/can/can_link.cpp
     src/comm/can/can_link.h
     src/comm/can/can_polling_backend.cpp
@@ -360,6 +362,9 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_can PRIVATE fhmi_comm Qt6::Test)
     target_compile_definitions(tst_can PRIVATE FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME can COMMAND tst_can)
+    add_executable(tst_can_initial_state tests/tst_can_initial_state.cpp)
+    target_link_libraries(tst_can_initial_state PRIVATE fhmi_comm Qt6::Test)
+    add_test(NAME can_initial_state COMMAND tst_can_initial_state)
     add_executable(tst_zlg_status tests/tst_zlg_status.cpp)
     target_link_libraries(tst_zlg_status PRIVATE fhmi_comm Qt6::Test)
     add_test(NAME zlg_status COMMAND tst_zlg_status)

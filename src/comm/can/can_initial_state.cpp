@@ -1,0 +1,149 @@
+#include "comm/can/can_initial_state.h"
+
+#include <QtCore/QCoreApplication>
+
+#include <limits>
+
+namespace fhmi {
+namespace {
+
+QString tr(const char *text) { return QCoreApplication::translate("CanInitialState", text); }
+
+bool fail(QString *error, const QString &text)
+{
+    if (error) {
+        *error = text;
+    }
+    return false;
+}
+
+bool sameEncoding(const CanSignalDef &a, const CanSignalDef &b)
+{
+    return a.length == b.length && a.isSigned == b.isSigned && a.valueType == b.valueType &&
+           a.factor == b.factor && a.offset == b.offset && a.unit == b.unit;
+}
+
+} // namespace
+
+std::optional<CanInitialState> CanInitialState::build(const CanSignalSet &signalSet, const QString &mapping, QString *error)
+{
+    CanInitialState result;
+    const QStringList lines = mapping.split(QLatin1Char('\n'));
+    for (int line = 0; line < lines.size(); ++line) {
+        const QString text = lines.at(line).trimmed();
+        if (text.isEmpty() || text.startsWith(QLatin1Char('#')) || text.startsWith(QStringLiteral("//"))) {
+            continue;
+        }
+        const auto invalid = [&](const QString &reason) -> std::optional<CanInitialState> {
+            fail(error, tr("发送初值映射第 %1 行无效：%2").arg(line + 1).arg(reason));
+            return std::nullopt;
+        };
+        const QStringList names = text.split(QLatin1Char('='));
+        if (names.size() != 2 || names.at(0).trimmed().isEmpty() || names.at(1).trimmed().isEmpty()) {
+            return invalid(tr("应为 目标报文=反馈报文，例如 HMI=IO"));
+        }
+        QString why;
+        const auto target = signalSet.target(names.at(0).trimmed(), &why);
+        if (!target) {
+            return invalid(why);
+        }
+        const auto source = signalSet.target(names.at(1).trimmed(), &why);
+        if (!source) {
+            return invalid(why);
+        }
+        if (!target->hasSignals || !source->hasSignals) {
+            return invalid(tr("目标和来源均须有 DBC 或内联信号定义"));
+        }
+        if (result.m_rules.contains(target->id.key())) {
+            return invalid(tr("同一目标报文只能设置一个初值来源"));
+        }
+        Rule rule{names.at(0).trimmed(), names.at(1).trimmed(), source->id.key(), {}};
+        int requiredLength = 0;
+        QByteArray used(target->length, '\0');
+        for (const CanSignalDef *output : target->signalDefs) {
+            for (const CanSignalDef *input : source->signalDefs) {
+                if (input->name != output->name) {
+                    continue;
+                }
+                if (!sameEncoding(*output, *input) || !output->fits(target->length) || !input->fits(source->length)) {
+                    return invalid(tr("同名信号 %1 的编码不一致或超出报文长度").arg(output->name));
+                }
+                QByteArray bits(target->length, '\0');
+                output->putRawBits(bits, std::numeric_limits<quint64>::max());
+                for (int at = 0; at < bits.size(); ++at) {
+                    if ((quint8(used.at(at)) & quint8(bits.at(at))) != 0) {
+                        return invalid(tr("目标信号 %1 与其他映射信号重叠").arg(output->name));
+                    }
+                    used[at] = char(quint8(used.at(at)) | quint8(bits.at(at)));
+                }
+                rule.bindings.append({*output, *input});
+                requiredLength = std::max(requiredLength, input->bytesNeeded());
+            }
+        }
+        if (rule.bindings.isEmpty()) {
+            return invalid(tr("两个报文没有编码一致的同名信号"));
+        }
+        result.m_rules.insert(target->id.key(), std::move(rule));
+        if (result.m_sources.contains(source->id.key())) {
+            requiredLength = std::max(requiredLength, result.m_sources.value(source->id.key()).length);
+        }
+        result.m_sources.insert(source->id.key(), {source->id, names.at(1).trimmed(), requiredLength, source->fd, false, {}, 0});
+    }
+    return result;
+}
+
+bool CanInitialState::acceptsFilter(const CanFilter &filter, QString *error) const
+{
+    for (const Source &source : m_sources) {
+        if (!filter.accepts(source.id.id, source.id.extended)) {
+            return fail(error, tr("发送初值来源 %1 被接收过滤器排除，请先允许接收此报文").arg(source.name));
+        }
+    }
+    return true;
+}
+
+void CanInitialState::observe(const CanFrame &frame, qint64 nowMs)
+{
+    auto found = m_sources.find(CanId{frame.id, frame.extended}.key());
+    if (found == m_sources.end() || frame.error || frame.rtr || frame.fd != found->fd ||
+        frame.data.size() < found->length || (frame.fd ? !Can::isValidFdLength(frame.data.size()) : frame.data.size() > 8)) {
+        return;
+    }
+    found->received = true;
+    found->data = frame.data;
+    found->receivedAt = nowMs;
+}
+
+void CanInitialState::clearReceived()
+{
+    for (Source &source : m_sources) {
+        source.received = false;
+        source.data.clear();
+    }
+}
+
+bool CanInitialState::initialize(const CanId &target, QByteArray &data, qint64 nowMs, int maxAgeMs, QString *error) const
+{
+    const auto rule = m_rules.constFind(target.key());
+    if (rule == m_rules.constEnd()) {
+        return true;
+    }
+    const Source &source = m_sources.constFind(rule->sourceKey).value();
+    if (!source.received) {
+        return fail(error, tr("尚未收到 %1 的完整状态，不能初始化 %2，请先接收反馈").arg(rule->sourceName, rule->targetName));
+    }
+    if (maxAgeMs <= 0 || nowMs < source.receivedAt || nowMs - source.receivedAt > maxAgeMs) {
+        return fail(error, tr("%1 的反馈已过期，不能初始化 %2，请等待新反馈").arg(rule->sourceName, rule->targetName));
+    }
+    for (const Binding &binding : rule->bindings) {
+        if (!binding.target.fits(data.size())) {
+            return fail(error, tr("发送初值目标报文长度不匹配"));
+        }
+    }
+    for (const Binding &binding : rule->bindings) {
+        binding.target.putRawBits(data, binding.source.rawBits(source.data));
+    }
+    return true;
+}
+
+} // namespace fhmi

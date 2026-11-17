@@ -263,6 +263,8 @@ CanSettings CanConfigCardWidget::settings() const
     s.customTiming = (s.adapter == CanAdapter::Zlg ? m_customTiming->text() : text("customTiming")).trimmed();
     s.listenOnly = flag("listenOnly");
     s.termination = flag("termination");
+    s.txInitialState = text("canTxInitialState");
+    s.txInitialMaxAgeMs = integer("canTxInitialMaxAge");
     return s;
 }
 
