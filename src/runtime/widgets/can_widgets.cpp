@@ -8,6 +8,7 @@
 #include "core/hex_utils.h"
 #include "runtime/runtime_context.h"
 #include "runtime/ui_helpers.h"
+#include "runtime/field_help.h"
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/FluentIcon.h>
@@ -155,7 +156,9 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_calculate = new FluentQt::PushButton(tr("计算"), this);
     m_calculate->setObjectName(QStringLiteral("canTimingCalculatorButton"));
     fluentToolTip(m_calculate);
-    m_customRow = row({{m_customTiming, 1}, {m_calculate, 0}});
+    auto *timingHelp = createFieldHelpButton(FieldHelpTopic::CanTiming, this);
+    timingHelp->setObjectName(QStringLiteral("canTimingHelp"));
+    m_customRow = row({{m_customTiming, 1}, {m_calculate, 0}, {timingHelp, 0}});
 
     m_hint = new FluentQt::CaptionLabel(this);
     m_hint->setObjectName(QStringLiteral("canTimingHint"));
@@ -1101,6 +1104,9 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_displayMode = comboOf(this, enumOptions(meta, "displayMode"));
     m_displayMode->setObjectName(QStringLiteral("canDisplayMode"));
     toolbar->addWidget(m_displayMode);
+    auto *modeHelp = createFieldHelpButton(FieldHelpTopic::CanMonitorModes, this);
+    modeHelp->setObjectName(QStringLiteral("canMonitorHelp"));
+    toolbar->addWidget(modeHelp);
     auto *limit = new QWidget(this);
     auto *limitLayout = new QHBoxLayout(limit);
     limitLayout->setContentsMargins(0, 0, 0, 0);

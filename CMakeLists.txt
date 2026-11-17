@@ -177,6 +177,8 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/industrial_widget.h
     src/runtime/appearance.cpp
     src/runtime/appearance.h
+    src/runtime/field_help.cpp
+    src/runtime/field_help.h
     src/runtime/hmi_widget.cpp
     src/runtime/hmi_widget.h
     src/runtime/modbus_poller.cpp
@@ -396,7 +398,7 @@ if(FHMI_BUILD_TESTS)
     add_test(NAME industrial COMMAND tst_industrial)
 
     add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp src/studio/designer_page.cpp
-        src/player/player_window.cpp resources/widget_icons.qrc)
+        src/player/player_window.cpp resources/app.qrc resources/widget_icons.qrc)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)
     target_compile_definitions(tst_runtime PRIVATE
         FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"

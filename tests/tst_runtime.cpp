@@ -2,6 +2,7 @@
 #include "comm/link.h"
 #include "comm/tcp_link.h"
 #include "core/bit_profile.h"
+#include "core/i18n.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
@@ -37,6 +38,7 @@
 #include <QtCore/QTimeZone>
 #include <QtCore/QRegularExpression>
 #include <QtGui/QImage>
+#include <QtGui/QClipboard>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 #include <QtTest/QAbstractItemModelTester>
@@ -59,6 +61,7 @@
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QTableView>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QToolButton>
 
 #include <tuple>
 
@@ -270,6 +273,9 @@ QWidget *fieldFor(QWidget *root, const QString &label)
         for (int row = 0; row < form->rowCount(); ++row) {
             QLayoutItem *caption = form->itemAt(row, QFormLayout::LabelRole);
             auto *text = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+            if (!text && caption && caption->widget()) {
+                text = caption->widget()->findChild<QLabel *>(); // a label with a help button beside it
+            }
             if (text && text->text() == label) {
                 QLayoutItem *field = form->itemAt(row, QFormLayout::FieldRole);
                 return field ? field->widget() : nullptr;
@@ -729,6 +735,128 @@ class TestRuntime : public QObject
             QApplication::processEvents();
             QVERIFY(card->grab().save(QDir(screenshots).filePath(QStringLiteral("zlg-custom-timing.png"))));
         }
+    }
+
+    void canPropertyHelpCopiesExamplesWithoutChangingTheProject()
+    {
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets({QJsonObject{{"id", "can"}, {"type", "CanConfigCard"}},
+                                   QJsonObject{{"id", "red"}, {"type", "ToggleSwitch"},
+                                               {"properties", QJsonObject{{"commandMode", "CAN"}, {"canId", "HMI"},
+                                                                          {"commandTemplate", "B4b4={value}"}}}}},
+                                  &error), qPrintable(error));
+        PropertyEditor editor;
+        editor.setScene(&scene);
+        editor.resize(400, 720);
+        editor.showItem(scene.findItem(QStringLiteral("can")));
+        editor.show();
+        const auto original = scene.widgetsJson();
+        QSignalSpy changed(&editor, &PropertyEditor::modified);
+        const QString clipboard = QGuiApplication::clipboard()->text();
+        const auto restoreClipboard = qScopeGuard([clipboard]() { QGuiApplication::clipboard()->setText(clipboard); });
+        const auto screenshot = [&](QWidget *widget, const QString &name) {
+            const QString directory = qEnvironmentVariable("FHMI_CAN_TEST_SCREENSHOT_DIR");
+            if (!directory.isEmpty()) {
+                QVERIFY(QDir().mkpath(directory));
+                QApplication::processEvents();
+                QVERIFY(widget->grab().save(QDir(directory).filePath(name)));
+            }
+        };
+        for (const QString &field : {QStringLiteral("canTxInitialState"), QStringLiteral("canSignals"),
+                                     QStringLiteral("canFilter"), QStringLiteral("customTiming")}) {
+            auto *help = editor.findChild<QToolButton *>(QStringLiteral("propertyHelp_%1").arg(field));
+            QVERIFY(help && !help->isHidden());
+            editor.ensureWidgetVisible(help);
+            if (field == QLatin1String("canTxInitialState")) {
+                screenshot(&editor, QStringLiteral("can-help-properties.png"));
+            }
+            QTest::mouseClick(help, Qt::LeftButton);
+            QPointer<QDialog> dialog = editor.findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+            QVERIFY(dialog);
+            QTRY_VERIFY(dialog->isVisible());
+            auto *example = dialog->findChild<QPlainTextEdit *>(QStringLiteral("fieldHelpExample0"));
+            auto *copy = dialog->findChild<QPushButton *>(QStringLiteral("fieldHelpCopy0"));
+            QVERIFY(example && example->isReadOnly() && copy);
+            QTest::mouseClick(copy, Qt::LeftButton);
+            QCOMPARE(QGuiApplication::clipboard()->text(), example->toPlainText());
+            QCOMPARE(scene.widgetsJson(), original);
+            QCOMPARE(changed.count(), 0);
+            if (field == QLatin1String("canTxInitialState")) {
+                QCOMPARE(example->toPlainText(), QStringLiteral("HMI=IO"));
+                screenshot(dialog, QStringLiteral("can-help-initial-state.png"));
+            }
+            dialog->resize(400, 360); // long explanations remain scrollable in a compact window
+            auto *scroll = dialog->findChild<QScrollArea *>(QStringLiteral("fieldHelpScroll"));
+            QVERIFY(scroll);
+            QTRY_VERIFY(scroll->verticalScrollBar()->maximum() > 0);
+            auto *close = dialog->findChild<QPushButton *>(QStringLiteral("fieldHelpClose"));
+            QVERIFY(close && close->isVisible());
+            QTest::mouseClick(close, Qt::LeftButton);
+            QTRY_VERIFY(dialog.isNull());
+        }
+        editor.showItem(scene.findItem(QStringLiteral("red")));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        auto *help = editor.findChild<QToolButton *>(QStringLiteral("propertyHelp_commandTemplate"));
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("发送模式")));
+        QVERIFY(help && mode);
+        QVERIFY(!help->isHidden());
+        editor.ensureWidgetVisible(help);
+        QTest::mouseClick(help, Qt::LeftButton);
+        QPointer<QDialog> dialog = editor.findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+        QVERIFY(dialog);
+        QCOMPARE(dialog->findChild<QPlainTextEdit *>(QStringLiteral("fieldHelpExample0"))->toPlainText(),
+                 QStringLiteral("B4b4={value}"));
+        screenshot(dialog, QStringLiteral("can-help-signal-command.png"));
+        QTest::keyClick(dialog, Qt::Key_Escape);
+        QTRY_VERIFY(dialog.isNull());
+        QCOMPARE(scene.widgetsJson(), original);
+        QCOMPARE(changed.count(), 0);
+        mode->setCurrentText(QStringLiteral("文本"));
+        QVERIFY(help->isHidden());
+        mode->setCurrentText(QStringLiteral("CAN"));
+        QVERIFY(!help->isHidden());
+    }
+
+    void canRuntimeHelpIsTranslatedAndKeepsTimingUnchanged()
+    {
+        TableTranslator translator;
+        QVERIFY(translator.loadTable(QString::fromLatin1(kEnglishTable)));
+        QVERIFY(qApp->installTranslator(&translator));
+        const auto removeTranslator = qScopeGuard([&]() { qApp->removeTranslator(&translator); });
+        std::unique_ptr<HmiWidget> card(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"customTiming", "00,1C"}}));
+        card->resize(380, 420);
+        card->show();
+        auto *help = card->findChild<QToolButton *>(QStringLiteral("canTimingHelp"));
+        auto *custom = card->findChild<QLineEdit *>(QStringLiteral("canCustomTiming"));
+        QVERIFY(help && custom && help->isVisible());
+        QTest::mouseClick(help, Qt::LeftButton);
+        QPointer<QDialog> dialog = card->findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+        QVERIFY(dialog);
+        QCOMPARE(dialog->windowTitle(), QStringLiteral("Help: Sample point and custom bit timing"));
+        QCOMPARE(dialog->findChild<QPlainTextEdit *>(QStringLiteral("fieldHelpExample0"))->toPlainText(),
+                 QStringLiteral("00,1C"));
+        const QString directory = qEnvironmentVariable("FHMI_CAN_TEST_SCREENSHOT_DIR");
+        if (!directory.isEmpty()) {
+            QVERIFY(QDir().mkpath(directory));
+            QApplication::processEvents();
+            QVERIFY(dialog->grab().save(QDir(directory).filePath(QStringLiteral("can-help-timing-en.png"))));
+        }
+        QTest::keyClick(dialog, Qt::Key_Escape);
+        QTRY_VERIFY(dialog.isNull());
+        QCOMPARE(custom->text(), QStringLiteral("00,1C"));
+        QVERIFY(labelShown(card.get(), QStringLiteral("Not connected")));
+        std::unique_ptr<HmiWidget> monitor(createHmiWidget("CanMonitor", {}));
+        monitor->show();
+        auto *modeHelp = monitor->findChild<QToolButton *>(QStringLiteral("canMonitorHelp"));
+        QVERIFY(modeHelp);
+        QTest::mouseClick(modeHelp, Qt::LeftButton);
+        dialog = monitor->findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+        QVERIFY(dialog && dialog->windowTitle() == QStringLiteral("Help: CAN monitor modes"));
+        QVERIFY(dialog->findChildren<QPlainTextEdit *>().isEmpty());
+        QTest::keyClick(dialog, Qt::Key_Escape);
+        QTRY_VERIFY(dialog.isNull());
     }
 
     void zlgCalculatorAppliesSelectedTimingWithoutConnecting()

@@ -11,6 +11,7 @@
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "runtime/hmi_widget.h"
+#include "runtime/field_help.h"
 #include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
@@ -43,6 +44,33 @@
 namespace fhmi {
 
 namespace {
+
+std::optional<FieldHelpTopic> propertyHelpTopic(const QString &type, const QString &field)
+{
+    if (type == QLatin1String("CanConfigCard")) {
+        if (field == QLatin1String("canTxInitialState") || field == QLatin1String("canTxInitialMaxAge")) {
+            return FieldHelpTopic::CanInitialState;
+        }
+        if (field == QLatin1String("customTiming") || field == QLatin1String("defaultSamplePoint") ||
+            field == QLatin1String("defaultDataSamplePoint")) {
+            return FieldHelpTopic::CanTiming;
+        }
+        if (field == QLatin1String("dbcFile") || field == QLatin1String("canSignals")) {
+            return FieldHelpTopic::CanSignalDefinitions;
+        }
+        if (field == QLatin1String("canFilter")) {
+            return FieldHelpTopic::CanReceiveFilter;
+        }
+    }
+    if (type == QLatin1String("CanMonitor") && field == QLatin1String("displayMode")) {
+        return FieldHelpTopic::CanMonitorModes;
+    }
+    if (field == QLatin1String("commandTemplate") || field == QLatin1String("canId") ||
+        field == QLatin1String("canCycle")) {
+        return FieldHelpTopic::CanSignalCommand;
+    }
+    return std::nullopt;
+}
 
 // Command fields shown for each send mode, as in PyQt UI Designer.
 const QHash<QString, QSet<QString>> &modeVisibility()
@@ -495,6 +523,7 @@ void PropertyEditor::showItem(CanvasItem *item)
 void PropertyEditor::clearContent()
 {
     m_rows.clear();
+    m_helpButtons.clear();
     m_bindingEditors.clear();
     for (auto &spin : m_geometry) {
         spin = nullptr;
@@ -549,9 +578,21 @@ void PropertyEditor::addRow(QFormLayout *form, const QString &key, const QString
     auto *caption = new FluentQt::BodyLabel(label, m_content);
     // A long label (English "Transform expression") wraps instead of widening the panel past its dock
     caption->setWordWrap(true);
-    form->addRow(caption, editor);
+    QWidget *labelWidget = caption;
+    if (const auto topic = m_item ? propertyHelpTopic(m_item->typeName(), key) : std::nullopt) {
+        labelWidget = new QWidget(m_content);
+        auto *layout = new QHBoxLayout(labelWidget);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(2);
+        layout->addWidget(caption, 1);
+        auto *help = createFieldHelpButton(*topic, labelWidget);
+        help->setObjectName(QStringLiteral("propertyHelp_%1").arg(key));
+        layout->addWidget(help, 0, Qt::AlignVCenter);
+        m_helpButtons.insert(key, help);
+    }
+    form->addRow(labelWidget, editor);
     if (!key.isEmpty()) {
-        m_rows.insert(key, {caption, editor});
+        m_rows.insert(key, {labelWidget, editor});
     }
 }
 
@@ -1499,6 +1540,9 @@ void PropertyEditor::updateVisibility()
         return;
     }
     const WidgetMeta &meta = m_item->meta();
+    if (auto *help = m_helpButtons.value(QStringLiteral("commandTemplate"))) {
+        help->setVisible(m_item->propertyValue(QStringLiteral("commandMode")).toString() == QLatin1String("CAN"));
+    }
     if (meta.typeName == QLatin1String("ToggleSwitch")) {
         setRowVisible(QStringLiteral("onValue"),
                       m_item->propertyValue(QStringLiteral("onCondition")).toString() ==

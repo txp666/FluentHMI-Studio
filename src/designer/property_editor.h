@@ -10,6 +10,7 @@
 #include <functional>
 
 class QFormLayout;
+class QToolButton;
 class QVBoxLayout;
 
 namespace FluentQt {
@@ -88,6 +89,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     QWidget *m_content = nullptr;
     QVBoxLayout *m_layout = nullptr;
     QHash<QString, QPair<QWidget *, QWidget *>> m_rows;
+    QHash<QString, QToolButton *> m_helpButtons;
     QHash<QString, QWidget *> m_bindingEditors;
     FluentQt::SpinBox *m_geometry[4] = {};
     bool m_loading = false;
