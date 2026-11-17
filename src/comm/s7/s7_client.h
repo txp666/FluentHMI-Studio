@@ -21,6 +21,7 @@ public:
 signals:
     void sampleReceived(const fhmi::S7::Sample &sample);
     void statusChanged(const QString &id, bool connected, const QString &status);
+    void errorOccurred(const QString &id, const QString &message);
     void logMessage(const QString &message);
     void writeFinished(const QString &id, bool success, const QString &error);
 private:

@@ -213,6 +213,9 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
     widget->setProperties(merged);
     widget->blockSignals(false);
     widget->resize(meta->defaultWidth, meta->defaultHeight);
+    if (dynamic_cast<LinkCardBase *>(widget) || dynamic_cast<S7ConfigCardWidget *>(widget)) {
+        widget->resize(meta->defaultWidth, std::max(meta->minHeight, widget->minimumSizeHint().height()));
+    }
     return widget;
 }
 

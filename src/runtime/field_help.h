@@ -13,6 +13,13 @@ enum class FieldHelpTopic
     CanTiming,
     CanReceiveFilter,
     CanMonitorModes,
+    DataBinding,
+    TransformExpression,
+    CommandTemplates,
+    ModbusAddressing,
+    S7Addressing,
+    ReceiveFraming,
+    IndustrialTextLayout,
 };
 
 // Opens a read-only help card with selectable explanations and independently copyable examples.

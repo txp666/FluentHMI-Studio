@@ -11,6 +11,7 @@
 #include <QtGui/QPainter>
 #include <QtGui/QScreen>
 #include <QtGui/QTransform>
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QGraphicsScene>
 #include <QtWidgets/QGraphicsView>
 #include <QtWidgets/QVBoxLayout>
@@ -21,6 +22,36 @@ namespace fhmi {
 
 namespace {
 
+// The canvas is scaled, but its menus, dialogs and help bubbles stay ordinary windows.
+// Set the flag when a child gets its parent, before Qt embeds it in the scene.
+class CanvasPopupFilter : public QObject
+{
+  public:
+    explicit CanvasPopupFilter(QWidget *canvas) : QObject(canvas), m_canvas(canvas) { qApp->installEventFilter(this); }
+
+  protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::ParentChange || event->type() == QEvent::Polish) {
+            auto *widget = qobject_cast<QWidget *>(watched);
+            if (widget && widget != m_canvas && widget->isWindow() &&
+                !widget->windowFlags().testFlag(Qt::BypassGraphicsProxyWidget)) {
+                // QWidget::isAncestorOf stops at window boundaries, which popups introduce.
+                for (QWidget *owner = widget->parentWidget(); owner; owner = owner->parentWidget()) {
+                    if (owner == m_canvas) {
+                        widget->setWindowFlag(Qt::BypassGraphicsProxyWidget);
+                        break;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+  private:
+    QWidget *m_canvas;
+};
+
 // Keep the design coordinates intact; the view scales painting and input together.
 class CanvasView : public QGraphicsView
 {
@@ -30,6 +61,7 @@ class CanvasView : public QGraphicsView
         setObjectName(QStringLiteral("canvasView"));
         auto *scene = new QGraphicsScene(this);
         setScene(scene);
+        new CanvasPopupFilter(canvas);
         scene->addWidget(canvas);
         setFrameShape(QFrame::NoFrame);
         setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);

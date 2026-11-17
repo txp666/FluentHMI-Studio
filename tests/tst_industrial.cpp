@@ -56,6 +56,9 @@ class TestIndustrial : public QObject
                 for (int row = 0; row < form->rowCount(); ++row) {
                     auto *caption = form->itemAt(row, QFormLayout::LabelRole);
                     auto *label = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+                    if (!label && caption && caption->widget()) {
+                        label = caption->widget()->findChild<QLabel *>(); // label with an adjacent help button
+                    }
                     if (label && label->text() == QStringLiteral("转换表达式")) {
                         auto *edit = qobject_cast<QLineEdit *>(form->itemAt(row, QFormLayout::FieldRole)->widget());
                         QVERIFY(edit);
@@ -150,12 +153,13 @@ class TestIndustrial : public QObject
         QVERIFY(meta);
         QVERIFY(isIndustrialCategory(meta->category));
         QCOMPARE(meta->bindProperty(), QStringLiteral("value"));
-        const int special = type == "FlowPipe" ? 3 : (type == "Motor" || type == "Cylinder" ? 1 : 0);
-        const int expected = type == "BmsCellMatrix" || type == "DcPowerSupply" ? 1
-                             : type == "StatusWordPanel" || type == "DigitalTimingChart" || type == "RotaryEncoder"
-                                 ? 3
-                                 : 6 + special + (definition.value("limits").toArray().size() == 2 ? 3 : 0);
-        QCOMPARE(meta->properties.size(), expected);
+        for (const char *name : {"title", "showTitle", "showValue", "textLayout", "titleOffsetX", "titleOffsetY",
+                                 "valueOffsetX", "valueOffsetY", "showToolTip"}) {
+            QVERIFY2(meta->prop(QLatin1String(name)), name);
+        }
+        if (type != "BmsCellMatrix" && type != "DcPowerSupply") {
+            QVERIFY(meta->prop("value"));
+        }
         std::unique_ptr<HmiWidget> created(createHmiWidget(type, {}));
         auto *widget = dynamic_cast<IndustrialWidget *>(created.get());
         QVERIFY(widget);

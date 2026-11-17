@@ -59,6 +59,7 @@ CanvasItem::CanvasItem(const QString &typeName, const QJsonObject &properties, c
     setAcceptHoverEvents(true);
 
     m_widget = createHmiWidget(typeName, m_properties, nullptr, assetBaseDir);
+    m_size = m_widget->size();
     m_widget->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     // Embedded widgets are windows, and Qt paints a window background behind them: a label
     // would hide the grid and, in the dark theme, show up as a box. At run time they sit on
@@ -96,11 +97,9 @@ CanvasItem *CanvasItem::fromJson(const QJsonObject &data, const QString &assetBa
     item->m_tabIndex = data.value(QStringLiteral("tabIndex")).toInt(0);
     const QJsonObject geo = data.value(QStringLiteral("geometry")).toObject();
     item->setPos(geo.value(QStringLiteral("x")).toDouble(0), geo.value(QStringLiteral("y")).toDouble(0));
-    const qreal height = geo.value(QStringLiteral("h")).toDouble(item->m_meta->defaultHeight);
-    // A link card saved shorter than its rows would show them on top of each other: it grows.
-    item->setSize(QSizeF(geo.value(QStringLiteral("w")).toDouble(item->m_meta->defaultWidth),
-                         item->isLinkCard() ? std::max(height, item->rowsHeight()) : height),
-                  false);
+    const qreal height = geo.value(QStringLiteral("h")).toDouble(item->m_size.height());
+    // Measure the rows at the saved width; a wide S7 card needs fewer rows than the default narrow one.
+    item->setSize(QSizeF(geo.value(QStringLiteral("w")).toDouble(item->m_meta->defaultWidth), height), false);
     for (const QJsonValue &value : data.value(QStringLiteral("children")).toArray()) {
         const QJsonObject childData = value.toObject();
         if (CanvasItem *child = fromJson(childData, assetBaseDir)) {
@@ -152,6 +151,8 @@ QJsonValue CanvasItem::propertyValue(const QString &name) const
 
 void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
 {
+    const bool fitHeight = isLinkCard() &&
+                           (name == QLatin1String("displayMode") || qAbs(m_size.height() - minimumHeight()) < 1);
     QJsonObject props = m_properties;
     props.insert(name, value);
     if (typeName() == QLatin1String("TabWidget")) {
@@ -170,8 +171,8 @@ void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
     if (isContainer()) {
         relayoutChildren();
     }
-    if (isLinkCard() && m_size.height() < minimumHeight()) {
-        setSize(QSizeF(m_size.width(), minimumHeight())); // more rows (displayMode) need more height
+    if (isLinkCard() && (fitHeight || m_size.height() < minimumHeight())) {
+        setSize(QSizeF(m_size.width(), minimumHeight()));
     }
     update();
 }
@@ -180,7 +181,7 @@ bool CanvasItem::isLinkCard() const
 {
     return typeName() == QLatin1String("SerialConfigCard") || typeName() == QLatin1String("TcpConfigCard") ||
            typeName() == QLatin1String("MqttConfigCard") || typeName() == QLatin1String("UdpConfigCard") ||
-           typeName() == QLatin1String("CanConfigCard");
+           typeName() == QLatin1String("CanConfigCard") || typeName() == QLatin1String("S7ConfigCard");
 }
 
 qreal CanvasItem::rowsHeight() const
@@ -197,7 +198,7 @@ qreal CanvasItem::minimumHeight() const
 void CanvasItem::setSize(const QSizeF &size, bool enforceMinimum)
 {
     const QSizeF bounded = enforceMinimum ? QSizeF(std::max<qreal>(size.width(), m_meta->minWidth),
-                                                   std::max<qreal>(size.height(), minimumHeight()))
+                                                   std::max<qreal>(size.height(), m_meta->minHeight))
                                           : QSizeF(std::max<qreal>(size.width(), 1), std::max<qreal>(size.height(), 1));
     if (bounded == m_size) {
         return;
@@ -205,6 +206,12 @@ void CanvasItem::setSize(const QSizeF &size, bool enforceMinimum)
     prepareGeometryChange();
     m_size = bounded;
     syncWidget();
+    // Width can change the card's row layout (S7 switches between a strip and stacked fields).
+    if (isLinkCard() && m_size.height() < rowsHeight()) {
+        prepareGeometryChange();
+        m_size.setHeight(rowsHeight());
+        syncWidget();
+    }
     if (isContainer()) {
         relayoutChildren();
     }

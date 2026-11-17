@@ -533,7 +533,7 @@ QList<WidgetMeta> commWidgets()
               integer(QStringLiteral("timeout"),QT_TR_NOOP("响应超时(ms)"),1000,1,60000),
               boolean(QStringLiteral("autoConnect"),QT_TR_NOOP("自动连接"),false),
               boolean(QStringLiteral("autoReconnect"),QT_TR_NOOP("自动重连"),true),
-              integer(QStringLiteral("reconnectInterval"),QT_TR_NOOP("重连间隔(ms)"),1000,1,60000)},300,230),
+              integer(QStringLiteral("reconnectInterval"),QT_TR_NOOP("重连间隔(ms)"),1000,1,60000)},380,50),
         meta(
             QStringLiteral("SerialConfigCard"), QT_TR_NOOP("串口配置卡片"), WidgetCategory::Comm,
             QStringLiteral("serial_port"), 360, 320,

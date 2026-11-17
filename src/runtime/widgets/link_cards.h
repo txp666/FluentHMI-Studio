@@ -3,6 +3,8 @@
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
 
+#include <QtCore/QElapsedTimer>
+
 class QGridLayout;
 
 namespace FluentQt {
@@ -69,6 +71,8 @@ class LinkCardBase : public HmiWidget
     void finishStrip(int column);
     // Re-measure after an adapter changes which configuration rows are visible.
     void updateMinimumHeight();
+    // One flyout for a repeated driver error while its previous notification is still visible.
+    void notifyError(const QString &title, const QString &message, int durationMs = 4000);
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_status = nullptr;
@@ -89,6 +93,8 @@ class LinkCardBase : public HmiWidget
     bool m_connected = false;
     QString m_connection; // what the status line says about the connection
     QString m_connectionTip;
+    QString m_lastError;
+    QElapsedTimer m_lastErrorAt;
 };
 
 class SerialConfigCardWidget : public LinkCardBase

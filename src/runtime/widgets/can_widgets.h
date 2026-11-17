@@ -3,8 +3,6 @@
 #include "comm/can/can_backend.h"
 #include "runtime/widgets/link_cards.h"
 
-#include <QtCore/QElapsedTimer>
-
 class QTimer;
 
 namespace FluentQt {
@@ -25,8 +23,8 @@ class CanMonitorProxy;
 // data phase. Fields the adapter cannot set are disabled with a tooltip saying why; SocketCAN shows the ip command
 // that sets its bitrate. Connecting hands the link the card's DBC file, inline signals and filter; an error in them
 // refuses the connection. The header says 未连接, 已连接 (with the bus state when it is not 正常) or 连接失败; below the
-// fields the card shows 收 N · 发 M while connected, or the whole reason a connection failed or dropped, wrapped and
-// selectable, since the reasons (a ZLG library problem, say) are too long for the header. The adapter, channel and
+// fields the card shows 收 N · 发 M while connected. Failure details appear in a notification and remain in the
+// status tooltip, without changing the card's height. The adapter, channel and
 // bitrate are in the card's fields and, with the rest, in the header's tooltip.
 class CanConfigCardWidget : public LinkCardBase
 {
@@ -49,10 +47,10 @@ class CanConfigCardWidget : public LinkCardBase
     void toggleConnection();
     void showTimingCalculator();
     void showConnection();
-    // The card is not connected because of `reason`: the header says so, the line below the fields says why.
+    // The card is not connected because of `reason`: keep its brief status and full tooltip.
     void showFailure(const QString &reason);
-    // The line below the fields: the counters, or (error) why the card is not connected; empty hides it.
-    void showDetail(const QString &text, bool error);
+    // The line below the fields holds only counters; empty hides it.
+    void showCounters(const QString &text);
     void setFieldsEnabled(bool enabled);
     // A row of widgets that sits in one field of the grid.
     QWidget *row(std::initializer_list<QPair<QWidget *, int>> widgets);
@@ -79,13 +77,11 @@ class CanConfigCardWidget : public LinkCardBase
     FluentQt::PushButton *m_calculate = nullptr;
     QPointer<QWidget> m_customTimingCaption;
     FluentQt::CaptionLabel *m_hint = nullptr;   // SocketCAN's ip command, or ZLG's effective bit timing
-    FluentQt::CaptionLabel *m_detail = nullptr; // below the fields: the counters, or why the card is not connected
+    FluentQt::CaptionLabel *m_counters = nullptr;
     QPointer<QWidget> m_hintCaption; // its label in the grid, rebuilt by apply()
     QTimer *m_statusTimer = nullptr;
     CanLink *m_link = nullptr;
     QString m_shownStatus;
-    QString m_lastError; // the last error toasted, so that a repeated Connect does not stack the same toast
-    QElapsedTimer m_lastErrorAt;
 };
 
 // CAN summary or bounded chronological log. Both modes filter by ID/type and export the retained visible rows.

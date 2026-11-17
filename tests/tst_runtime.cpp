@@ -23,6 +23,8 @@
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
+#include <FluentQtWidgets/Widgets/Menu.h>
+#include <FluentQtWidgets/Widgets/RealtimePlotWidget.h>
 #include <FluentQtWidgets/Widgets/Selection.h>
 #include <FluentQtWidgets/Widgets/Slider.h>
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
@@ -38,6 +40,8 @@
 #include <QtCore/QTimeZone>
 #include <QtCore/QRegularExpression>
 #include <QtGui/QImage>
+#include <QtGui/QContextMenuEvent>
+#include <QtGui/QScreen>
 #include <QtGui/QClipboard>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
@@ -46,6 +50,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QGraphicsView>
+#include <QtWidgets/QGraphicsProxyWidget>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QHBoxLayout>
@@ -673,7 +678,6 @@ class TestRuntime : public QObject
             "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"customTiming", "00,1C"}}));
         auto *card = dynamic_cast<CanConfigCardWidget *>(widget.get());
         QVERIFY(card);
-        card->resize(380, 420);
         card->show();
         auto *adapter = card->findChild<FluentQt::ComboBox *>("canAdapter");
         auto *model = card->findChild<FluentQt::ComboBox *>("canZlgModel");
@@ -697,7 +701,8 @@ class TestRuntime : public QObject
         QVERIFY(hint->text().contains(QStringLiteral("00,3A")));
         custom->setText(QStringLiteral("65,13,2,1"));
         QVERIFY(custom->isError());
-        QVERIFY(hint->text().contains(QStringLiteral("BRP")));
+        QCOMPARE(hint->text(), QStringLiteral("位时序无效"));
+        QVERIFY(custom->toolTip().contains(QStringLiteral("BRP")));
 
         model->setCurrentText(QStringLiteral("USBCANFD-200U"));
         fd->setChecked(true);
@@ -742,10 +747,20 @@ class TestRuntime : public QObject
         DesignScene scene;
         QString error;
         QVERIFY2(scene.loadWidgets({QJsonObject{{"id", "can"}, {"type", "CanConfigCard"}},
-                                   QJsonObject{{"id", "red"}, {"type", "ToggleSwitch"},
-                                               {"properties", QJsonObject{{"commandMode", "CAN"}, {"canId", "HMI"},
-                                                                          {"commandTemplate", "B4b4={value}"}}}}},
-                                  &error), qPrintable(error));
+                                    QJsonObject{{"id", "frames"},
+                                                {"type", "SerialConfigCard"},
+                                                {"properties", QJsonObject{{"defaultParser", "hex"}}}},
+                                    QJsonObject{{"id", "s7"}, {"type", "S7ConfigCard"}},
+                                    QJsonObject{{"id", "reader"},
+                                                {"type", "NumericDisplay"},
+                                                {"binding", QJsonObject{{"parseMode", "Modbus"}, {"mbRegIndex", 10}}}},
+                                    QJsonObject{{"id", "red"},
+                                                {"type", "ToggleSwitch"},
+                                                {"properties", QJsonObject{{"commandMode", "CAN"},
+                                                                           {"canId", "HMI"},
+                                                                           {"commandTemplate", "B4b4={value}"}}}}},
+                                   &error),
+                 qPrintable(error));
         PropertyEditor editor;
         editor.setScene(&scene);
         editor.resize(400, 720);
@@ -816,6 +831,43 @@ class TestRuntime : public QObject
         QVERIFY(help->isHidden());
         mode->setCurrentText(QStringLiteral("CAN"));
         QVERIFY(!help->isHidden());
+
+        // The same help component also explains byte protocols, bindings and PLC addresses.
+        struct HelpCase
+        {
+            const char *id;
+            const char *field;
+            const char *example;
+        };
+        const HelpCase cases[] = {
+            {"red", "commandMode", "SPEED={value}"},      {"red", "binding.parseMode", "temperature"},
+            {"red", "binding.expression", "value * 0.1"}, {"reader", "binding.mbRegIndex", "hr10=1234\nco3=1"},
+            {"s7", "connectionType", "DB1.DBD4"},         {"frames", "parserConfig.fields", "\\n"},
+        };
+        changed.clear();
+        for (const auto &item : cases) {
+            editor.showItem(scene.findItem(QLatin1String(item.id)));
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            help = editor.findChild<QToolButton *>(QStringLiteral("propertyHelp_%1").arg(QLatin1String(item.field)));
+            QVERIFY(help && !help->isHidden());
+            editor.ensureWidgetVisible(help);
+            QTest::mouseClick(help, Qt::LeftButton);
+            dialog = editor.findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+            QVERIFY(dialog);
+            auto *example = dialog->findChild<QPlainTextEdit *>(QStringLiteral("fieldHelpExample0"));
+            auto *copy = dialog->findChild<QPushButton *>(QStringLiteral("fieldHelpCopy0"));
+            QVERIFY(example && example->isReadOnly() && copy);
+            QCOMPARE(example->toPlainText(), QString::fromUtf8(item.example));
+            QTest::mouseClick(copy, Qt::LeftButton);
+            QCOMPARE(QGuiApplication::clipboard()->text(), example->toPlainText());
+            if (QLatin1String(item.field) == QLatin1String("binding.expression")) {
+                screenshot(dialog, QStringLiteral("binding-expression-help.png"));
+            }
+            QTest::keyClick(dialog, Qt::Key_Escape);
+            QTRY_VERIFY(dialog.isNull());
+        }
+        QCOMPARE(scene.widgetsJson(), original);
+        QCOMPARE(changed.count(), 0);
     }
 
     void canRuntimeHelpIsTranslatedAndKeepsTimingUnchanged()
@@ -826,7 +878,6 @@ class TestRuntime : public QObject
         const auto removeTranslator = qScopeGuard([&]() { qApp->removeTranslator(&translator); });
         std::unique_ptr<HmiWidget> card(createHmiWidget(
             "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"customTiming", "00,1C"}}));
-        card->resize(380, 420);
         card->show();
         auto *help = card->findChild<QToolButton *>(QStringLiteral("canTimingHelp"));
         auto *custom = card->findChild<QLineEdit *>(QStringLiteral("canCustomTiming"));
@@ -2032,7 +2083,7 @@ class TestRuntime : public QObject
         for (const char *mode : {"完整", "简洁", "单行"}) {
             QTest::addRow("serial %s", mode) << QStringLiteral("SerialConfigCard") << QString::fromUtf8(mode);
         }
-        for (const char *type : {"TcpConfigCard", "MqttConfigCard", "UdpConfigCard"}) {
+        for (const char *type : {"TcpConfigCard", "MqttConfigCard", "UdpConfigCard", "CanConfigCard"}) {
             for (const char *mode : {"完整", "简洁"}) {
                 QTest::addRow("%s %s", type, mode) << QString::fromLatin1(type) << QString::fromUtf8(mode);
             }
@@ -2056,6 +2107,9 @@ class TestRuntime : public QObject
             QVERIFY2(minimum <= 48, qPrintable(QString::number(minimum))); // the strips of the examples: 48 and 50 px
         }
         QCOMPARE(card->minimumHeight(), minimum);
+        QCOMPARE(card->height(), std::max(card->meta().minHeight, minimum));
+        CanvasItem fresh(type, {{"displayMode", mode}}, QString());
+        QCOMPARE(fresh.size().height(), fresh.minimumHeight());
 
         QList<QPushButton *> buttons;
         for (QPushButton *button : card->findChildren<QPushButton *>()) {
@@ -2103,6 +2157,9 @@ class TestRuntime : public QObject
         card->layout()->activate();
         QMap<int, QRect> rows;
         for (int i = 0; i < grid->count(); ++i) {
+            if (grid->itemAt(i)->isEmpty()) {
+                continue; // CAN hides model-specific rows without removing them from the grid.
+            }
             int row = 0, column = 0, rowSpan = 0, columnSpan = 0;
             grid->getItemPosition(i, &row, &column, &rowSpan, &columnSpan);
             rows[row] |= grid->itemAt(i)->geometry();
@@ -2180,12 +2237,19 @@ class TestRuntime : public QObject
         mode->setCurrentText(QStringLiteral("简洁"));
         const qreal brief = tcp->minimumHeight();
         QVERIFY(brief < full);
-        QCOMPARE(tcp->size().height(), full);
+        QCOMPARE(tcp->size().height(), brief);
         QCOMPARE(height->minimum(), int(std::ceil(brief)));
         tcp->setSize(QSizeF(360, brief));
         mode->setCurrentText(QStringLiteral("完整"));
         QCOMPARE(tcp->size().height(), full);
         QCOMPARE(height->value(), int(std::ceil(full)));
+
+        tcp->setSize(QSizeF(360, 350));
+        tcp->setPropertyValue(QStringLiteral("title"), QStringLiteral("PLC"));
+        QCOMPARE(tcp->size().height(), 350.0); // ordinary edits keep the user's chosen height
+        QCOMPARE(tcp->widget()->height(), 350);
+        std::unique_ptr<CanvasItem> restored(CanvasItem::fromJson(tcp->toJson(), QString()));
+        QCOMPARE(restored->size().height(), 350.0);
 
         Project project;
         QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/04-环境监测站.uidp"), &project, &error),
@@ -2200,6 +2264,45 @@ class TestRuntime : public QObject
             }
         }
         QVERIFY(found);
+    }
+
+    void canConnectionErrorsUseOneFlyoutWithoutGrowingTheCard()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        RuntimeContext context;
+        std::unique_ptr<HmiWidget> card(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"},
+                              {"dbcFile", directory.filePath(QString(120, QLatin1Char('x')) + ".dbc")}}));
+        card->attach(&context);
+        card->show();
+        QApplication::processEvents();
+        const int before = card->height();
+        QSignalSpy notifications(&context, &RuntimeContext::notificationRequested);
+        QPushButton *connectButton = nullptr;
+        for (auto *button : card->findChildren<QPushButton *>()) {
+            if (button->text() == QStringLiteral("连接")) {
+                connectButton = button;
+            }
+        }
+        QVERIFY(connectButton);
+        QTest::mouseClick(connectButton, Qt::LeftButton);
+        QCOMPARE(notifications.size(), 1);
+        const QString detail = notifications.first().at(1).toString();
+        QVERIFY(detail.contains(directory.path()));
+        bool failed = false;
+        for (auto *label : card->findChildren<QLabel *>()) {
+            QVERIFY(label->text() != detail);
+            if (label->text() == QStringLiteral("连接失败")) {
+                QCOMPARE(label->toolTip(), detail);
+                failed = true;
+            }
+        }
+        QVERIFY(failed);
+        QCOMPARE(card->height(), before);
+        QTest::mouseClick(connectButton, Qt::LeftButton);
+        QCOMPARE(notifications.size(), 1);
+        card->detach();
     }
 
     // A CAN card dropped since the project was last saved is on the page but not yet in the project's widget list:
@@ -2420,6 +2523,9 @@ class TestRuntime : public QObject
         for (int row = 0; row < form->rowCount(); ++row) {
             QLayoutItem *caption = form->itemAt(row, QFormLayout::LabelRole);
             auto *text = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+            if (!text && caption && caption->widget()) {
+                text = caption->widget()->findChild<QLabel *>(); // label with an adjacent help button
+            }
             if (text && text->isVisible()) {
                 labels << text->text();
             }
@@ -2790,6 +2896,108 @@ class TestRuntime : public QObject
         const QJsonArray json = scene.widgetsJson();
         QCOMPARE(json.size(), 1);
         QCOMPARE(json.at(0).toObject().value("children").toArray().size(), 1);
+    }
+    void scaledCanvasMenusStayNativeAndAcceptInput()
+    {
+        Project project;
+        project.canvasWidth = 1000;
+        project.canvasHeight = 650;
+        project.widgets =
+            QJsonArray{QJsonObject{{"id", "chart"},
+                                   {"type", "RealtimeChart"},
+                                   {"geometry", QJsonObject{{"x", 400}, {"y", 330}, {"w", 590}, {"h", 300}}}}};
+        PlayerWindow window(project);
+        auto *plot = window.surface()->findChild<FluentQt::RealtimePlotWidget *>();
+        auto *view = window.findChild<QGraphicsView *>("canvasView");
+        QVERIFY(plot && view);
+        window.show();
+        QSize menuSize;
+        for (const QSize size : {QSize(720, 490), QSize(1100, 760)}) {
+            window.resize(size);
+            QApplication::processEvents();
+            plot->setXRange(10, 20);
+            plot->setYRange(20, 30);
+            const QPoint point(plot->width() - 60, plot->height() - 50);
+            QContextMenuEvent event(QContextMenuEvent::Mouse, point, plot->mapToGlobal(point));
+            QApplication::sendEvent(plot, &event);
+            QPointer<FluentQt::RoundMenu> menu;
+            for (auto *candidate : plot->findChildren<FluentQt::RoundMenu *>()) {
+                if (candidate->isVisible()) {
+                    menu = candidate;
+                    break;
+                }
+            }
+            QVERIFY(menu);
+            QVERIFY(!menu->graphicsProxyWidget());
+            QVERIFY(menu->windowFlags().testFlag(Qt::BypassGraphicsProxyWidget));
+            if (menuSize.isEmpty()) {
+                menuSize = menu->size();
+            } else {
+                QCOMPARE(menu->size(), menuSize);
+            }
+            QTest::qWait(250); // finish the existing popup animation before capture and click
+            const QString directory = qEnvironmentVariable("FHMI_CAN_TEST_SCREENSHOT_DIR");
+            if (!directory.isEmpty() && size.width() == 720) {
+                QVERIFY(QDir().mkpath(directory));
+                QVERIFY(window.grab().save(QDir(directory).filePath("ui-scaled-menu-window.png")));
+                QVERIFY(menu->grab().save(QDir(directory).filePath("ui-scaled-menu-popup.png")));
+            }
+            auto *items = menu->view();
+            QVERIFY(items->count() > 0);
+            QTest::mouseClick(items->viewport(), Qt::LeftButton, Qt::NoModifier,
+                              items->visualItemRect(items->item(0)).center());
+            QTRY_VERIFY(!menu || !menu->isVisible());
+            QCOMPARE(plot->xMinimum(), 0.0);
+            QCOMPARE(plot->xMaximum(), 1.0);
+            QCOMPARE(plot->yMinimum(), -1.0);
+            QCOMPARE(plot->yMaximum(), 1.0);
+        }
+    }
+
+    void s7CardKeepsErrorsOutOfItsLayout()
+    {
+        RuntimeContext context;
+        QSignalSpy notices(&context, &RuntimeContext::notificationRequested);
+        std::unique_ptr<HmiWidget> card(createHmiWidget("S7ConfigCard", {{"host", "invalid-host"}}));
+        context.registerWidget("plc", card.get());
+        card->attach(&context);
+        card->show();
+        QApplication::processEvents();
+        auto *status = card->findChild<QLabel *>("s7Status");
+        QVERIFY(status);
+        QCOMPARE(status->text(), QStringLiteral("连接失败"));
+        QCOMPARE(notices.size(), 1);
+        QCOMPARE(notices.first().at(2).toString(), NotifyType::Error);
+        const int narrowHeight = card->minimumSizeHint().height();
+        card->resize(800, narrowHeight);
+        QApplication::processEvents();
+        const int wideHeight = card->minimumSizeHint().height();
+        QVERIFY(wideHeight < narrowHeight);
+        card->resize(380, wideHeight);
+        QApplication::processEvents();
+        QVERIFY(card->height() >= card->minimumSizeHint().height());
+        for (auto *spin : card->findChildren<QSpinBox *>()) {
+            auto *edit = spin->findChild<QLineEdit *>();
+            QVERIFY(edit);
+            QVERIFY2(
+                edit->width() >= edit->fontMetrics().horizontalAdvance(spin->text()),
+                qPrintable(QStringLiteral("%1 has only %2 px after resizing").arg(spin->text()).arg(edit->width())));
+        }
+        const int height = card->height();
+        const QString reason = QStringLiteral("S7 connection failed: ") + QString(300, QLatin1Char('x'));
+        emit context.s7Client()->errorOccurred("other", reason);
+        QCOMPARE(notices.size(), 1);
+        emit context.s7Client()->errorOccurred("plc", reason);
+        emit context.s7Client()->errorOccurred("plc", reason);
+        QCOMPARE(notices.size(), 2);
+        QCOMPARE(status->toolTip(), reason);
+        QCOMPARE(card->height(), height);
+        QCOMPARE(status->text(), QStringLiteral("连接失败"));
+        const QString directory = qEnvironmentVariable("FHMI_CAN_TEST_SCREENSHOT_DIR");
+        if (!directory.isEmpty()) {
+            QVERIFY(QDir().mkpath(directory));
+            QVERIFY(card->grab().save(QDir(directory).filePath("ui-s7-compact-error.png")));
+        }
     }
 };
 

@@ -119,6 +119,8 @@ void LinkCardBase::onDetached()
     delete m_slave; // its links are gone already
     m_slave = nullptr;
     setConnectedUi(false, tr("未连接"));
+    m_lastError.clear();
+    m_lastErrorAt.invalidate();
 }
 
 ModbusPoller::Settings LinkCardBase::pollingSettings() const
@@ -161,7 +163,7 @@ bool LinkCardBase::configureParser(Link *link)
     }
     QString error;
     if (!link->setParser(type, config, &error)) {
-        context()->notify(tr("解析模式无效"), error, NotifyType::Error, 3000);
+        notifyError(tr("解析模式无效"), error);
         return false;
     }
     return true;
@@ -272,9 +274,24 @@ void LinkCardBase::finishStrip(int column)
 
 void LinkCardBase::updateMinimumHeight()
 {
+    const bool fitted = minimumHeight() > 0 && height() == minimumHeight() &&
+                        maximumHeight() == QWIDGETSIZE_MAX;
     layout()->invalidate();
     layout()->activate(); // measures every row afresh
     setMinimumHeight(minimumSizeHint().height());
+    if (fitted) {
+        resize(width(), minimumHeight());
+    }
+}
+
+void LinkCardBase::notifyError(const QString &title, const QString &message, int durationMs)
+{
+    if (message == m_lastError && m_lastErrorAt.isValid() && m_lastErrorAt.elapsed() < durationMs) {
+        return;
+    }
+    m_lastError = message;
+    m_lastErrorAt.start();
+    context()->notify(title, message, NotifyType::Error, durationMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +414,7 @@ void SerialConfigCardWidget::onAttached()
         setFieldsEnabled(!connected);
     }));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
-        context()->notify(tr("串口错误"), message, NotifyType::Error, 3000);
+        notifyError(tr("串口错误"), message);
     }));
     LinkCardBase::onAttached();
 }
@@ -451,7 +468,7 @@ void SerialConfigCardWidget::toggleConnection()
     }
     QString error;
     if (!m_link->open(settings, &error)) {
-        context()->notify(tr("打开串口失败"), error, NotifyType::Error, 3000);
+        notifyError(tr("打开串口失败"), error);
     }
 }
 
@@ -566,7 +583,7 @@ void TcpConfigCardWidget::toggleConnection()
         }
     });
     connect(link, &Link::errorOccurred, this, [this](const QString &message) {
-        context()->notify(tr("TCP 错误"), message, NotifyType::Error, 3000);
+        notifyError(tr("TCP 错误"), message);
     });
     setFieldsEnabled(false);
     const quint16 port = quint16(m_port->value());
@@ -577,7 +594,7 @@ void TcpConfigCardWidget::toggleConnection()
         });
         QString error;
         if (!serverLink->listen(m_host->text(), port, &error)) {
-            context()->notify(tr("监听失败"), error, NotifyType::Error, 3000);
+            notifyError(tr("监听失败"), error);
             dropLink();
             setFieldsEnabled(true);
         }
@@ -676,7 +693,7 @@ void MqttConfigCardWidget::onAttached()
     live(connect(m_connect, &QPushButton::clicked, this, &MqttConfigCardWidget::toggleConnection));
     live(connect(m_link, &Link::connectedChanged, this, &MqttConfigCardWidget::refreshState));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
-        context()->notify(tr("MQTT"), message, NotifyType::Error, 3000);
+        notifyError(tr("MQTT"), message);
         refreshState();
     }));
     LinkCardBase::onAttached();
@@ -722,7 +739,7 @@ void MqttConfigCardWidget::toggleConnection()
     settings.tls = m_tls->isChecked();
     QString error;
     if (!m_link->connectTo(settings, &error)) {
-        context()->notify(tr("MQTT"), error, NotifyType::Error, 3000);
+        notifyError(tr("MQTT"), error);
     }
     refreshState();
 }
@@ -806,7 +823,7 @@ void UdpConfigCardWidget::onAttached()
     // The first datagram of a link without a remote gives it someone to send to: the poller may start.
     live(connect(m_link, &Link::canSendChanged, this, &UdpConfigCardWidget::refreshState));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
-        context()->notify(QStringLiteral("UDP"), message, NotifyType::Error, 3000);
+        notifyError(QStringLiteral("UDP"), message);
     }));
     LinkCardBase::onAttached();
 }
@@ -839,7 +856,7 @@ void UdpConfigCardWidget::toggleConnection()
     }
     QString error;
     if (!m_link->open(quint16(m_localPort->value()), m_host->text(), m_port->value(), &error)) {
-        context()->notify(QStringLiteral("UDP"), error, NotifyType::Error, 3000);
+        notifyError(QStringLiteral("UDP"), error);
     }
 }
 

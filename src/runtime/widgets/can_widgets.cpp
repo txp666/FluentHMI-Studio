@@ -166,12 +166,12 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_hint->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_hint->hide();
 
-    // Under the fields, in the room the card has there (the base layout is header, fields, stretch).
-    m_detail = new FluentQt::CaptionLabel(this);
-    m_detail->setWordWrap(true);
-    m_detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_detail->hide();
-    static_cast<QVBoxLayout *>(layout())->insertWidget(2, m_detail);
+    // Only the live counters belong below the fields; error details use a notification.
+    m_counters = new FluentQt::CaptionLabel(this);
+    m_counters->setObjectName(QStringLiteral("canCounters"));
+    m_counters->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_counters->hide();
+    static_cast<QVBoxLayout *>(layout())->insertWidget(2, m_counters);
 
     m_statusTimer = new QTimer(this);
     m_statusTimer->setInterval(kStatusRefreshMs);
@@ -331,7 +331,10 @@ void CanConfigCardWidget::updateAdapterUi()
             const auto timing = zlg::channelTiming(*model, settings(), &error);
             m_customTiming->setError(!timing && custom);
             timingHint = model->family == zlg::Family::Sja1000 || custom;
-            m_hint->setText(timing ? timing->description : error);
+            m_hint->setText(timing ? timing->description : tr("位时序无效"));
+            if (!timing) {
+                m_customTiming->setToolTip(error);
+            }
         }
     }
     m_calculate->setEnabled(editable && calculator);
@@ -419,22 +422,17 @@ void CanConfigCardWidget::onAttached()
         } else {
             m_statusTimer->stop();
             setConnectedUi(false, tr("未连接"));
-            showDetail(QString(), false);
+            showCounters(QString());
         }
         showConnection();
     }));
     live(connect(m_link, &CanLink::busStateChanged, this, &CanConfigCardWidget::showConnection));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
-        // A refused or dropped connection stays explained on the card; errors while connected are toasts only.
+        // Keep a concise connection state; the flyout carries the full driver error.
         if (!m_link->isConnected()) {
             showFailure(message);
         }
-        if (message == m_lastError && m_lastErrorAt.isValid() && m_lastErrorAt.elapsed() < 4000) {
-            return;
-        }
-        m_lastError = message;
-        m_lastErrorAt.start();
-        context()->notify(tr("CAN 错误"), message, NotifyType::Error, 4000);
+        notifyError(tr("CAN 错误"), message);
     }));
     LinkCardBase::onAttached();
 }
@@ -455,7 +453,7 @@ void CanConfigCardWidget::onDetached()
     }
     LinkCardBase::onDetached();
     m_shownStatus.clear();
-    showDetail(QString(), false);
+    showCounters(QString());
     setFieldsEnabled(true);
 }
 
@@ -484,19 +482,17 @@ void CanConfigCardWidget::showFailure(const QString &reason)
 {
     setConnectedUi(false, tr("连接失败"), reason);
     m_shownStatus.clear();
-    showDetail(reason, true);
+    showCounters(QString());
 }
 
-void CanConfigCardWidget::showDetail(const QString &text, bool error)
+void CanConfigCardWidget::showCounters(const QString &text)
 {
-    m_detail->setText(text);
-    // Fluent's text and critical colours.
-    if (error) {
-        m_detail->setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4));
-    } else {
-        m_detail->setTextColor(QColor(0, 0, 0, 228), QColor(255, 255, 255));
+    m_counters->setText(text);
+    const bool visible = !text.isEmpty();
+    if (visible != !m_counters->isHidden()) {
+        m_counters->setVisible(visible);
+        updateMinimumHeight();
     }
-    m_detail->setVisible(!text.isEmpty());
 }
 
 void CanConfigCardWidget::showConnection()
@@ -516,7 +512,7 @@ void CanConfigCardWidget::showConnection()
     if (tip != m_shownStatus) {
         m_shownStatus = tip;
         setConnectedUi(true, state, tip);
-        showDetail(counters, false);
+        showCounters(counters);
     }
 }
 

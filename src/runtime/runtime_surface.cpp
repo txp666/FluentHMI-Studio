@@ -81,11 +81,10 @@ void RuntimeSurface::buildWidget(const QJsonObject &data, HmiWidget *container)
     if (!widget) {
         return;
     }
-    const WidgetMeta &meta = widget->meta();
     const QJsonObject geo = data.value(QStringLiteral("geometry")).toObject();
     const QRect rect(int(geo.value(QStringLiteral("x")).toDouble(0)), int(geo.value(QStringLiteral("y")).toDouble(0)),
-                     int(geo.value(QStringLiteral("w")).toDouble(meta.defaultWidth)),
-                     int(geo.value(QStringLiteral("h")).toDouble(meta.defaultHeight)));
+                     int(geo.value(QStringLiteral("w")).toDouble(widget->width())),
+                     int(geo.value(QStringLiteral("h")).toDouble(widget->height())));
 
     if (container) {
         QWidget *host = container->childHost(data.value(QStringLiteral("tabIndex")).toInt(0));

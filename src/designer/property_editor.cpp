@@ -47,6 +47,31 @@ namespace {
 
 std::optional<FieldHelpTopic> propertyHelpTopic(const QString &type, const QString &field)
 {
+    if (field == QLatin1String("textLayout")) {
+        return FieldHelpTopic::IndustrialTextLayout;
+    }
+    if (field == QLatin1String("binding.parseMode") || field == QLatin1String("curveParseMode")) {
+        return FieldHelpTopic::DataBinding;
+    }
+    if (field == QLatin1String("binding.expression") || field == QLatin1String("curveExpression")) {
+        return FieldHelpTopic::TransformExpression;
+    }
+    if (field == QLatin1String("commandMode")) {
+        return FieldHelpTopic::CommandTemplates;
+    }
+    if (field == QLatin1String("mbAddress") || field == QLatin1String("binding.mbRegIndex") ||
+        field == QLatin1String("curveRegIndex") || field == QLatin1String("modbusRole")) {
+        return FieldHelpTopic::ModbusAddressing;
+    }
+    if (field == QLatin1String("binding.s7Address") || field == QLatin1String("s7Command.address") ||
+        field == QLatin1String("curveS7.address") ||
+        (type == QLatin1String("S7ConfigCard") && field == QLatin1String("connectionType"))) {
+        return FieldHelpTopic::S7Addressing;
+    }
+    if (field == QLatin1String("parser") || field == QLatin1String("defaultParser") ||
+        field == QLatin1String("fields") || field == QLatin1String("parserConfig.fields")) {
+        return FieldHelpTopic::ReceiveFraming;
+    }
     if (type == QLatin1String("CanConfigCard")) {
         if (field == QLatin1String("canTxInitialState") || field == QLatin1String("canTxInitialMaxAge")) {
             return FieldHelpTopic::CanInitialState;
@@ -579,7 +604,7 @@ void PropertyEditor::addRow(QFormLayout *form, const QString &key, const QString
     // A long label (English "Transform expression") wraps instead of widening the panel past its dock
     caption->setWordWrap(true);
     QWidget *labelWidget = caption;
-    if (const auto topic = m_item ? propertyHelpTopic(m_item->typeName(), key) : std::nullopt) {
+    if (const auto topic = propertyHelpTopic(m_item ? m_item->typeName() : QString(), key)) {
         labelWidget = new QWidget(m_content);
         auto *layout = new QHBoxLayout(labelWidget);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -1540,6 +1565,20 @@ void PropertyEditor::updateVisibility()
         return;
     }
     const WidgetMeta &meta = m_item->meta();
+    if (meta.prop(QStringLiteral("textLayout"))) {
+        const bool title = m_item->propertyValue(QStringLiteral("showTitle")).toBool();
+        const bool value = m_item->propertyValue(QStringLiteral("showValue")).toBool();
+        const bool offset =
+            m_item->propertyValue(QStringLiteral("textLayout")).toString() == QStringLiteral("中心偏移"); // i18n: value
+        setRowVisible(QStringLiteral("title"), title);
+        setRowVisible(QStringLiteral("textLayout"), title || value);
+        for (const char *field : {"titleOffsetX", "titleOffsetY"}) {
+            setRowVisible(QLatin1String(field), offset && title);
+        }
+        for (const char *field : {"valueOffsetX", "valueOffsetY"}) {
+            setRowVisible(QLatin1String(field), offset && value);
+        }
+    }
     if (auto *help = m_helpButtons.value(QStringLiteral("commandTemplate"))) {
         help->setVisible(m_item->propertyValue(QStringLiteral("commandMode")).toString() == QLatin1String("CAN"));
     }
