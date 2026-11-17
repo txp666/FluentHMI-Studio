@@ -33,6 +33,8 @@
 #include <QtCore/QScopeGuard>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QTimer>
+#include <QtCore/QTimeZone>
+#include <QtCore/QRegularExpression>
 #include <QtGui/QImage>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
@@ -457,6 +459,67 @@ class TestRuntime : public QObject
         QVERIFY(readCsv(dir.filePath("remote.csv")).contains(QStringLiteral("\"TX\",\"RTR\",\"8\",\"\"")));
         QVERIFY(!monitor->saveCsv(dir.filePath("missing/frames.csv"), &error));
         QVERIFY(!error.isEmpty());
+    }
+
+    void canCsvHasReadableMillisecondsAndRawTimestamp_data()
+    {
+        QTest::addColumn<QString>("mode");
+        QTest::newRow("summary") << QStringLiteral("按 ID 汇总");
+        QTest::newRow("scrolling") << QStringLiteral("滚动日志");
+    }
+
+    void canCsvHasReadableMillisecondsAndRawTimestamp()
+    {
+        QFETCH(QString, mode);
+        RuntimeContext context;
+        context.setActive(true);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("CanMonitor", {{"displayMode", mode}}));
+        auto *monitor = dynamic_cast<CanMonitorWidget *>(widget.get());
+        QVERIFY(monitor);
+        monitor->attach(&context);
+        const QDateTime beforeMidnight(QDate(2026, 11, 17), QTime(23, 59, 59, 999), QTimeZone::systemTimeZone());
+        QList<CanFrame> frames;
+        for (int i = 0; i < 2; ++i) {
+            CanFrame frame;
+            frame.id = quint32(0x18FF0A01 + i);
+            frame.extended = true;
+            frame.timestampMs = beforeMidnight.toMSecsSinceEpoch() + i * 2;
+            frame.data = QByteArray::fromHex("1122334400000500");
+            frames.append(frame);
+        }
+        emit context.hub()->canFrames(nullptr, frames, false);
+        QTemporaryDir dir;
+        const QString path = dir.filePath("can-time.csv");
+        QString error;
+        QVERIFY2(monitor->saveCsv(path, &error), qPrintable(error));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray bytes = file.readAll();
+        QVERIFY(bytes.startsWith(QByteArray::fromHex("EFBBBF") + "\"time\",\"id\","));
+        const QStringList lines = QString::fromUtf8(bytes).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 3);
+        QVERIFY(lines.first().contains(QStringLiteral("\"timestamp_ms\"")));
+        for (int i = 0; i < 2; ++i) {
+            const QStringList fields = lines.at(i + 1).split(QLatin1Char(','));
+            QCOMPARE(fields.size(), 10);
+            const QString time = fields.first().mid(1, fields.first().size() - 2);
+            const QString raw = fields.last().mid(1, fields.last().size() - 2);
+            QVERIFY(QRegularExpression(QStringLiteral("\\.\\d{3}(?:Z|[+-]\\d{2}:\\d{2})$")).match(time).hasMatch());
+            QVERIFY(time.startsWith(i == 0 ? QStringLiteral("2026-11-17T23:59:59.999")
+                                          : QStringLiteral("2026-11-18T00:00:00.001")));
+            const QDateTime parsed = QDateTime::fromString(time, Qt::ISODateWithMs);
+            QVERIFY(parsed.isValid());
+            QCOMPARE(parsed.toMSecsSinceEpoch(), frames.at(i).timestampMs);
+            QCOMPARE(raw, QString::number(frames.at(i).timestampMs));
+        }
+        const QString samples = qEnvironmentVariable("FHMI_CAN_TEST_EXPORT_DIR");
+        if (!samples.isEmpty()) {
+            QVERIFY(QDir().mkpath(samples));
+            const QString sample = QDir(samples).filePath(mode == QStringLiteral("滚动日志")
+                                                             ? QStringLiteral("can-time-scrolling.csv")
+                                                             : QStringLiteral("can-time-summary.csv"));
+            QVERIFY(QFile::copy(path, sample));
+        }
     }
 
     void copiedS7GroupRetargetsConnections()

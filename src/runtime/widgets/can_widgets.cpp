@@ -28,6 +28,7 @@
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QTextStream>
 #include <QtCore/QTimer>
+#include <QtCore/QTimeZone>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
@@ -576,9 +577,10 @@ class CanMonitorModel : public QAbstractTableModel
 
     QStringList csvHeaders() const
     {
-        QStringList fields{QStringLiteral("timestamp_ms"), QStringLiteral("id"),     QStringLiteral("direction"),
+        QStringList fields{QStringLiteral("time"), QStringLiteral("id"),     QStringLiteral("direction"),
                            QStringLiteral("type"),         QStringLiteral("length"), QStringLiteral("data"),
-                           QStringLiteral("period_ms"),    QStringLiteral("count"),  QStringLiteral("name")};
+                           QStringLiteral("period_ms"),    QStringLiteral("count"),  QStringLiteral("name"),
+                           QStringLiteral("timestamp_ms")};
         if (m_showSignals) {
             fields << QStringLiteral("signals");
         }
@@ -588,7 +590,13 @@ class CanMonitorModel : public QAbstractTableModel
     QStringList csvRow(int at) const
     {
         const Row &row = m_rows.at(at);
-        QStringList fields{QString::number(row.frame.timestampMs),
+        // Include the date, milliseconds and UTC offset. ISO text also avoids spreadsheet apps
+        // interpreting the Unix-millisecond integer as an ordinary decimal or a date serial.
+        const QString time = row.frame.timestampMs > 0
+                                 ? QDateTime::fromMSecsSinceEpoch(row.frame.timestampMs, QTimeZone::systemTimeZone())
+                                       .toString(Qt::ISODateWithMs)
+                                 : QString();
+        QStringList fields{time,
                            Can::idText(row.id),
                            row.sent ? QStringLiteral("TX") : QStringLiteral("RX"),
                            data(index(at, Type), Qt::DisplayRole).toString(),
@@ -596,7 +604,8 @@ class CanMonitorModel : public QAbstractTableModel
                            row.frame.rtr ? QString() : toHexString(row.frame.data),
                            row.intervalCount > 0 ? QString::number(row.meanInterval(), 'f', 1) : QString(),
                            QString::number(row.count),
-                           row.name};
+                           row.name,
+                           QString::number(row.frame.timestampMs)};
         if (m_showSignals) {
             fields << row.signalText;
         }

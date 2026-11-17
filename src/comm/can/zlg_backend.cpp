@@ -1,5 +1,6 @@
 #include "comm/can/zlg_backend.h"
 #include "comm/can/can_diagnostics.h"
+#include "comm/can/zlg_status_internal.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
@@ -817,27 +818,14 @@ bool ZlgBackend::writeFrame(const CanFrame &frame, QString *error)
 CanBusState ZlgBackend::readBusState()
 {
     const Api &a = api();
-    ZCAN_CHANNEL_ERR_INFO info;
-    std::memset(&info, 0, sizeof info);
-    const bool hasInfo =
-        traced("ZCAN_ReadChannelErrInfo", m_channel, [&] { return a.readErrInfo(m_channel, &info); }) == STATUS_OK;
-    if (hasInfo && (info.error_code & ZCAN_ERROR_CAN_BUSOFF)) {
-        return CanBusState::BusOff;
-    }
-    ZCAN_CHANNEL_STATUS status;
-    std::memset(&status, 0, sizeof status);
-    if (traced("ZCAN_ReadChannelStatus", m_channel, [&] { return a.readStatus(m_channel, &status); }) == STATUS_OK) {
-        // The error counters, as the CAN standard draws the lines.
-        const int counter = std::max(status.regRECounter, status.regTECounter);
-        return counter >= 128 ? CanBusState::Passive : counter >= 96 ? CanBusState::Warning : CanBusState::Normal;
-    }
-    if (hasInfo && (info.error_code & ZCAN_ERROR_CAN_PASSIVE)) {
-        return CanBusState::Passive;
-    }
-    if (hasInfo && (info.error_code & ZCAN_ERROR_CAN_ERRALARM)) {
-        return CanBusState::Warning;
-    }
-    return CanBusState::Normal;
+    return zlg::detail::readBusState(
+        m_model->family,
+        [&](ZCAN_CHANNEL_ERR_INFO *info) {
+            return traced("ZCAN_ReadChannelErrInfo", m_channel, [&] { return a.readErrInfo(m_channel, info); });
+        },
+        [&](ZCAN_CHANNEL_STATUS *status) {
+            return traced("ZCAN_ReadChannelStatus", m_channel, [&] { return a.readStatus(m_channel, status); });
+        });
 }
 
 } // namespace fhmi

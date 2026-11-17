@@ -18,9 +18,12 @@ set(CMAKE_AUTORCC ON)
 
 option(FHMI_BUILD_TESTS "Build unit tests" ON)
 option(FHMI_CAN_DIAGNOSTICS "Trace CAN driver calls and disable periodic bus-state queries by default" OFF)
+set(FHMI_BUILD_LABEL "" CACHE STRING "Optional label for a local build")
 set(FHMI_APPLICATION_VERSION "${PROJECT_VERSION}")
 if(FHMI_CAN_DIAGNOSTICS)
     string(APPEND FHMI_APPLICATION_VERSION "-can-diagnostics")
+elseif(FHMI_BUILD_LABEL)
+    string(APPEND FHMI_APPLICATION_VERSION "-${FHMI_BUILD_LABEL}")
 endif()
 
 set(FLUENTQTWIDGETS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/FluentQtWidgets" CACHE PATH
@@ -133,6 +136,7 @@ add_library(fhmi_comm STATIC
     src/comm/can/zlg_api.h
     src/comm/can/zlg_backend.cpp
     src/comm/can/zlg_backend.h
+    src/comm/can/zlg_status_internal.h
     src/comm/comm_hub.cpp
     src/comm/comm_hub.h
     src/comm/link.cpp
@@ -352,6 +356,9 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_can PRIVATE fhmi_comm Qt6::Test)
     target_compile_definitions(tst_can PRIVATE FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME can COMMAND tst_can)
+    add_executable(tst_zlg_status tests/tst_zlg_status.cpp)
+    target_link_libraries(tst_zlg_status PRIVATE fhmi_comm Qt6::Test)
+    add_test(NAME zlg_status COMMAND tst_zlg_status)
     if(FHMI_CAN_DIAGNOSTICS)
         add_executable(tst_can_diagnostics tests/tst_can_diagnostics.cpp)
         target_link_libraries(tst_can_diagnostics PRIVATE fhmi_comm Qt6::Test)
