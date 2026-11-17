@@ -4,8 +4,8 @@
 
 namespace fhmi {
 
-// Explicit per-channel feedback -> first transmit mapping. Only identically named, identically encoded
-// signals are copied; unrelated input/header bytes keep the command message's own initial values.
+// Explicit per-channel feedback -> first transmit mapping. Message rules match equal names; signal rules
+// can rename fields. Encodings must agree. Unmapped bytes keep the command's own initial values.
 class CanInitialState
 {
   public:
@@ -21,13 +21,13 @@ class CanInitialState
     {
         CanSignalDef target;
         CanSignalDef source;
+        quint64 sourceKey = 0;
     };
     struct Rule
     {
         QString targetName;
-        QString sourceName;
-        quint64 sourceKey = 0;
         QList<Binding> bindings;
+        QByteArray usedBits;
     };
     struct Source
     {

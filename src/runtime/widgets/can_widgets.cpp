@@ -656,10 +656,13 @@ class CanMonitorModel : public QAbstractTableModel
 
     QStringList csvHeaders() const
     {
-        QStringList fields{QStringLiteral("sequence"),  QStringLiteral("time"),      QStringLiteral("id"),
-                           QStringLiteral("direction"), QStringLiteral("type"),      QStringLiteral("length"),
-                           QStringLiteral("data"),      QStringLiteral("period_ms"), QStringLiteral("count"),
-                           QStringLiteral("name")};
+        QStringList fields{QStringLiteral("sequence"),  QStringLiteral("time"), QStringLiteral("id"),
+                           QStringLiteral("direction"), QStringLiteral("type"), QStringLiteral("length"),
+                           QStringLiteral("data")};
+        if (!m_scrolling) {
+            fields << QStringLiteral("period_ms") << QStringLiteral("count");
+        }
+        fields << QStringLiteral("name");
         if (m_showSignals) {
             fields << QStringLiteral("signals");
         }
@@ -682,10 +685,12 @@ class CanMonitorModel : public QAbstractTableModel
                            row.sent ? QStringLiteral("TX") : QStringLiteral("RX"),
                            data(index(at, Type), Qt::DisplayRole).toString(),
                            QString::number(row.frame.data.size()),
-                           row.frame.rtr ? QString() : toHexString(row.frame.data),
-                           row.intervalCount > 0 ? QString::number(row.meanInterval(), 'f', 1) : QString(),
-                           QString::number(row.count),
-                           row.name};
+                           row.frame.rtr ? QString() : toHexString(row.frame.data)};
+        if (!m_scrolling) {
+            fields << (row.intervalCount > 0 ? QString::number(row.meanInterval(), 'f', 1) : QString())
+                   << QString::number(row.count);
+        }
+        fields << row.name;
         if (m_showSignals) {
             fields << row.signalText;
         }
@@ -1165,10 +1170,12 @@ void CanMonitorWidget::updateDisplayMode()
 {
     const bool scrolling = m_displayMode->currentIndex() == 1;
     m_model->setScrolling(scrolling);
+    m_view->setColumnHidden(CanMonitorModel::Period, scrolling);
     m_view->setColumnHidden(CanMonitorModel::Count, scrolling);
     m_view->setSortingEnabled(!scrolling);
     m_sorted->sort(scrolling ? -1 : CanMonitorModel::Id, Qt::AscendingOrder);
     m_autoScroll->setEnabled(scrolling);
+    m_autoScroll->setVisible(scrolling);
     if (scrolling && m_autoScroll->isChecked()) {
         m_view->scrollToBottom();
     }

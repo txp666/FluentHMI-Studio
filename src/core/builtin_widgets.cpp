@@ -652,7 +652,7 @@ QList<WidgetMeta> commWidgets()
               described(str(QStringLiteral("canFilter"), QT_TR_NOOP("接收过滤"), QString()),
                         QStringLiteral("留空收全部；否则只收这些 ID，如 `100-1FF, 18FF50E5`")), // i18n: ignore
               described(text(QStringLiteral("canTxInitialState"), QT_TR_NOOP("发送初值映射"), QString()),
-                        QStringLiteral("每行 `目标报文=反馈报文`，如 `HMI=IO`；首次发送复制同名且编码一致的信号。" // i18n: ignore
+                        QStringLiteral("每行 `目标报文=反馈报文` 按同名信号匹配，或 `控制报文.信号=状态报文.信号`。" // i18n: ignore
                                        "未收到新鲜完整反馈则拒发；留空使用原有 DBC 初值。重连清空缓存")), // i18n: ignore
               described(integer(QStringLiteral("canTxInitialMaxAge"), QT_TR_NOOP("初值反馈最大间隔(ms)"), 2000, 1, 60000),
                         QStringLiteral("只在目标报文首次发送前检查反馈新鲜度；后续保留本连接已发送的控制状态")) // i18n: ignore

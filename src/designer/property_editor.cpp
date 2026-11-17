@@ -1556,6 +1556,10 @@ void PropertyEditor::updateVisibility()
             setRowVisible(QStringLiteral("commands"), true);
         }
     }
+    if (meta.typeName == QLatin1String("CanMonitor")) {
+        setRowVisible(QStringLiteral("autoScroll"),
+                      m_item->propertyValue(QStringLiteral("displayMode")).toString() == QLatin1String("滚动日志")); // i18n: value
+    }
     if (meta.typeName == QLatin1String("CanConfigCard")) {
         setRowVisible(QStringLiteral("canTxInitialMaxAge"),
                       !m_item->propertyValue(QStringLiteral("canTxInitialState")).toString().trimmed().isEmpty());

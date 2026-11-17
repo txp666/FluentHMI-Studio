@@ -17,8 +17,8 @@ QByteArray fixtureDbc()
     const auto outputs = [&]() {
         QString result;
         for (int bit = 36; bit < 56; ++bit) {
-            result += QStringLiteral(" SG_ B%1b%2 : %3|1@1+ (1,0) [0|0] \"\" Node\n")
-                          .arg(bit / 8).arg(bit % 8).arg(bit);
+            result +=
+                QStringLiteral(" SG_ B%1b%2 : %3|1@1+ (1,0) [0|0] \"\" Node\n").arg(bit / 8).arg(bit % 8).arg(bit);
         }
         return result;
     };
@@ -61,14 +61,20 @@ class RecordingBackend : public CanBackend
     bool opened = false;
     bool accept = true;
     QList<CanFrame> sent;
-    bool open(const CanSettings &, QString *) override { opened = true; return true; }
+    bool open(const CanSettings &, QString *) override
+    {
+        opened = true;
+        return true;
+    }
     void close() override { opened = false; }
     bool isOpen() const override { return opened; }
     QString description() const override { return QStringLiteral("recording"); }
     bool send(const CanFrame &frame, QString *error) override
     {
         if (!accept) {
-            if (error) { *error = QStringLiteral("rejected"); }
+            if (error) {
+                *error = QStringLiteral("rejected");
+            }
             return false;
         }
         sent.append(frame);
@@ -102,7 +108,9 @@ struct Fixture
     {
         file = directory.filePath(QStringLiteral("test.dbc"));
         QFile output(file);
-        if (!output.open(QIODevice::WriteOnly) || output.write(fixtureDbc()) < 0) { file.clear(); }
+        if (!output.open(QIODevice::WriteOnly) || output.write(fixtureDbc()) < 0) {
+            file.clear();
+        }
     }
 };
 
@@ -159,11 +167,21 @@ class TestCanInitialState : public QObject
         auto invalid = feedback();
         for (int kind = 0; kind < 5; ++kind) {
             invalid = feedback();
-            if (kind == 0) { invalid.rtr = true; }
-            if (kind == 1) { invalid.error = true; }
-            if (kind == 2) { invalid.extended = false; }
-            if (kind == 3) { invalid.fd = true; }
-            if (kind == 4) { invalid.data.resize(6); }
+            if (kind == 0) {
+                invalid.rtr = true;
+            }
+            if (kind == 1) {
+                invalid.error = true;
+            }
+            if (kind == 2) {
+                invalid.extended = false;
+            }
+            if (kind == 3) {
+                invalid.fd = true;
+            }
+            if (kind == 4) {
+                invalid.data.resize(6);
+            }
             state->observe(invalid, 100);
             QByteArray data(8, '\0');
             QVERIFY(!state->initialize({0x124, true}, data, 101, 2000, &error));
@@ -240,11 +258,77 @@ class TestCanInitialState : public QObject
         QCOMPARE(prepared->frame.data, QByteArray::fromHex("1100000015000000"));
     }
 
+    void explicitSignalRulesSupportRenamingRelocationAndMultipleSources()
+    {
+        const auto definitions = signalSet("BO_ 1104 Status: 8 Sensor\n"
+                                           " SG_ RedFeedback : 0|1@1+ (1,0) [0|1] \"\" Node\n"
+                                           " SG_ BlueFeedback : 15|8@0+ (1,0) [0|255] \"\" Node\n"
+                                           "BO_ 1105 OtherStatus: 8 Sensor\n"
+                                           " SG_ AuxiliaryFeedback : 4|1@1+ (1,0) [0|1] \"\" Node\n"
+                                           "BO_ 1120 Control: 8 Controller\n"
+                                           " SG_ Red : 12|1@1+ (1,0) [0|1] \"\" Node\n"
+                                           " SG_ Blue : 16|8@1+ (1,0) [0|255] \"\" Node\n"
+                                           " SG_ Auxiliary : 24|1@1+ (1,0) [0|1] \"\" Node\n");
+        QVERIFY(definitions);
+        QString error;
+        auto state = CanInitialState::build(*definitions,
+                                            QStringLiteral("Control.Red=Status.RedFeedback\n"
+                                                           "Control.Blue=Status.BlueFeedback\n"
+                                                           "Control.Auxiliary=OtherStatus.AuxiliaryFeedback"),
+                                            &error);
+        QVERIFY2(state, qPrintable(error));
+        CanFrame frame;
+        frame.id = 0x450;
+        frame.data = QByteArray::fromHex("01A6");
+        state->observe(frame, 100);
+        const QByteArray initial = QByteArray::fromHex("A000000080000000");
+        QByteArray data = initial;
+        // All configured sources must be valid before any field is copied.
+        QVERIFY(!state->initialize({0x460, false}, data, 101, 50, &error));
+        QCOMPARE(data, initial);
+        frame.id = 0x451;
+        frame.data = QByteArray::fromHex("10");
+        state->observe(frame, 120);
+        QVERIFY2(state->initialize({0x460, false}, data, 122, 50, &error), qPrintable(error));
+        QCOMPARE(data, QByteArray::fromHex("A010A60180000000"));
+        data = initial;
+        QVERIFY(!state->initialize({0x460, false}, data, 151, 50, &error));
+        QCOMPARE(data, initial);
+        for (const QString &mapping :
+             {QStringLiteral("Control.Red=Status.unknown"), QStringLiteral("Control.unknown=Status.RedFeedback"),
+              QStringLiteral("Control.Red=Status"), QStringLiteral("Control=Status.RedFeedback"),
+              QStringLiteral("Control.Red=Status."), QStringLiteral("Control.Red=Status.BlueFeedback"),
+              QStringLiteral("Control.Red=Status.RedFeedback\n460.Red=450.RedFeedback")}) {
+            QVERIFY2(!CanInitialState::build(*definitions, mapping, &error), qPrintable(mapping));
+            QVERIFY(!error.isEmpty());
+        }
+        const auto filter = CanFilter::parse(QStringLiteral("450"));
+        QVERIFY(filter);
+        QVERIFY(!state->acceptsFilter(*filter, &error));
+    }
+
+    void inlineSignalsUseTheSameExplicitMapping()
+    {
+        const auto definitions = CanSignalSet::build(nullptr, QStringLiteral("321 Feedback : 7|8@0+\n"
+                                                                             "322 Command : 8|8@1+"));
+        QVERIFY(definitions);
+        QString error;
+        auto state = CanInitialState::build(*definitions, QStringLiteral("322.Command=321.Feedback"), &error);
+        QVERIFY2(state, qPrintable(error));
+        CanFrame frame;
+        frame.id = 0x321;
+        frame.data = QByteArray::fromHex("C5");
+        state->observe(frame, 100);
+        QByteArray data(8, '\0');
+        QVERIFY(state->initialize({0x322, false}, data, 101, 2000, &error));
+        QCOMPARE(data, QByteArray::fromHex("00C5000000000000"));
+    }
+
     void invalidConfigurationRejectedBeforeOpeningHardware()
     {
         Fixture fixture;
         for (const QString &mapping : {QStringLiteral("HMI"), QStringLiteral("HMI=unknown"),
-                                      QStringLiteral("HMI=IO\nHMI=IO"), QStringLiteral("HMI=125")}) {
+                                       QStringLiteral("HMI=IO\nHMI=IO"), QStringLiteral("HMI=125")}) {
             RecordingLink link;
             auto config = settings();
             config.txInitialState = mapping;
@@ -259,7 +343,8 @@ class TestCanInitialState : public QObject
         QCOMPARE(filtered.opens, 0);
         const auto original = fixtureDbc();
         const int hmi = original.indexOf("BO_ 2147483940 HMI");
-        auto incompatible = original.left(hmi) + QByteArray(original.mid(hmi)).replace("36|1@1+ (1,0)", "36|1@1+ (2,0)");
+        auto incompatible =
+            original.left(hmi) + QByteArray(original.mid(hmi)).replace("36|1@1+ (1,0)", "36|1@1+ (2,0)");
         const auto definitions = signalSet(incompatible);
         QVERIFY(definitions);
         QVERIFY(!CanInitialState::build(*definitions, QStringLiteral("HMI=IO"), &error));

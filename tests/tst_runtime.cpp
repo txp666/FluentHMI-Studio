@@ -347,6 +347,19 @@ class TestRuntime : public QObject
         auto *follow = monitor->findChild<FluentQt::CheckBox *>("canAutoScroll");
         auto *mode = monitor->findChild<FluentQt::ComboBox *>("canDisplayMode");
         QVERIFY(view && maximum && follow && mode);
+        const auto captureMode = [&](const QString &name) {
+            const QString directory = qEnvironmentVariable("FHMI_CAN_TEST_SCREENSHOT_DIR");
+            if (!directory.isEmpty()) {
+                QVERIFY(QDir().mkpath(directory));
+                monitor->resize(1420, 340);
+                QApplication::processEvents();
+                QVERIFY(monitor->grab().save(QDir(directory).filePath(name)));
+            }
+        };
+        QVERIFY(view->isColumnHidden(7)); // period/count describe an aggregate, not an individual frame
+        QVERIFY(view->isColumnHidden(8));
+        QVERIFY(!view->isSortingEnabled());
+        QVERIFY(follow->isVisible());
         QAbstractItemModelTester tester(view->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
         QList<CanFrame> frames;
         for (int i = 0; i < 150; ++i) {
@@ -393,6 +406,8 @@ class TestRuntime : public QObject
         QVERIFY(!csv.contains("\"32\"")); // oldest retained payload was evicted
         const QStringList lines = QString::fromUtf8(csv).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
         QCOMPARE(lines.size(), 101);
+        QVERIFY(!lines.first().contains(QStringLiteral("\"period_ms\"")));
+        QVERIFY(!lines.first().contains(QStringLiteral("\"count\"")));
         for (int row = 0; row < 100; ++row) {
             const QString first = lines.at(row + 1).section(QLatin1Char(','), 0, 0);
             QCOMPARE(first, QLatin1Char('"') + view->model()->index(row, 0).data().toString() + QLatin1Char('"'));
@@ -407,11 +422,27 @@ class TestRuntime : public QObject
         QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("BB"));
         QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("152"));
         QVERIFY(!follow->isEnabled());
+        QVERIFY(!follow->isVisible());
+        QVERIFY(!view->isColumnHidden(7));
+        QVERIFY(!view->isColumnHidden(8));
+        QVERIFY(view->isSortingEnabled());
+        QVERIFY2(monitor->saveCsv(dir.filePath("summary.csv"), &error), qPrintable(error));
+        QFile summary(dir.filePath("summary.csv"));
+        QVERIFY(summary.open(QIODevice::ReadOnly));
+        const auto summaryCsv = summary.readAll();
+        QVERIFY(summaryCsv.contains("\"period_ms\",\"count\""));
+        captureMode(QStringLiteral("can-monitor-summary.png"));
         mode->setCurrentIndex(1);
         QCOMPARE(view->model()->rowCount(), 1);
         QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("BB"));
         QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("152"));
         QVERIFY(follow->isEnabled());
+        QVERIFY(follow->isVisible());
+        QVERIFY(!follow->isChecked()); // hiding it must keep the user's previous preference
+        QVERIFY(view->isColumnHidden(7));
+        QVERIFY(view->isColumnHidden(8));
+        QVERIFY(!view->isSortingEnabled());
+        captureMode(QStringLiteral("can-monitor-scrolling.png"));
         emit context.hub()->canFrames(nullptr, {next}, false);
         QTRY_COMPARE(view->model()->rowCount(), 2);
         QCOMPARE(view->model()->index(1, 0).data().toString(), QStringLiteral("153"));
@@ -608,7 +639,7 @@ class TestRuntime : public QObject
         QVERIFY(lines.first().contains(QStringLiteral("\"timestamp_ms\"")));
         for (int i = 0; i < 2; ++i) {
             const QStringList fields = lines.at(i + 1).split(QLatin1Char(','));
-            QCOMPARE(fields.size(), 11);
+            QCOMPARE(fields.size(), mode == QStringLiteral("滚动日志") ? 9 : 11);
             QCOMPARE(fields.first(), QStringLiteral("\"%1\"").arg(i + 1));
             const QString time = fields.at(1).mid(1, fields.at(1).size() - 2);
             const QString raw = fields.last().mid(1, fields.last().size() - 2);
