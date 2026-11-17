@@ -40,7 +40,7 @@ S7ConfigCardWidget::S7ConfigCardWidget(const WidgetMeta &meta, QWidget *parent) 
     m_button->setMinimumWidth(96);
     m_button->setObjectName(QStringLiteral("s7ConnectButton"));
     connect(m_button, &QPushButton::clicked, this, &S7ConfigCardWidget::toggle);
-    relayout();
+    updateMinimumHeight();
 }
 S7ConfigCardWidget::~S7ConfigCardWidget() { detach(); }
 void S7ConfigCardWidget::apply()
@@ -63,7 +63,7 @@ void S7ConfigCardWidget::refresh()
 void S7ConfigCardWidget::resizeEvent(QResizeEvent *event)
 {
     HmiWidget::resizeEvent(event);
-    relayout();
+    updateMinimumHeight();
 }
 void S7ConfigCardWidget::paintEvent(QPaintEvent *)
 {
@@ -74,7 +74,7 @@ void S7ConfigCardWidget::paintEvent(QPaintEvent *)
     painter.setBrush(dark ? QColor(255, 255, 255, 13) : QColor(255, 255, 255, 200));
     painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
 }
-void S7ConfigCardWidget::relayout()
+void S7ConfigCardWidget::arrangeForWidth(int width)
 {
     while (auto *item = m_layout->takeAt(0))
         delete item;
@@ -82,7 +82,7 @@ void S7ConfigCardWidget::relayout()
         m_layout->setColumnStretch(i, 0);
         m_layout->setRowStretch(i, 0);
     }
-    const bool wide = width() >= 760;
+    const bool wide = width >= 760;
     if (wide) {
         m_layout->addWidget(m_title, 0, 0, 1, 2);
         m_layout->addWidget(m_status, 0, 2, 1, 4);
@@ -112,10 +112,6 @@ void S7ConfigCardWidget::relayout()
         m_layout->setColumnStretch(3, 1);
         m_layout->setRowStretch(5, 1);
     }
-    m_layout->invalidate();
-    const int height = m_layout->minimumSize().height();
-    if (maximumHeight() == QWIDGETSIZE_MAX && minimumHeight() != height)
-        setMinimumHeight(height);
 }
 void S7ConfigCardWidget::onAttached()
 {
@@ -127,7 +123,7 @@ void S7ConfigCardWidget::onAttached()
                      m_status->setToolTip(status);
                      refresh();
                      if (connected)
-                         m_lastError.clear();
+                         m_errorNotice.clear();
                  }));
     live(connect(context()->s7Client(), &S7Client::errorOccurred, this,
                  [this](const QString &source, const QString &reason) {
@@ -184,11 +180,7 @@ void S7ConfigCardWidget::showFailure(const QString &reason)
 {
     m_status->setText(tr("连接失败"));
     m_status->setToolTip(reason);
-    if (reason == m_lastError && m_lastErrorAt.isValid() && m_lastErrorAt.elapsed() < 4000)
-        return;
-    m_lastError = reason;
-    m_lastErrorAt.start();
-    if (context())
+    if (context() && m_errorNotice.shouldShow(reason, 4000))
         context()->notify(text("title"), reason, NotifyType::Error, 4000);
 }
 } // namespace fhmi

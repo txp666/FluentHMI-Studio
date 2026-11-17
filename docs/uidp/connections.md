@@ -13,6 +13,8 @@
 
 `serial.parser` 和 `serial.parserConfig` 是整个工程的帧格式。卡片的 `defaultParser` 为 `"项目设置"` 时直接使用它们。某张卡要单独分帧时指定解析模式和 `properties.parserConfig`。卡片的配置为空且解析模式与工程相同时沿用工程配置，其他模式使用各自默认配置。各个属性的选项和尺寸见[控件参考](../uidp-widgets.md)。
 
+界面的「跟随工程」会标出实际解析模式。跟随 Modbus 时，角色、轮询周期或从站参数仍在卡片属性中编辑。独立的「帧格式」区域出现在可设置帧参数的文本或 HEX 模式。
+
 ## 行文本和 JSON
 
 `"line"` 默认 UTF-8 编码，以 LF 结束一条记录，逗号分项，等号分隔键和值。`temp=25.3,hum=60` 得到键 `temp`、`hum`。只有值的 `25.3,60` 得到 `ch0`、`ch1`。`separator`、`kvSeparator`、`terminator`、`encoding` 均可更改，编码可选 `utf-8`、`gbk`、`ascii`。记录两端会去除空白，默认也能接收 CRLF。
@@ -47,7 +49,7 @@ MQTT 每条消息、UDP 每个数据报都自带边界。MQTT 若只收到一个
 | 模式 | 链路与设备行为 |
 | --- | --- |
 | `"modbus"`、`"modbus_tcp"`、`"modbus_ascii"` | 分别采用 RTU、TCP、ASCII 格式。读响应带 `slave`、`fc`，以及按响应内序号命名的 `reg0` 等寄存器或 `coil0` 等线圈。当读请求由本程序发出时，还带 `start` 和按地址命名的 `hr100`、`ir100`、`co100` 或 `di100` |
-| 主站自动读取 | 卡片设置相应解析模式、控件或曲线绑定表区及地址，连接后开始轮询。`modbusPeriod` 默认 500 ms，`modbusTimeout` 默认 1000 ms，`modbusSlave` 默认 1。多张卡可轮询时，使用文档顺序里第一张符合条件且已连接的卡片 |
+| 主站自动读取 | 卡片设置相应解析模式、控件、曲线或工程数据点绑定表区及地址，连接后开始轮询。`modbusPeriod` 默认 500 ms，`modbusTimeout` 默认 1000 ms，`modbusSlave` 默认 1。空接收连接沿用原有选卡规则，指定连接后在该卡上轮询 |
 | 桌面模拟从站 | 串口、TCP 或 UDP 卡片设置 `modbusRole: "从站"`，帧格式选 RTU 或 TCP。`modbusSlave` 是本机地址，`modbusDelay` 是应答延时，设置 `modbusExceptions` 为 `false` 可忽略错误请求 |
 
 桌面从站的每个区默认从地址 0 起，共 100 项，数量 0 表示该区为空。
@@ -61,6 +63,8 @@ MQTT 每条消息、UDP 每个数据报都自带边界。MQTT 若只收到一个
 
 各项初值为 0，在 `slaveInit` 中每行写一项可设置初值，例如 `hr10=1234`。地址要落在该区配置的范围内。
 
-绑定或曲线指定的从站地址与某张从站卡一致时，从本地表取数。主站写入后控件刷新。用户操作带 Modbus 绑定的开关、滑块、数值框可以写回原值，配置换算表达式的绑定只读。功能码 05、06、16 的写命令也可更新本地表。`ModbusSlaveTable` 显示第一张从站卡的一个区（`mbArea`），双击值可修改。
+TCP 服务端只轮询在线客户端。UDP 可以轮询已知对端或主动访问配置的地址。一次读取超时或收到异常响应时，对应连接、对端、从站及地址块的工程数据点标记为未知，等下次读取成功后恢复。
+
+绑定、曲线或工程点匹配本地从站时，从该从站卡的表区取数。主站写入后控件刷新。开关、滑块和数值框可按 Modbus 绑定写回本地表，配置换算表达式的绑定只读。指定发送连接的普通命令只写向指定目标。支持的 Modbus 写命令也可更新目标连接的本地表。`ModbusSlaveTable` 在「接收连接」中选定从站卡并用 `mbArea` 选择表区，留空时沿用第一张从站卡。双击值可修改。
 
 [Modbus 取值字段](data.md) · [Modbus 写命令](commands.md) · [协议示例、读块合并和总线行为](https://github.com/txp666/PyQt-UI-Designer/blob/main/docs/protocol.md)

@@ -19,6 +19,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QMimeData>
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QTimer>
 #include <QtGui/QAction>
 #include <QtGui/QClipboard>
@@ -194,22 +195,26 @@ QString projectFilter() { return QCoreApplication::translate("fhmi", "FluentHMI 
 
 constexpr int kHistoryLimit = 100;
 
-// The widgets in clipboard text: the object copying writes, or (from plain text, such as widgets an AI wrote
-// from the .uidp guide) a bare array of widgets or one widget.
-std::optional<QJsonArray> clipboardWidgets(const QByteArray &content, bool plainText)
+// Copied widgets retain their source version. Plain snippets without a version are written for this editor.
+std::optional<QJsonObject> clipboardDocument(const QByteArray &content, bool plainText)
 {
     const QJsonDocument document = QJsonDocument::fromJson(content);
     const QJsonObject object = document.object();
+    QJsonArray widgets;
     if (document.isObject() && object.value(QStringLiteral("widgets")).isArray()) {
-        return object.value(QStringLiteral("widgets")).toArray();
+        widgets = object.value(QStringLiteral("widgets")).toArray();
+    } else if (plainText && document.isArray()) {
+        widgets = document.array();
+    } else if (plainText && document.isObject() && object.contains(QStringLiteral("type"))) {
+        widgets = {object};
+    } else {
+        return std::nullopt;
     }
-    if (plainText && document.isArray()) {
-        return document.array();
-    }
-    if (plainText && document.isObject() && object.contains(QStringLiteral("type"))) {
-        return QJsonArray{object};
-    }
-    return std::nullopt;
+    QJsonObject selection{{QStringLiteral("widgets"), widgets}};
+    selection.insert(QStringLiteral("version"), object.contains(QStringLiteral("version"))
+                                                    ? object.value(QStringLiteral("version"))
+                                                    : QJsonValue(Project::formatVersion(widgets)));
+    return selection;
 }
 
 QString rebasedPath(const QString &path, const QDir &from, const QDir &to)
@@ -298,6 +303,10 @@ void DesignerPage::buildUi()
     action(FluentIcon::Folder, tr("打开"), QKeySequence::Open, [this]() { openProject(); });
     action(FluentIcon::Save, tr("保存"), QKeySequence::Save, [this]() { save(); });
     action(FluentIcon::SaveAs, tr("另存为"), QKeySequence::SaveAs, [this]() { saveAs(); });
+    auto *logic = new FluentQt::TransparentPushButton(tr("数据与报警"), bar);
+    logic->setObjectName(QStringLiteral("projectLogicButton"));
+    connect(logic, &QPushButton::clicked, m_properties, &PropertyEditor::editProjectLogic);
+    bar->addWidget(logic);
     bar->addSeparator();
     // A focused text field takes these keys first, and keeps its own undo, copy and paste.
     m_undoAction = action(FluentIcon::Cancel, tr("撤销"), QKeySequence::Undo, [this]() { undo(); });
@@ -373,6 +382,23 @@ void DesignerPage::buildUi()
         if (m_properties->currentItem() == item) {
             m_properties->refreshGeometry();
         }
+    });
+    connect(m_scene, &DesignScene::editorPageChanged, this, [this](CanvasItem *item) {
+        m_history[m_historyIndex].editorPages.insert(item->widgetId(), item->editorPage());
+    });
+    connect(m_scene, &DesignScene::connectionRenamed, this, [this](const QString &previous, const QString &current) {
+        auto points = m_project.logic.value(QStringLiteral("points")).toArray();
+        for (int i = 0; i < points.size(); ++i) {
+            auto point = points[i].toObject();
+            auto binding = point.value(QStringLiteral("binding")).toObject();
+            if (binding.value(QStringLiteral("sourceCardId")).toString() == previous) {
+                binding.insert(QStringLiteral("sourceCardId"), current);
+                point.insert(QStringLiteral("binding"), binding);
+                points[i] = point;
+            }
+        }
+        if (!m_project.logic.isEmpty())
+            m_project.logic.insert(QStringLiteral("points"), points);
     });
     connect(m_scene, &DesignScene::modified, this, [this](const QString &key) { recordChange(key); });
     connect(m_properties, &PropertyEditor::modified, this, [this](const QString &key) {
@@ -460,7 +486,7 @@ void DesignerPage::load(const Project &project)
 
 void DesignerPage::resetHistory()
 {
-    m_history = {snapshot().toJson()};
+    m_history = {HistoryStep{snapshot().toJson(), editorPages()}};
     m_historyIndex = 0;
     m_savedIndex = 0;
     m_lastMergeKey.clear();
@@ -472,20 +498,20 @@ void DesignerPage::resetHistory()
 void DesignerPage::recordChange(const QString &mergeKey)
 {
     const QJsonObject state = snapshot().toJson();
-    if (state == m_history.at(m_historyIndex)) {
+    if (state == m_history.at(m_historyIndex).project) {
         return; // a click that moved nothing
     }
     // A burst of edits is one step, but never folded into the saved design, which undo must still reach.
     const bool merge = !mergeKey.isEmpty() && mergeKey == m_lastMergeKey && m_historyIndex > 0 &&
                        m_historyIndex + 1 == m_history.size() && m_historyIndex != m_savedIndex;
     if (merge) {
-        m_history[m_historyIndex] = state;
+        m_history[m_historyIndex] = {state, editorPages()};
     } else {
         m_history.erase(m_history.begin() + m_historyIndex + 1, m_history.end());
         if (m_savedIndex > m_historyIndex) {
             m_savedIndex = -1;
         }
-        m_history.append(state);
+        m_history.append(HistoryStep{state, editorPages()});
         ++m_historyIndex;
         if (m_history.size() > kHistoryLimit) {
             m_history.removeFirst();
@@ -512,13 +538,24 @@ void DesignerPage::redo()
     }
 }
 
+QHash<QString, int> DesignerPage::editorPages() const
+{
+    QHash<QString, int> pages;
+    for (const CanvasItem *item : m_scene->allItems()) {
+        if (item->typeName() == QLatin1String("TabWidget"))
+            pages.insert(item->widgetId(), item->editorPage());
+    }
+    return pages;
+}
+
 void DesignerPage::restore(int index)
 {
     QStringList selected;
     for (const CanvasItem *item : m_scene->selectedCanvasItems()) {
         selected.append(item->widgetId());
     }
-    Project project = Project::fromTrustedJson(m_history.at(index));
+    const auto &step = m_history.at(index);
+    Project project = Project::fromTrustedJson(step.project);
     project.filePath = m_project.filePath;
     m_properties->showItem(nullptr);
     QString error;
@@ -531,6 +568,14 @@ void DesignerPage::restore(int index)
     m_project = project;
     m_properties->setProject(&m_project);
     applyProjectSettings();
+    {
+        const QSignalBlocker blocker(m_scene);
+        for (CanvasItem *item : m_scene->allItems()) {
+            const auto it = step.editorPages.constFind(item->widgetId());
+            if (it != step.editorPages.constEnd())
+                item->setEditorPage(it.value());
+        }
+    }
     m_scene->selectIds(selected);
     const bool modified = m_historyIndex != m_savedIndex;
     setModified(modified);
@@ -561,7 +606,7 @@ void DesignerPage::copy()
         return;
     }
     const QByteArray json =
-        QJsonDocument(QJsonObject{{QStringLiteral("version"), S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0")},
+        QJsonDocument(QJsonObject{{QStringLiteral("version"), Project::formatVersion(widgets)},
                                   {QStringLiteral("widgets"), widgets}})
             .toJson(QJsonDocument::Compact);
     auto *mime = new QMimeData;
@@ -574,22 +619,22 @@ void DesignerPage::paste()
 {
     const QMimeData *mime = QGuiApplication::clipboard()->mimeData();
     QByteArray content;
-    std::optional<QJsonArray> widgets;
+    std::optional<QJsonObject> document;
     if (mime && mime->hasFormat(QLatin1String(WidgetsClipboardType))) {
         content = mime->data(QLatin1String(WidgetsClipboardType));
-        widgets = clipboardWidgets(content, false);
+        document = clipboardDocument(content, false);
     }
-    if (!widgets && mime && mime->hasText()) {
+    if (!document && mime && mime->hasText()) {
         content = mime->text().toUtf8();
-        widgets = clipboardWidgets(content, true);
+        document = clipboardDocument(content, true);
     }
     // Checked as opening a project checks them; a link card's frame format against this project's mode.
-    const QJsonObject document{
-        {QStringLiteral("version"), S7::usesS7(widgets.value_or(QJsonArray())) ? QStringLiteral("1.1") : QStringLiteral("1.0")},
-        {QStringLiteral("widgets"), widgets.value_or(QJsonArray())},
-        {QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()}}}};
-    if (!widgets || widgets->isEmpty() || !Project::validate(document, nullptr, true)) {
-        emit warning(tr("剪贴板里没有可粘贴的控件"), QString());
+    if (document)
+        document->insert(QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()}});
+    Project clipboard;
+    QString error;
+    if (!document || !Project::fromJson(*document, &clipboard, &error, true) || clipboard.widgets.isEmpty()) {
+        emit warning(tr("剪贴板里没有可粘贴的控件"), error);
         return;
     }
     const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
@@ -598,7 +643,7 @@ void DesignerPage::paste()
     m_pasteCount = content == m_pasteContent && target == m_pasteTarget ? m_pasteCount + 1 : 1;
     m_pasteContent = content;
     m_pasteTarget = target;
-    m_scene->paste(*widgets, container, m_pasteCount);
+    m_scene->paste(clipboard.widgets, container, m_pasteCount);
 }
 
 bool DesignerPage::maybeSave()
@@ -701,7 +746,8 @@ bool DesignerPage::saveTo(const QString &path)
     m_scene->setAssetBaseDir(m_project.assetBaseDir());
     // The undo steps follow too, so undoing past the save still finds the images.
     if (moved) {
-        for (QJsonObject &state : m_history) {
+        for (HistoryStep &step : m_history) {
+            QJsonObject &state = step.project;
             state.insert(QStringLiteral("widgets"),
                          rebasedImages(state.value(QStringLiteral("widgets")).toArray(), oldBase, newBase));
             const QString icon = rebasedPath(state.value(QStringLiteral("icon")).toString(), oldBase, newBase);
@@ -710,7 +756,7 @@ bool DesignerPage::saveTo(const QString &path)
             }
         }
     }
-    m_history[m_historyIndex] = project.toJson();
+    m_history[m_historyIndex].project = project.toJson();
     m_savedIndex = m_historyIndex;
     m_lastMergeKey.clear();
     setModified(false);

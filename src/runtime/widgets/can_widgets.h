@@ -3,6 +3,8 @@
 #include "comm/can/can_backend.h"
 #include "runtime/widgets/link_cards.h"
 
+class QFileDialog;
+
 class QTimer;
 
 namespace FluentQt {
@@ -18,6 +20,7 @@ namespace fhmi {
 class CanLink;
 class CanMonitorModel;
 class CanMonitorProxy;
+class CanRecorder;
 
 // The CAN card: adapter, channel (or a ZLG model, device and channel), bitrate and sample point, CAN FD and its
 // data phase. Fields the adapter cannot set are disabled with a tooltip saying why; SocketCAN shows the ip command
@@ -40,6 +43,7 @@ class CanConfigCardWidget : public LinkCardBase
 
   private:
     CanSettings settings() const;
+    void resetSamplePointOptions();
     // Shows the rows and enables the fields of the selected adapter.
     void updateAdapterUi();
     // `announce`: say why there are none (the refresh button), rather than only leave the list empty.
@@ -61,17 +65,24 @@ class CanConfigCardWidget : public LinkCardBase
     QWidget *m_channelRow = nullptr;
     FluentQt::EditableComboBox *m_channel = nullptr;
     FluentQt::ToolButton *m_refresh = nullptr;
+    FluentQt::ToolButton *m_detect = nullptr;
+    int m_scanGeneration = 0;
+    bool m_scanning = false;
     QWidget *m_zlgRow = nullptr;
     FluentQt::ComboBox *m_zlgModel = nullptr;
     FluentQt::ComboBox *m_device = nullptr;
     FluentQt::ComboBox *m_zlgChannel = nullptr;
     QWidget *m_bitrateRow = nullptr;
+    QPointer<QWidget> m_bitrateCaption;
     FluentQt::ComboBox *m_bitrate = nullptr;
     FluentQt::ComboBox *m_samplePoint = nullptr;
+    FluentQt::CaptionLabel *m_sampleCaption = nullptr;
     QWidget *m_fdRow = nullptr;
+    QPointer<QWidget> m_fdCaption;
     FluentQt::CheckBox *m_fd = nullptr;
     FluentQt::ComboBox *m_dataBitrate = nullptr;
     FluentQt::ComboBox *m_dataSamplePoint = nullptr;
+    FluentQt::CaptionLabel *m_dataSampleCaption = nullptr;
     FluentQt::LineEdit *m_customTiming = nullptr;
     QWidget *m_customRow = nullptr;
     FluentQt::PushButton *m_calculate = nullptr;
@@ -82,6 +93,7 @@ class CanConfigCardWidget : public LinkCardBase
     QTimer *m_statusTimer = nullptr;
     CanLink *m_link = nullptr;
     QString m_shownStatus;
+    QString m_connectionError;
 };
 
 // CAN summary or bounded chronological log. Both modes filter by ID/type and export the retained visible rows.
@@ -90,6 +102,7 @@ class CanMonitorWidget : public HmiWidget
 {
   public:
     CanMonitorWidget(const WidgetMeta &meta, QWidget *parent);
+    ~CanMonitorWidget() override;
     bool saveCsv(const QString &path, QString *error = nullptr);
 
   protected:
@@ -104,6 +117,11 @@ class CanMonitorWidget : public HmiWidget
     void updateFilter();
     void updateDisplayMode();
     void chooseExportFile();
+    QString recordingDirectory() const;
+    void chooseRecordingDirectory(bool change = false);
+    void showRecordingDirectoryMenu();
+    void updateRecordingControls();
+    void updateRecording();
 
     QWidget *m_filterRow = nullptr;
     FluentQt::LineEdit *m_idFilter = nullptr;
@@ -112,6 +130,13 @@ class CanMonitorWidget : public HmiWidget
     FluentQt::SpinBox *m_maxMessages = nullptr;
     FluentQt::CheckBox *m_autoScroll = nullptr;
     FluentQt::TableView *m_view = nullptr;
+    CanRecorder *m_recorder = nullptr;
+    FluentQt::CheckBox *m_autoSave = nullptr;
+    FluentQt::ToolButton *m_captureFolder = nullptr;
+    QWidget *m_fileRowsRow = nullptr;
+    FluentQt::SpinBox *m_autoSaveRows = nullptr;
+    QString m_captureDirectory;
+    QPointer<QFileDialog> m_captureDialog;
     CanMonitorModel *m_model = nullptr;
     CanMonitorProxy *m_sorted = nullptr;
     bool m_heightsQueued = false;

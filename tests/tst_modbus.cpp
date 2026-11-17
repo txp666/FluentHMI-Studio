@@ -383,7 +383,7 @@ class TestModbus : public QObject
     }
 
     // A request without a reply times out and the next one goes out; a link going down ends every
-    // request, the queued ones too, as timed out. A card can take back its reads not yet sent.
+    // request, the queued ones too, as timed out.
     void timeoutsAndDisconnects()
     {
         FakeLink link;
@@ -398,10 +398,7 @@ class TestModbus : public QObject
         QCOMPARE(results.list.at(0).problem, QStringLiteral("无响应（30 ms 超时）"));
         QCOMPARE(link.sent.last(), rtu("010300010001"));
 
-        int owner = 0;
         master->enqueue(request(1, 3, 2, 1), 500, ModbusMaster::Priority::Read, results.done());
-        master->enqueue(request(1, 3, 3, 1), 500, ModbusMaster::Priority::Read, results.done(), &owner);
-        master->cancelQueued(&owner);
         QCOMPARE(master->pending(), 1);
         link.setConnected(false);
         QCOMPARE(results.list.size(), 3);
@@ -417,14 +414,14 @@ class TestModbus : public QObject
 
     // The hub queues a Modbus command on links that parse Modbus and sends links that do not the RTU
     // frame right away; a queued command counts as accepted.
-    void hubQueuesOnModbusLinksOnly()
+    void hubRoutesWritesAndUsesEachLinksFraming()
     {
         CommHub hub;
         FakeLink plc;
         QVERIFY(plc.setParser(QStringLiteral("modbus"), {}));
         FakeLink lines; // parses lines
-        hub.addLink(&plc);
-        hub.addLink(&lines);
+        hub.addLink(&plc, QStringLiteral("PLC"));
+        hub.addLink(&lines, QStringLiteral("Lines"));
         plc.modbusMaster()->enqueue(request(1, 3, 0, 1), 1000, ModbusMaster::Priority::Read);
         QList<QByteArray> sent;
         QCOMPARE(hub.sendModbus(request(1, 6, 2, 9), &sent), 2);
@@ -435,14 +432,8 @@ class TestModbus : public QObject
         plc.inject(rtu("010302002a"));
         QCOMPARE(plc.sent.last(), rtu("010600020009"));
 
-        QList<QPointer<ModbusMaster>> queuedOn;
-        ModbusSend how;
-        how.priority = ModbusMaster::Priority::Read;
-        how.modbusLinksOnly = true;
-        how.queuedOn = &queuedOn;
-        QCOMPARE(hub.sendModbus(request(1, 3, 0, 1), nullptr, how), 1);
-        QCOMPARE(queuedOn.size(), 1);
-        QCOMPARE(queuedOn.first().data(), plc.modbusMaster());
+        QCOMPARE(hub.sendModbus(request(1, 3, 0, 1), nullptr, {QStringLiteral("PLC"), {}}), 1);
+        QCOMPARE(plc.modbusMaster()->pending(), 1);
         QCOMPARE(lines.sent.size(), 1);
         hub.removeLink(&plc);
         hub.removeLink(&lines);

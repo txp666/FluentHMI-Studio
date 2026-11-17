@@ -15,6 +15,7 @@
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QSpinBox>
 #include <QtWidgets/QTreeWidget>
 
 using namespace fhmi;
@@ -23,6 +24,35 @@ class TestIndustrial : public QObject
 {
     Q_OBJECT
   private slots:
+
+    void batteryThresholdsAndTextLockPreserveLegacyDefaults()
+    {
+        std::unique_ptr<HmiWidget> base(createHmiWidget("TractionBattery", {}));
+        auto *battery = dynamic_cast<IndustrialWidget *>(base.get());
+        BindingEntry binding;
+        battery->applyBoundValue(10, binding);
+        QVERIFY(battery->renderedSvg().contains("#3dbd84"));
+        auto props = battery->properties();
+        props.insert("chargeColors", true);
+        battery->setProperties(props);
+        battery->applyBoundValue(20, binding);
+        QVERIFY(battery->renderedSvg().contains("#e55252"));
+        battery->applyBoundValue(40, binding);
+        QVERIFY(battery->renderedSvg().contains("#e8b643"));
+        battery->applyBoundValue(41, binding);
+        QVERIFY(battery->renderedSvg().contains("#3dbd84"));
+        CanvasItem item("TractionBattery",
+                        {{"textLayout", "中心偏移"}, {"valueOffsetX", 17}, {"textPositionLocked", true}}, "battery");
+        PropertyEditor editor;
+        editor.showItem(&item);
+        editor.show();
+        bool locked = false;
+        for (auto *spin : editor.findChildren<QSpinBox *>())
+            if (spin->value() == 17)
+                locked = !spin->isEnabled();
+        QVERIFY(locked);
+        QCOMPARE(item.propertyValue("valueOffsetX").toInt(), 17);
+    }
     void initTestCase() { Q_INIT_RESOURCE(fluentqtwidgets); }
     void designerIntegration()
     {

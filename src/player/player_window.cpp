@@ -92,7 +92,7 @@ class CanvasView : public QGraphicsView
 
 } // namespace
 
-PlayerWindow::PlayerWindow(const Project &project, QWidget *parent) : FluentQt::FluentWidget(parent)
+PlayerWindow::PlayerWindow(const Project &project, QWidget *parent, bool startRuntime) : FluentQt::FluentWidget(parent)
 {
 #ifdef FHMI_CAN_DIAGNOSTICS
     setWindowTitle(project.appName + QStringLiteral(" [CAN diagnostics]"));
@@ -119,7 +119,7 @@ PlayerWindow::PlayerWindow(const Project &project, QWidget *parent) : FluentQt::
                 show(title, content, Qt::Horizontal, true, duration > 0 ? duration : 2000, InfoBarPosition::TopRight,
                      this);
             });
-    m_surface->build(project);
+    m_surface->build(project, startRuntime);
 
     QSize size(project.canvasWidth + 24, project.canvasHeight + titleBar()->height() + 24);
     if (QScreen *screen = QGuiApplication::primaryScreen()) {

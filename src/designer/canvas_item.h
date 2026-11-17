@@ -48,6 +48,13 @@ class CanvasItem : public QGraphicsObject
 
     int tabIndex() const { return m_tabIndex; }
     void setTabIndex(int index) { m_tabIndex = index; }
+    int editorPage() const { return m_editorPage; }
+    void setEditorPage(int index);
+    // Page edits keep each page's children and layout together in the existing UIDP page model.
+    int addPage(const QString &name = QString());
+    bool removePage(int index);
+    bool movePage(int from, int to);
+    bool renamePage(int index, const QString &name);
 
     QSizeF size() const { return m_size; }
     // User edits respect the widget's minimum size (minimumHeight() for the height); loading keeps what
@@ -86,6 +93,7 @@ class CanvasItem : public QGraphicsObject
   signals:
     // The user moved or resized the item, or a property changed.
     void changed(fhmi::CanvasItem *item);
+    void editorPageChanged();
 
   protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
@@ -107,6 +115,11 @@ class CanvasItem : public QGraphicsObject
     int handleAt(const QPointF &pos) const;
     QList<QPair<int, QRectF>> handleRects() const;
     void syncWidget();
+    void applyWidgetProperties();
+    void updatePages(const QStringList &names, int startup, int editor);
+    void updatePageVisibility();
+    void relayoutPages();
+    void arrangeChildren(const QList<CanvasItem *> &children, const QString &mode);
     QString layoutMode() const;
     void fitWidth(qreal available);
 
@@ -115,6 +128,7 @@ class CanvasItem : public QGraphicsObject
     QJsonObject m_properties;
     QJsonObject m_binding;
     int m_tabIndex = 0;
+    int m_editorPage = 0;
     QSizeF m_size;
     int m_gridSize = 10;
     QGraphicsProxyWidget *m_proxy = nullptr;

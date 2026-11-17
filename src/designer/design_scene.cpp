@@ -84,20 +84,20 @@ QJsonObject withFreeIds(QJsonObject widget, const QSet<QString> &taken, QSet<QSt
     return widget;
 }
 
-QJsonObject remapS7(QJsonObject widget,const QHash<QString,QString> &ids)
+QJsonObject remapConnections(QJsonObject widget,const QHash<QString,QString> &ids)
 {
     auto binding=widget.value(QStringLiteral("binding")).toObject();
     const QString source=binding.value(QStringLiteral("sourceCardId")).toString();
     if(ids.contains(source)){binding.insert(QStringLiteral("sourceCardId"),ids.value(source));widget.insert(QStringLiteral("binding"),binding);}
     auto props=widget.value(QStringLiteral("properties")).toObject();
-    for(const QString &key:{QStringLiteral("commandTargetId"),QStringLiteral("_curve_0_sourceCardId"),QStringLiteral("_curve_1_sourceCardId"),
+    for(const QString &key:{QStringLiteral("sourceCardId"),QStringLiteral("commandTargetId"),QStringLiteral("_curve_0_sourceCardId"),QStringLiteral("_curve_1_sourceCardId"),
                            QStringLiteral("_curve_2_sourceCardId"),QStringLiteral("_curve_3_sourceCardId"),QStringLiteral("_curve_4_sourceCardId"),
                            QStringLiteral("_curve_5_sourceCardId"),QStringLiteral("_curve_6_sourceCardId"),QStringLiteral("_curve_7_sourceCardId")}) {
         const QString id=props.value(key).toString();if(ids.contains(id))props.insert(key,ids.value(id));
     }
     widget.insert(QStringLiteral("properties"),props);
     auto children=widget.value(QStringLiteral("children")).toArray();
-    for(int i=0;i<children.size();++i)children[i]=remapS7(children.at(i).toObject(),ids);
+    for(int i=0;i<children.size();++i)children[i]=remapConnections(children.at(i).toObject(),ids);
     if(!children.isEmpty())widget.insert(QStringLiteral("children"),children);
     return widget;
 }
@@ -188,6 +188,7 @@ void DesignScene::adopt(CanvasItem *item)
         emit itemPropertiesChanged(changed);
         emit modified();
     });
+    connect(item, &CanvasItem::editorPageChanged, this, [this, item] { emit editorPageChanged(item); });
     for (CanvasItem *child : item->containerChildren()) {
         adopt(child);
     }
@@ -219,25 +220,30 @@ bool DesignScene::loadWidgets(const QJsonArray &widgets, QString *error)
 void DesignScene::refreshSlaveTables()
 {
     const QList<CanvasItem *> items = allItems();
-    std::optional<QJsonObject> card;
+    QList<const CanvasItem *> slaves;
     for (const CanvasItem *item : items) {
-        const bool linkCard = item->typeName() == QLatin1String("SerialConfigCard") ||
-                              item->typeName() == QLatin1String("TcpConfigCard") ||
-                              item->typeName() == QLatin1String("UdpConfigCard");
-        if (linkCard && item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave) {
-            QJsonObject props = item->meta().defaultProperties();
-            const QJsonObject own = item->properties();
-            for (auto it = own.begin(); it != own.end(); ++it) {
-                props.insert(it.key(), it.value());
-            }
-            card = props;
-            break;
+        if (supportsRouteTransport(item->typeName(), RouteTransport::ModbusSlave) &&
+            item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave) {
+            slaves.append(item);
         }
     }
     for (CanvasItem *item : items) {
-        if (item->typeName() == QLatin1String("ModbusSlaveTable")) {
-            static_cast<ModbusSlaveTableWidget *>(item->widget())->showDesign(card ? &*card : nullptr);
+        if (item->typeName() != QLatin1String("ModbusSlaveTable"))
+            continue;
+        auto *table = static_cast<ModbusSlaveTableWidget *>(item->widget());
+        const auto route = table->receiveRoute();
+        const auto card = std::find_if(slaves.cbegin(), slaves.cend(), [&route](const CanvasItem *slave) {
+            return route.endpoint.isEmpty() && route.acceptsConnection(slave->widgetId());
+        });
+        if (card == slaves.cend()) {
+            table->showDesign(nullptr);
+            continue;
         }
+        auto props = (*card)->meta().defaultProperties();
+        const auto own = (*card)->properties();
+        for (auto it = own.begin(); it != own.end(); ++it)
+            props.insert(it.key(), it.value());
+        table->showDesign(&props);
     }
 }
 
@@ -332,12 +338,13 @@ bool DesignScene::renameItem(CanvasItem *item, const QString &id, QString *error
     const QString previous=item->widgetId();
     item->setWidgetId(trimmed);
     for(auto *widget:allItems()) {
-        const auto updated=remapS7(widget->toJson(),{{previous,trimmed}});
+        const auto updated=remapConnections(widget->toJson(),{{previous,trimmed}});
         widget->setBinding(updated.value(QStringLiteral("binding")).toObject());
         const auto props=updated.value(QStringLiteral("properties")).toObject();
         for(auto it=props.begin();it!=props.end();++it)
             if(widget->propertyValue(it.key())!=it.value())widget->setPropertyValue(it.key(),it.value());
     }
+    emit connectionRenamed(previous, trimmed);
     emit modified();
     return true;
 }
@@ -443,7 +450,7 @@ QList<CanvasItem *> DesignScene::paste(const QJsonArray &widgets, CanvasItem *co
     if (pasted.isEmpty()) {
         return {};
     }
-    for(auto &widget:pasted)widget=remapS7(widget,remap);
+    for(auto &widget:pasted)widget=remapConnections(widget,remap);
     const qreal shift = qreal(m_gridSize) * step;
     const QSizeF area = container ? container->size() : QSizeF(m_canvasSize);
     QPointF topLeft = container ? QPointF(shift, shift) : bounds.topLeft() + QPointF(shift, shift);

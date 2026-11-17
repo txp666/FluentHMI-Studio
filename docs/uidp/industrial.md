@@ -107,3 +107,11 @@ FluentHMI Studio 的工业设备、工业仪表、汽车电子、电子 DIY 和�
 | `VFD` | 变频器 | Hz | 0…50 | 37.5 | 1 | — |
 | `StackLight` | 三色灯塔 | — | 0…7 | 1 | 0 | 0 全灭，1 绿，2 黄，3 绿＋黄，4 红，5 绿＋红，6 黄＋红，7 红＋黄＋绿 |
 | `DirectionalValve` | 三位四通换向阀 | — | 0…2 | 1 | 0 | 0 中位封闭，1 P→A，B→T，2 P→B，A→T |
+
+### 文字锁定与电池颜色
+
+[查看动力电池的阈值和颜色属性](../tutorials/v0.8-guide.zh.md#枚举电池变色与输入风格)
+
+`textPositionLocked` 默认 `false`，开启后锁定属性面板中的文字定位与四个偏移值；数值与位置继续保存，解锁后可再次编辑。中心偏移始终相对于控件中心，改变外框大小不会放大偏移。
+
+`TractionBattery` 的 `chargeColors` 默认 `false`，保留 0.8 之前版本的绿色填充。开启后 `chargeLow`（默认 20）与 `chargeWarning`（默认 40）划分百分比区间：读值 ≤ 低电量上限使用 `chargeLowColor`，低电量上限 < 读值 ≤ 预警上限使用 `chargeWarningColor`，更高使用 `chargeNormalColor`。默认依次为红 `#e55252`、黄 `#e8b643`、绿 `#3dbd84`；要求 0 ≤ 低电量 ≤ 预警 ≤ 100。没有有效数据时保持未知显示。

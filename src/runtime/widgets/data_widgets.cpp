@@ -943,6 +943,16 @@ void RealtimeChartWidget::clearReference()
 
 void RealtimeChartWidget::onAttached()
 {
+    live(connect(context()->projectData(), &ProjectData::valuesChanged, this, [this](const Message &values) {
+        if (!context()->isActive())
+            return;
+        for (size_t i = 0; i < m_curves.size(); ++i) {
+            const auto &binding = m_curves[i].binding;
+            if (binding.parseMode == ParseMode::DataPoint && values.contains(binding.key))
+                if (auto y = binding.chartSample(values.value(binding.key)))
+                    appendSample(int(i), *y);
+        }
+    }));
     QList<S7::Need> s7Needs;
     for(const Curve &curve:m_curves) if(curve.binding.s7) s7Needs.append({curve.binding.sourceCardId,*curve.binding.s7});
     context()->setS7CurveNeeds(this,s7Needs);
@@ -965,13 +975,13 @@ void RealtimeChartWidget::onAttached()
     }
     context()->setCurveNeeds(this, needs);
     CommHub *hub = context()->hub();
-    live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message) {
+    live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message, const DataSource &source) {
         if (!context()->isActive()) {
             return;
         }
         for (size_t i = 0; i < m_curves.size(); ++i) {
             const BindingEntry &binding = m_curves[i].binding;
-            if (!binding.usesParsedData()) {
+            if (!binding.usesParsedData() || !binding.route().accepts(source)) {
                 continue;
             }
             // A malformed sample skips this curve only; the frame's other curves still update.
@@ -980,23 +990,23 @@ void RealtimeChartWidget::onAttached()
             }
         }
     }));
-    live(connect(hub, &CommHub::rawReceived, this, [this](const QByteArray &bytes) {
+    live(connect(hub, &CommHub::rawReceived, this, [this](const QByteArray &bytes, const DataSource &source) {
         if (!context()->isActive()) {
             return;
         }
         for (size_t i = 0; i < m_curves.size(); ++i) {
             BindingEntry &binding = m_curves[i].binding;
-            if (!binding.usesRawData()) {
+            if (!binding.usesRawData() || source.canText || !binding.route().accepts(source)) {
                 continue;
             }
-            for (const QVariant &value : binding.extractAllFromRaw(bytes)) {
+            for (const QVariant &value : binding.extractAllFromRaw(bytes, source.stream)) {
                 if (const auto y = binding.chartSample(value)) {
                     appendSample(int(i), *y);
                 }
             }
         }
     }));
-    live(connect(hub, &CommHub::canFrames, this, [this](CanLink *, const QList<CanFrame> &frames, bool sent) {
+    live(connect(hub, &CommHub::canFrames, this, [this](CanLink *, const QList<CanFrame> &frames, bool sent, const DataSource &source) {
         // Only what the bus brought in, as for a control's CAN信号 binding.
         if (!m_hasCanCurves || sent || !context()->isActive()) {
             return;
@@ -1004,7 +1014,7 @@ void RealtimeChartWidget::onAttached()
         for (const CanFrame &frame : frames) {
             for (size_t i = 0; i < m_curves.size(); ++i) {
                 const BindingEntry &binding = m_curves[i].binding;
-                if (binding.parseMode != ParseMode::CanSignal) {
+                if (binding.parseMode != ParseMode::CanSignal || !binding.route().accepts(source)) {
                     continue;
                 }
                 const QVariant raw = binding.extractFromCan(frame);
@@ -1017,9 +1027,9 @@ void RealtimeChartWidget::onAttached()
             }
         }
     }));
-    live(connect(hub, &CommHub::linkDisconnected, this, [this]() {
+    live(connect(hub, &CommHub::streamClosed, this, [this](const DataSource &source) {
         for (Curve &curve : m_curves) {
-            curve.binding.resetStream();
+            curve.binding.resetStream(source.stream);
         }
     }));
 }
@@ -1080,9 +1090,9 @@ void DataTableWidget::onAttached()
     live(connect(context()->hub(), &CommHub::messageReceived, this, &DataTableWidget::onMessage));
 }
 
-void DataTableWidget::onMessage(const Message &message)
+void DataTableWidget::onMessage(const Message &message, const DataSource &source)
 {
-    if (!context() || !context()->isActive()) {
+    if (!context() || !context()->isActive() || !receiveRoute().accepts(source)) {
         return;
     }
     const int maxRows = std::max(10, integer("maxRows"));
@@ -1188,7 +1198,7 @@ void ModbusSlaveTableWidget::onDetached()
 
 void ModbusSlaveTableWidget::bindSlave()
 {
-    const QList<ModbusSlave *> slaves = context()->hub()->modbusSlaves();
+    const QList<ModbusSlave *> slaves = context()->hub()->modbusSlaves(receiveRoute());
     ModbusSlave *first = slaves.isEmpty() ? nullptr : slaves.first();
     if (first == m_slave && m_slave) {
         return;
@@ -1357,10 +1367,10 @@ void LogBoxWidget::onAttached()
     live(connect(hub, &CommHub::linkWarning, this,
                  [this](const QString &message) { appendLog(tr("警告: %1").arg(message), QStringLiteral("warn")); }));
     live(connect(hub, &CommHub::linkInfo, this, [this](const QString &message) { appendLog(message); }));
-    live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message) {
+    live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message, const DataSource &source) {
         // A slave's own change is no frame received: its requests and replies are logged instead.
-        if (context()->isActive() && !context()->hub()->isSlaveData()) {
-            appendLog(messageText(message));
+        if (context()->isActive() && !source.slaveData && receiveRoute().accepts(source)) {
+            appendLog(QStringLiteral("[%1%2] %3").arg(source.connectionId, source.endpoint.isEmpty() ? QString() : QLatin1Char('/') + source.endpoint, messageText(message)));
         }
     }));
     live(connect(hub, &CommHub::slaveLog, this, &LogBoxWidget::appendLog));
@@ -1410,16 +1420,16 @@ void DataRecvCardWidget::apply()
     m_output->document()->setMaximumBlockCount(std::max(50, integer("maxLines")));
 }
 
-QString DataRecvCardWidget::render(const QByteArray &bytes, bool received) const
+QString DataRecvCardWidget::render(const QByteArray &bytes, bool received, const DataSource &source) const
 {
     // A CAN link's frame line is text that already shows its bytes in HEX.
-    if (context()->hub()->carriesCanText()) {
+    if (source.canText) {
         return QString::fromUtf8(bytes);
     }
     if (m_hex->isChecked()) {
         return toHexString(bytes);
     }
-    QString text = received ? context()->hub()->decodeRaw(bytes) : LineParser::decode(bytes, QStringLiteral("utf-8"));
+    QString text = received ? context()->hub()->decodeRaw(bytes, source) : LineParser::decode(bytes, QStringLiteral("utf-8"));
     while (text.endsWith(QLatin1Char('\n')) || text.endsWith(QLatin1Char('\r'))) {
         text.chop(1);
     }
@@ -1442,26 +1452,27 @@ void DataRecvCardWidget::onAttached()
 {
     CommHub *hub = context()->hub();
     // << received, >> sent, --- link events ---, coloured as in PyQt UI Designer.
-    const auto traffic = [this](const QByteArray &bytes, bool received, const char *arrows, const char *color) {
-        const QString body = render(bytes, received);
+    const auto traffic = [this](const QByteArray &bytes, bool received, const char *arrows, const char *color, const DataSource &source) {
+        const QString body = render(bytes, received, source);
         if (body.isEmpty()) {
             return;
         }
         append(QStringLiteral("<span style=\"color:#9399b2\">[%1]</span> <span style=\"color:%2\">%3 %4</span>")
                    .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")), QLatin1String(color),
-                        QLatin1String(arrows).toString().toHtmlEscaped(), terminalEscape(body)));
+                        QLatin1String(arrows).toString().toHtmlEscaped(), terminalEscape(QStringLiteral("[%1%2] %3").arg(source.connectionId, source.endpoint.isEmpty() ? QString() : QLatin1Char('/') + source.endpoint, body))));
     };
     const auto event = [this](const QString &message) {
         append(QStringLiteral("<span style=\"color:#74c7ec\">[%1] --- %2 ---</span>")
                    .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss")), terminalEscape(message)));
     };
-    live(connect(hub, &CommHub::rawReceived, this, [this, traffic](const QByteArray &bytes) {
-        traffic(bytes, true, "<<", "#a6e3a1");
+    live(connect(hub, &CommHub::rawReceived, this, [this, traffic](const QByteArray &bytes, const DataSource &source) {
+        if (!receiveRoute().accepts(source)) return;
+        traffic(bytes, true, "<<", "#a6e3a1", source);
         ++m_count;
         m_counter->setText(tr("%1 条").arg(m_count));
     }));
     live(connect(hub, &CommHub::bytesSent, this,
-                 [traffic](const QByteArray &bytes) { traffic(bytes, false, ">>", "#f9e2af"); }));
+                 [this, traffic](const QByteArray &bytes, const DataSource &source) { if (receiveRoute().accepts(source)) traffic(bytes, false, ">>", "#f9e2af", source); }));
     live(connect(hub, &CommHub::linkConnected, this,
                  [event](const QString &link) { event(tr("已连接: %1").arg(link)); }));
     live(connect(hub, &CommHub::linkDisconnected, this, [event](const QString &) { event(tr("已断开")); }));
@@ -1539,12 +1550,12 @@ void DataSendCardWidget::sendInput()
         return;
     }
     CommHub *hub = context()->hub();
-    if (!hub->isConnected()) {
+    if (hub->connectedLinks(commandRoute()).isEmpty()) {
         flashTip(tr("未连接"));
         return;
     }
     // CAN links take cansend's ID#DATA; the other links get the text as always.
-    const bool can = !hub->connectedCanLinks().isEmpty();
+    const bool can = !hub->connectedCanLinks(commandRoute()).isEmpty();
     std::optional<CanFrame> frame;
     if (can) {
         frame = Can::parseSendText(input);
@@ -1554,8 +1565,10 @@ void DataSendCardWidget::sendInput()
         }
     }
     bool sent = false;
-    if (hub->hasConnectedByteLink()) {
+    const auto targets = hub->connectedLinks(commandRoute());
+    if (std::any_of(targets.cbegin(), targets.cend(), [](Link *link) { return !link->isCan(); })) {
         EncodedCommand command;
+        command.route = commandRoute();
         if (m_hex->isChecked()) {
             const auto bytes = parseHex(input);
             if (!bytes || bytes->isEmpty()) {
@@ -1572,7 +1585,7 @@ void DataSendCardWidget::sendInput()
     }
     if (frame) {
         QString error;
-        if (hub->sendCanFrame(*frame, &error) > 0) {
+        if (hub->sendCanFrame(*frame, &error, commandRoute()) > 0) {
             sent = true;
         } else if (!error.isEmpty()) {
             context()->notify(tr("提示"), error, NotifyType::Error);

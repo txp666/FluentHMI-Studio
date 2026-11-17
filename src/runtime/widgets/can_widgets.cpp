@@ -1,5 +1,10 @@
 #include "runtime/widgets/can_widgets.h"
+#include "comm/can/can_discovery.h"
+#include "runtime/app_dialog.h"
+#include "runtime/can_recorder.h"
 #include "runtime/widgets/can_timing_dialog.h"
+#include <QtCore/QCoreApplication>
+#include <QtCore/QThread>
 
 #include "comm/can/can_diagnostics.h"
 #include "comm/can/can_link.h"
@@ -29,9 +34,10 @@
 #include <QtCore/QSaveFile>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QSortFilterProxyModel>
-#include <QtCore/QTextStream>
 #include <QtCore/QTimer>
 #include <QtCore/QTimeZone>
+#include <QtCore/QUrl>
+#include <QtGui/QDesktopServices>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
@@ -109,7 +115,11 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     for (FluentQt::ComboBox *combo : {m_adapter, m_zlgModel}) {
         combo->setSizePolicy(QSizePolicy::Ignored, combo->sizePolicy().verticalPolicy());
     }
-    m_adapterRow = row({{m_adapter, 1}, {m_zlgModel, 2}});
+    m_detect = new FluentQt::ToolButton(this);
+    m_detect->setIcon(FluentQt::icon(FluentQt::FluentIcon::Search));
+    fluentToolTip(m_detect, tr("识别已连接设备"));
+    connect(m_detect, &QToolButton::clicked, this, [this] { refreshChannels(true); });
+    m_adapterRow = row({{m_adapter, 1}, {m_zlgModel, 2}, {m_detect, 0}});
     m_zlgRow = row({{new FluentQt::CaptionLabel(tr("设备"), this), 0},
                     {m_device, 1},
                     {new FluentQt::CaptionLabel(QStringLiteral("CAN"), this), 0},
@@ -130,22 +140,18 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_zlgModel->setObjectName(QStringLiteral("canZlgModel"));
     m_bitrate->setObjectName(QStringLiteral("canBitrate"));
     m_samplePoint->setObjectName(QStringLiteral("canSamplePoint"));
-    m_bitrateRow = row({{m_bitrate, 1}, {new FluentQt::CaptionLabel(tr("采样点"), this), 0}, {m_samplePoint, 1}});
+    m_sampleCaption = new FluentQt::CaptionLabel(tr("采样点"), this);
+    m_bitrateRow = row({{m_bitrate, 1}, {m_sampleCaption, 0}, {m_samplePoint, 1}});
 
     m_fd = new FluentQt::CheckBox(QStringLiteral("FD"), this);
     m_fd->setObjectName(QStringLiteral("canFd"));
     m_dataBitrate = comboOf(this, enumOptions(meta, "defaultDataBitrate"));
+    m_dataBitrate->setObjectName(QStringLiteral("canDataBitrate"));
     m_dataSamplePoint = comboOf(this, enumOptions(meta, "defaultDataSamplePoint"));
     m_dataSamplePoint->setObjectName(QStringLiteral("canDataSamplePoint"));
-    m_fdRow = row({{m_fd, 0}, {m_dataBitrate, 1}, {new FluentQt::CaptionLabel(tr("采样点"), this), 0},
-                   {m_dataSamplePoint, 1}});
-
-    // Disabled fields say why in their tooltip.
-    for (QWidget *w : {static_cast<QWidget *>(m_bitrate), static_cast<QWidget *>(m_samplePoint),
-                       static_cast<QWidget *>(m_fd), static_cast<QWidget *>(m_dataBitrate),
-                       static_cast<QWidget *>(m_dataSamplePoint), static_cast<QWidget *>(m_connect)}) {
-        fluentToolTip(w);
-    }
+    m_dataSampleCaption = new FluentQt::CaptionLabel(tr("采样点"), this);
+    m_fdRow = row({{m_fd, 0}, {m_dataBitrate, 1}, {m_dataSampleCaption, 0}, {m_dataSamplePoint, 1}});
+    fluentToolTip(m_connect);
 
     m_customTiming = new FluentQt::LineEdit(this);
     m_customTiming->setObjectName(QStringLiteral("canCustomTiming"));
@@ -177,6 +183,7 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_statusTimer->setInterval(kStatusRefreshMs);
     connect(m_statusTimer, &QTimer::timeout, this, &CanConfigCardWidget::showConnection);
     connect(m_adapter, &FluentQt::ComboBox::currentIndexChanged, this, [this]() {
+        resetSamplePointOptions();
         updateAdapterUi();
         if (isLive()) {
             refreshChannels();
@@ -220,21 +227,19 @@ void CanConfigCardWidget::apply()
     selectValue(m_device, QString::number(std::clamp(integer("defaultDeviceIndex"), 0, 15)));
     selectValue(m_zlgChannel, QString::number(std::clamp(integer("defaultChannel"), 0, 7)));
     selectValue(m_bitrate, text("defaultBitrate"));
-    selectValue(m_samplePoint, text("defaultSamplePoint"));
+    resetSamplePointOptions();
     m_fd->setChecked(flag("canFd"));
     selectValue(m_dataBitrate, text("defaultDataBitrate"));
     selectValue(m_dataSamplePoint, text("defaultDataSamplePoint"));
-    m_customTiming->setText(text("customTiming"));
+    m_customTiming->setText(text("zlgCustomTiming"));
     updatePolling();
 
     clearFields();
-    m_fdRow->hide();
-    m_hint->hide();
     addField(tr("适配器"), m_adapterRow);
     addField(tr("波特率"), m_bitrateRow);
-    if (text("displayMode") != QStringLiteral("简洁")) { // i18n: value
-        addField(tr("数据域"), m_fdRow);
-    }
+    m_bitrateCaption = m_fieldLabels.last();
+    addField(tr("数据域"), m_fdRow);
+    m_fdCaption = m_fieldLabels.last();
     addField(tr("自定义"), m_customRow);
     m_customTimingCaption = m_fieldLabels.last();
     // SocketCAN's command: shown only for that adapter (updateAdapterUi()).
@@ -255,98 +260,127 @@ CanSettings CanConfigCardWidget::settings() const
     const int index = m_channel->findText(typed);
     s.channel = index >= 0 && m_channel->itemData(index).isValid() ? m_channel->itemData(index).toString() : typed;
     s.zlgModel = selectedValue(m_zlgModel);
+    const auto caps = CanAdapter::caps(s.adapter, s.zlgModel);
     s.deviceIndex = selectedValue(m_device).toInt();
     s.channelIndex = selectedValue(m_zlgChannel).toInt();
     s.bitrate = CanBitTiming::bitrateValue(selectedValue(m_bitrate));
-    s.samplePoint = CanBitTiming::samplePointValue(selectedValue(m_samplePoint));
-    s.fd = m_fd->isChecked();
+    const QString sample = selectedValue(m_samplePoint);
+    s.standardZlgTiming = s.adapter == CanAdapter::Zlg && sample == QStringLiteral("设备标准"); // i18n: value
+    if (!s.standardZlgTiming)
+        s.samplePoint = CanBitTiming::samplePointValue(sample);
+    s.fd = caps.fdEnabled(m_fd->isChecked());
     s.dataBitrate = CanBitTiming::bitrateValue(selectedValue(m_dataBitrate));
     s.dataSamplePoint = CanBitTiming::samplePointValue(selectedValue(m_dataSamplePoint));
     s.brs = flag("canBrs");
-    s.customTiming = (s.adapter == CanAdapter::Zlg ? m_customTiming->text() : text("customTiming")).trimmed();
-    s.listenOnly = flag("listenOnly");
-    s.termination = flag("termination");
+    if (caps.customTiming)
+        s.customTiming = (s.adapter == CanAdapter::Zlg ? m_customTiming->text() : text("customTiming")).trimmed();
+    s.listenOnly = caps.listenOnly && flag("listenOnly");
+    s.termination = caps.termination && flag("termination");
+    s.autoRecover = caps.autoRecover && flag("autoRecover");
     s.txInitialState = text("canTxInitialState");
     s.txInitialMaxAgeMs = integer("canTxInitialMaxAge");
     return s;
 }
 
+void CanConfigCardWidget::resetSamplePointOptions()
+{
+    const QSignalBlocker blocker(m_samplePoint);
+    const char *field = selectedValue(m_adapter) == CanAdapter::Zlg ? "zlgSamplePoint" : "defaultSamplePoint";
+    m_samplePoint->clear();
+    addValueItems(m_samplePoint, enumOptions(meta(), field));
+    selectValue(m_samplePoint, text(field));
+}
+
 void CanConfigCardWidget::updateAdapterUi()
 {
-    const QString adapter = selectedValue(m_adapter);
-    const CanAdapterCaps caps = CanAdapter::caps(adapter, selectedValue(m_zlgModel));
+    const CanSettings configured = settings();
+    const QString &adapter = configured.adapter;
+    const CanAdapterCaps caps = CanAdapter::caps(adapter, configured.zlgModel);
+    const auto timing = CanAdapter::timingOverrides(adapter, configured.customTiming);
     const bool zlg = adapter == CanAdapter::Zlg;
+    const bool compact = text("displayMode") == QStringLiteral("简洁"); // i18n: value
     m_channelRow->setVisible(!zlg);
     m_zlgRow->setVisible(zlg);
     m_zlgModel->setVisible(zlg);
-    const bool editable = !(m_link && m_link->isConnected()); // settings are locked while connected
-    if (!caps.fd && m_fd->isChecked()) {
-        const QSignalBlocker blocker(m_fd);
-        m_fd->setChecked(false);
-    }
-    const bool custom = !settings().customTiming.isEmpty() && caps.customTiming;
-    const QString customTip = tr("使用卡片的自定义位时序");
-    const auto field = [editable](QWidget *widget, bool settable, const QString &why) {
-        widget->setEnabled(editable && settable);
-        widget->setToolTip(settable ? QString() : why);
+    m_detect->setVisible(zlg);
+    const bool editable = !(m_link && (m_link->isConnected() || m_link->isBusy())); // settings are locked while connected
+    const auto showRow = [](QWidget *row, QWidget *caption, bool visible) {
+        row->setVisible(visible);
+        if (caption)
+            caption->setVisible(visible);
     };
-    field(m_bitrate, caps.bitrate && !custom, custom ? customTip : caps.fixedTimingReason);
-    field(m_samplePoint, caps.samplePoint && !custom, custom ? customTip : caps.fixedTimingReason);
-    field(m_fd, caps.fd, tr("此适配器不支持 CAN FD"));
-    const bool fd = caps.fd && m_fd->isChecked();
-    field(m_dataBitrate, fd && !custom, custom ? customTip : tr("勾选 FD 后可选"));
-    field(m_dataSamplePoint, fd && caps.dataSamplePoint && !custom,
-          custom ? customTip : fd ? caps.fixedTimingReason : tr("勾选 FD 后可选"));
-    field(m_refresh, caps.channelList, QString());
-    m_channel->setEnabled(editable);
-    m_adapter->setEnabled(editable);
-    for (QWidget *w : {static_cast<QWidget *>(m_zlgModel), static_cast<QWidget *>(m_device),
-                       static_cast<QWidget *>(m_zlgChannel)}) {
+    const bool nominal = caps.bitrate && !timing.nominal;
+    const bool data = caps.bitrate && configured.fd && !timing.data;
+    showRow(m_bitrateRow, m_bitrateCaption, nominal);
+    showRow(m_fdRow, m_fdCaption, caps.fd && !compact);
+    m_samplePoint->setVisible(caps.samplePoint);
+    m_sampleCaption->setVisible(caps.samplePoint);
+    m_dataBitrate->setVisible(data);
+    m_dataSamplePoint->setVisible(data && caps.dataSamplePoint);
+    m_dataSampleCaption->setVisible(data && caps.dataSamplePoint);
+    m_refresh->setEnabled(editable && caps.channelList && !m_scanning);
+    m_detect->setEnabled(editable && !m_scanning);
+    for (QWidget *w : QList<QWidget *>{m_channel, m_adapter, m_zlgModel, m_device, m_zlgChannel, m_bitrate,
+                                      m_samplePoint, m_fd, m_dataBitrate, m_dataSamplePoint, m_customTiming}) {
         w->setEnabled(editable);
     }
-    m_customRow->setVisible(zlg);
-    m_customTiming->setEnabled(editable && caps.customTiming);
-    if (m_customTimingCaption) {
-        m_customTimingCaption->setVisible(zlg);
-    }
+    showRow(m_customRow, m_customTimingCaption, zlg && caps.customTiming);
     const bool socketCan = adapter == CanAdapter::SocketCan;
-    bool timingHint = false;
+    QString summary;
     bool calculator = false;
     if (socketCan) {
-        // The card's bitrate and sample points, which the interface must be set to by hand.
-        CanSettings s = settings();
+        // The operating system uses the designer's presets through this command.
+        CanSettings s = configured;
         s.bitrate = CanBitTiming::bitrateValue(text("defaultBitrate"));
         s.samplePoint = CanBitTiming::samplePointValue(text("defaultSamplePoint"));
         s.dataBitrate = CanBitTiming::bitrateValue(text("defaultDataBitrate"));
         s.dataSamplePoint = CanBitTiming::samplePointValue(text("defaultDataSamplePoint"));
-        m_hint->setText(CanAdapter::socketCanCommand(s.channel, s));
-    }
-    if (zlg) {
-        const QByteArray name = selectedValue(m_zlgModel).toLatin1();
+        summary = CanAdapter::socketCanCommand(s.channel, s);
+    } else if (zlg) {
+        const QByteArray name = configured.zlgModel.toLatin1();
         if (const zlg::Model *model = zlg::findModel(name.constData(), name.size())) {
             calculator = model->family == zlg::Family::Sja1000;
             m_customTiming->setToolTip(zlg::customTimingHint(*model));
             m_customTiming->setPlaceholderText(zlg::customTimingPlaceholder(*model));
             QString error;
-            const auto timing = zlg::channelTiming(*model, settings(), &error);
-            m_customTiming->setError(!timing && custom);
-            timingHint = model->family == zlg::Family::Sja1000 || custom;
-            m_hint->setText(timing ? timing->description : tr("位时序无效"));
-            if (!timing) {
+            const auto calculated = zlg::channelTiming(*model, configured, &error);
+            m_customTiming->setError(!calculated && timing.nominal);
+            if (calculator || timing.nominal || (compact && configured.fd))
+                summary = calculated ? calculated->description : tr("位时序无效");
+            if (!calculated) {
                 m_customTiming->setToolTip(error);
             }
         }
+    } else if (timing.nominal) {
+        if (const auto custom = CanBitTiming::parseCustom(configured.customTiming)) {
+            const quint32 clock = configured.fd ? 80000000 : 8000000;
+            summary = QStringLiteral("%1 · %2%")
+                          .arg(CanAdapter::bitrateText(custom->nominal.bitrate(clock)))
+                          .arg(custom->nominal.samplePoint() * 100, 0, 'g', 5);
+            if (configured.fd)
+                summary += QStringLiteral(" / ") + CanAdapter::bitrateText(
+                    custom->data ? custom->data->bitrate(clock) : configured.dataBitrate);
+        } else {
+            summary = tr("位时序无效");
+        }
     }
+    if (compact && configured.fd && !socketCan) {
+        if (summary.isEmpty())
+            summary = CanAdapter::bitrateText(configured.bitrate) + QLatin1Char('/') +
+                      CanAdapter::bitrateText(configured.dataBitrate);
+        summary.prepend(QStringLiteral("CAN FD · "));
+    }
+    m_calculate->setVisible(calculator);
     m_calculate->setEnabled(editable && calculator);
-    m_calculate->setToolTip(calculator ? tr("计算位时序并回填到卡片") : tr("此型号请在 ZCANPRO 中计算后粘贴结果"));
-    m_hint->setVisible(socketCan || timingHint);
+    m_calculate->setToolTip(tr("计算位时序并回填到卡片"));
+    m_hint->setText(summary);
+    showRow(m_hint, m_hintCaption, !summary.isEmpty());
     if (m_hintCaption) {
-        m_hintCaption->setVisible(socketCan || timingHint);
         if (auto *label = qobject_cast<QLabel *>(m_hintCaption.data())) {
             label->setText(socketCan ? QStringLiteral("ip link") : tr("时序"));
         }
     }
-    if (!caps.supported && !(m_link && m_link->isConnected())) {
+    if (!caps.supported && !(m_link && (m_link->isConnected() || m_link->isBusy()))) {
         m_connect->setToolTip(tr("此系统不支持 %1 适配器").arg(adapter));
     } else {
         m_connect->setToolTip(QString());
@@ -357,35 +391,77 @@ void CanConfigCardWidget::updateAdapterUi()
 void CanConfigCardWidget::refreshChannels(bool announce)
 {
     const QString adapter = selectedValue(m_adapter);
-    if (adapter == CanAdapter::Zlg) {
+    if (m_link && (m_link->isConnected() || m_link->isBusy()))
         return;
-    }
-    QString current = m_channel->currentText();
-    // A listed entry (it carries a handle) that is gone from the new list is stale; a typed channel is kept.
+    if (adapter == CanAdapter::Zlg && !announce)
+        return; // saved device choices stay stable
+    const QString current = m_channel->currentText();
     const int listed = m_channel->findText(current);
     const bool wasListed = listed >= 0 && m_channel->itemData(listed).isValid();
-    QString error;
-    const QList<CanChannel> channels = CanAdapter::channels(adapter, &error);
-    m_channel->clear();
-    for (const CanChannel &channel : channels) {
-        m_channel->addItem(channel.label, QIcon(), channel.id);
-    }
-    if (wasListed && m_channel->findText(current) < 0) {
-        current.clear();
-    }
-    if (!current.isEmpty()) {
-        m_channel->setCurrentText(current);
-    } else {
-        m_channel->setCurrentText(channels.isEmpty() ? QString() : channels.first().label);
-    }
-    // Only when asked: a project for a PEAK adapter also opens where its library is not installed.
-    if (announce && isLive()) {
-        if (!error.isEmpty()) {
-            context()->notify(tr("CAN"), error, NotifyType::Warning, 4000);
-        } else if (channels.isEmpty()) {
-            context()->notify(tr("CAN"), tr("没有找到 %1 通道").arg(adapter), NotifyType::Warning, 4000);
+    const int generation = ++m_scanGeneration;
+    struct Result
+    {
+        QList<CanChannel> channels;
+        QStringList models;
+        QString error;
+    };
+    auto result = std::make_shared<Result>();
+    auto *worker = QThread::create([adapter, result] {
+        if (adapter == CanAdapter::Zlg)
+            result->models = CanAdapter::detectedZlgModels(&result->error);
+        else
+            result->channels = CanAdapter::channels(adapter, &result->error);
+    });
+    m_scanning = true;
+    m_detect->setEnabled(false);
+    m_refresh->setEnabled(false);
+    connect(qApp, &QCoreApplication::aboutToQuit, worker, [worker] { worker->wait(); });
+    connect(worker, &QThread::finished, this, [this, adapter, current, wasListed, generation, announce, result] {
+        if (generation != m_scanGeneration)
+            return;
+        m_scanning = false;
+        updateAdapterUi();
+        if (adapter != selectedValue(m_adapter) || (m_link && (m_link->isConnected() || m_link->isBusy())))
+            return;
+        if (adapter == CanAdapter::Zlg) {
+            if (!result->models.isEmpty()) {
+                QString model = result->models.first();
+                if (result->models.size() > 1) {
+                    AppDialog dialog(tr("选择 CAN 设备"), window());
+                    dialog.setObjectName(QStringLiteral("canDevicePicker"));
+                    dialog.setPreferredSize(QSize(420, 240));
+                    dialog.viewLayout()->addWidget(new FluentQt::BodyLabel(tr("检测到的型号"), &dialog));
+                    auto *models = new FluentQt::ComboBox(&dialog);
+                    models->addItems(result->models);
+                    dialog.viewLayout()->addWidget(models);
+                    model = dialog.exec() == QDialog::Accepted ? models->currentText() : QString();
+                }
+                if (!model.isEmpty())
+                    selectValue(m_zlgModel, model);
+            }
+        } else {
+            m_channel->clear();
+            for (const auto &channel : result->channels)
+                m_channel->addItem(channel.label, QIcon(), channel.id);
+            if (!current.isEmpty() && (!wasListed || m_channel->findText(current) >= 0))
+                m_channel->setCurrentText(current);
+            else
+                m_channel->setCurrentText(result->channels.isEmpty() ? QString() : result->channels.first().label);
         }
-    }
+        if (announce && isLive()) {
+            const QString message = !result->error.isEmpty() ? result->error
+                                    : adapter == CanAdapter::Zlg
+                                        ? result->models.isEmpty()
+                                              ? tr("未识别出具体型号，请手动选择；兼容卡可能没有型号信息")
+                                              : tr("已识别型号；同型号多台设备请核对设备序号")
+                                    : result->channels.isEmpty() ? tr("没有找到 %1 通道").arg(adapter)
+                                                                 : QString();
+            if (!message.isEmpty())
+                context()->notify(tr("CAN 设备"), message, NotifyType::Info, 4000);
+        }
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
 }
 
 void CanConfigCardWidget::showTimingCalculator()
@@ -412,7 +488,7 @@ void CanConfigCardWidget::showTimingCalculator()
 void CanConfigCardWidget::onAttached()
 {
     m_link = new CanLink(this);
-    context()->hub()->addLink(m_link);
+    context()->hub()->addLink(m_link, property("fhmiWidgetId").toString());
     refreshChannels();
     live(connect(m_connect, &QPushButton::clicked, this, &CanConfigCardWidget::toggleConnection));
     live(connect(m_link, &Link::connectedChanged, this, [this](bool connected) {
@@ -425,6 +501,15 @@ void CanConfigCardWidget::onAttached()
             showCounters(QString());
         }
         showConnection();
+    }));
+    live(connect(m_link, &CanLink::lifecycleChanged, this, [this] {
+        updateAdapterUi();
+        m_connect->setEnabled(!m_link->isBusy());
+        if (m_link->isBusy()) setConnectedUi(false, m_link->isClosing() ? tr("正在断开") : tr("正在连接"));
+        else if (!m_link->isConnected()) {
+            if (m_connectionError.isEmpty()) setConnectedUi(false, tr("未连接"));
+            else showFailure(m_connectionError);
+        }
     }));
     live(connect(m_link, &CanLink::busStateChanged, this, &CanConfigCardWidget::showConnection));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
@@ -453,6 +538,7 @@ void CanConfigCardWidget::onDetached()
     }
     LinkCardBase::onDetached();
     m_shownStatus.clear();
+    m_connectionError.clear();
     showCounters(QString());
     setFieldsEnabled(true);
 }
@@ -464,6 +550,7 @@ void CanConfigCardWidget::setFieldsEnabled(bool)
 
 void CanConfigCardWidget::toggleConnection()
 {
+    m_connectionError.clear();
     if (m_link->isConnected()) {
         m_link->close();
         return;
@@ -473,13 +560,14 @@ void CanConfigCardWidget::toggleConnection()
         dbc = QDir(assetBaseDir()).absoluteFilePath(dbc);
     }
     QString error;
-    if (!m_link->open(settings(), dbc, text("canSignals"), text("canFilter"), &error)) {
+    if (!m_link->openAsync(settings(), dbc, text("canSignals"), text("canFilter"), &error)) {
         showFailure(error); // the link has logged it and toasted it too
     }
 }
 
 void CanConfigCardWidget::showFailure(const QString &reason)
 {
+    m_connectionError = reason;
     setConnectedUi(false, tr("连接失败"), reason);
     m_shownStatus.clear();
     showCounters(QString());
@@ -506,8 +594,13 @@ void CanConfigCardWidget::showConnection()
     if (m_link->busState() != CanBusState::Normal) {
         state += QStringLiteral(" · ") + canBusStateText(m_link->busState());
     }
-    const QString counters = QStringLiteral("%1 · %2").arg(tr("收 %1").arg(count(m_link->receivedCount())),
-                                                           tr("发 %1").arg(count(m_link->sentCount())));
+    QString counters = QStringLiteral("%1 · %2").arg(tr("收 %1").arg(count(m_link->receivedCount())),
+                                                     tr("发 %1").arg(count(m_link->sentCount())));
+    if (const auto load = m_link->busLoadPercent())
+        counters += tr(" · 估算负载 %1%").arg(*load, 0, 'f', 1);
+    // clang-format off
+    fluentToolTip(m_counters, tr("按本通道实际采集的收发帧和位填充上限估算；显示筛选不影响统计。未采集的错误帧、重发和其他流量不计入。自定义速率无法确定或由系统设置时不显示。"));
+    // clang-format on
     const QString tip = m_link->description() + QStringLiteral(" · ") + state + QStringLiteral(" · ") + counters;
     if (tip != m_shownStatus) {
         m_shownStatus = tip;
@@ -537,6 +630,7 @@ class CanMonitorModel : public QAbstractTableModel
         Period,
         Count,
         Name,
+        Connection,
         Signals,
     };
     // What a header click sorts by (the numbers as numbers), and how many lines a row's data takes.
@@ -633,7 +727,7 @@ class CanMonitorModel : public QAbstractTableModel
                 row.next = 0;
             }
         } else {
-            QHash<quint64, Row> grouped;
+            QHash<QPair<quint64, quint64>, Row> grouped;
             for (const Row &row : std::as_const(m_rows)) {
                 auto it = grouped.find(row.key());
                 if (it == grouped.end()) {
@@ -665,7 +759,7 @@ class CanMonitorModel : public QAbstractTableModel
         if (m_showSignals) {
             fields << QStringLiteral("signals");
         }
-        fields << QStringLiteral("timestamp_ms");
+        fields << QStringLiteral("timestamp_ms") << QStringLiteral("connection_id") << QStringLiteral("channel");
         return fields;
     }
 
@@ -674,10 +768,7 @@ class CanMonitorModel : public QAbstractTableModel
         const Row &row = m_rows.at(at);
         // Include the date, milliseconds and UTC offset. ISO text also avoids spreadsheet apps
         // interpreting the Unix-millisecond integer as an ordinary decimal or a date serial.
-        const QString time = row.frame.timestampMs > 0
-                                 ? QDateTime::fromMSecsSinceEpoch(row.frame.timestampMs, QTimeZone::systemTimeZone())
-                                       .toString(Qt::ISODateWithMs)
-                                 : QString();
+        const QString time = canCsvTime(row.frame.timestampMs);
         QStringList fields{QString::number(row.sequence),
                            time,
                            Can::idText(row.id),
@@ -693,11 +784,11 @@ class CanMonitorModel : public QAbstractTableModel
         if (m_showSignals) {
             fields << row.signalText;
         }
-        fields << QString::number(row.frame.timestampMs);
+        fields << QString::number(row.frame.timestampMs) << row.source.connectionId << row.channel;
         return fields;
     }
 
-    void add(CanLink *link, const QList<CanFrame> &frames, bool sent)
+    void add(CanLink *link, const QList<CanFrame> &frames, bool sent, const DataSource &source)
     {
 #ifdef FHMI_CAN_DIAGNOSTICS
         CanDiagnostics::record("monitor_received", {{"monitor", QString::number(quintptr(this), 16)},
@@ -708,6 +799,8 @@ class CanMonitorModel : public QAbstractTableModel
             const CanId id{frame.id, frame.extended};
             if (m_scrolling) {
                 Row fresh;
+                fresh.source = source;
+                fresh.channel = link ? link->description() : QString();
                 fresh.sent = sent;
                 fresh.id = id;
                 updateRow(fresh, frame, signalSet);
@@ -719,7 +812,7 @@ class CanMonitorModel : public QAbstractTableModel
                 m_dirty = true;
                 continue;
             }
-            const quint64 key = (id.key() << 1) | (sent ? 1 : 0);
+            const QPair<quint64, quint64> key{source.stream, (id.key() << 1) | (sent ? 1 : 0)};
             auto it = m_index.find(key);
             Row *row = nullptr;
             if (it != m_index.end()) {
@@ -728,6 +821,8 @@ class CanMonitorModel : public QAbstractTableModel
                 auto pending = m_pending.find(key);
                 if (pending == m_pending.end()) {
                     Row fresh;
+                    fresh.source = source;
+                    fresh.channel = link ? link->description() : QString();
                     fresh.sent = sent;
                     fresh.id = id;
                     fresh.name = signalSet ? signalSet->messageName(id) : QString();
@@ -879,9 +974,9 @@ class CanMonitorModel : public QAbstractTableModel
             return row.sent ? CanLink::tr("发") : CanLink::tr("收");
         case Type:
             // Not translated: these are the names the bus tools use.
-            return row.frame.rtr  ? QStringLiteral("RTR")
-                   : row.frame.fd ? (row.frame.brs ? QStringLiteral("FD BRS") : QStringLiteral("FD"))
-                                  : QStringLiteral("Data");
+            return canCsvType(row.frame);
+        case Connection:
+            return row.source.connectionId + QStringLiteral(" / ") + row.channel;
         case Name:
             return row.name;
         case Length:
@@ -914,6 +1009,8 @@ class CanMonitorModel : public QAbstractTableModel
             return CanLink::tr("方向");
         case Type:
             return CanLink::tr("类型");
+        case Connection:
+            return CanLink::tr("连接 / 通道");
         case Name:
             return CanLink::tr("名称");
         case Length:
@@ -933,6 +1030,8 @@ class CanMonitorModel : public QAbstractTableModel
   private:
     struct Row
     {
+        DataSource source;
+        QString channel;
         bool sent = false;
         CanId id;
         QString name;
@@ -947,9 +1046,9 @@ class CanMonitorModel : public QAbstractTableModel
         int intervalCount = 0;
         bool dirty = false;
 
-        quint64 key() const { return (id.key() << 1) | (sent ? 1 : 0); }
+        QPair<quint64, quint64> key() const { return {source.stream, (id.key() << 1) | (sent ? 1 : 0)}; }
         // ID order; a standard ID before the extended one of the same value, received before sent.
-        std::tuple<quint32, bool, bool> order() const { return {id.id, id.extended, sent}; }
+        std::tuple<quint32, bool, bool, QString, quint64> order() const { return {id.id, id.extended, sent, source.connectionId, source.stream}; }
         quint64 sortKey() const { return (quint64(id.id) << 2) | (quint64(id.extended) << 1) | quint64(sent); }
         // Hex bytes, BytesPerLine to a line; nothing for a remote frame, which has no data.
         QString dataText() const
@@ -1019,8 +1118,8 @@ class CanMonitorModel : public QAbstractTableModel
     }
 
     QList<Row> m_rows;
-    QHash<quint64, int> m_index;  // key -> row
-    QHash<quint64, Row> m_pending; // seen since the last refresh, not in m_rows yet
+    QHash<QPair<quint64, quint64>, int> m_index;  // key -> row
+    QHash<QPair<quint64, quint64>, Row> m_pending; // seen since the last refresh, not in m_rows yet
     std::deque<Row> m_pendingLog;
     int m_maxRows = 1000;
     quint64 m_sequence = 0;
@@ -1069,6 +1168,7 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_idFilter->setObjectName(QStringLiteral("canIdFilter"));
     m_idFilter->setPlaceholderText(tr("筛选 ID，如 100-1FF, 18FF50E5"));
     m_idFilter->setClearButtonEnabled(true);
+    fluentToolTip(m_idFilter);
     m_typeFilter = new FluentQt::ComboBox(m_filterRow);
     m_typeFilter->setObjectName(QStringLiteral("canTypeFilter"));
     // Not translated: these are the names of the type column.
@@ -1106,14 +1206,13 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     auto *limit = new QWidget(this);
     auto *limitLayout = new QHBoxLayout(limit);
     limitLayout->setContentsMargins(0, 0, 0, 0);
-    limitLayout->addWidget(new FluentQt::CaptionLabel(tr("上限"), limit));
+    limitLayout->addWidget(new FluentQt::CaptionLabel(tr("显示行数"), limit));
     m_maxMessages = new FluentQt::SpinBox(limit);
     m_maxMessages->setObjectName(QStringLiteral("canMaxMessages"));
     m_maxMessages->setRange(1, 50000);
     m_maxMessages->setKeyboardTracking(false);
     m_maxMessages->setValue(1000);
     m_maxMessages->setFixedWidth(160);
-    fluentToolTip(m_maxMessages, tr("最大报文数量，超出时移除最早记录"));
     limitLayout->addWidget(m_maxMessages);
     toolbar->addWidget(limit);
     m_autoScroll = new FluentQt::CheckBox(tr("自动滚动"), this);
@@ -1123,6 +1222,45 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     save->setObjectName(QStringLiteral("canExportCsv"));
     fluentToolTip(save, tr("导出当前筛选后的报文 (CSV)"));
     toolbar->addWidget(save);
+    m_autoSave = new FluentQt::CheckBox(tr("自动保存"), this);
+    m_autoSave->setObjectName(QStringLiteral("canAutoSave"));
+    fluentToolTip(m_autoSave, tr("完整记录所选连接的收发报文，按每文件行数分段；表格筛选和显示上限不影响保存"));
+    toolbar->addWidget(m_autoSave);
+    m_captureFolder = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Folder), this);
+    m_captureFolder->setObjectName(QStringLiteral("canCaptureFolder"));
+    m_captureFolder->setAccessibleName(tr("自动保存目录"));
+    fluentToolTip(m_captureFolder);
+    toolbar->addWidget(m_captureFolder);
+    connect(m_captureFolder, &QToolButton::clicked, this, &CanMonitorWidget::showRecordingDirectoryMenu);
+    m_fileRowsRow = new QWidget(this);
+    auto *fileRowsLayout = new QHBoxLayout(m_fileRowsRow);
+    fileRowsLayout->setContentsMargins(0, 0, 0, 0);
+    fileRowsLayout->addWidget(new FluentQt::CaptionLabel(tr("每文件行数"), m_fileRowsRow));
+    m_autoSaveRows = new FluentQt::SpinBox(m_fileRowsRow);
+    m_autoSaveRows->setObjectName(QStringLiteral("canAutoSaveRows"));
+    m_autoSaveRows->setRange(1, 1000000);
+    m_autoSaveRows->setKeyboardTracking(false);
+    m_autoSaveRows->setFixedWidth(160);
+    fileRowsLayout->addWidget(m_autoSaveRows);
+    toolbar->addWidget(m_fileRowsRow);
+    m_recorder = new CanRecorder(this);
+    connect(m_autoSave, &QCheckBox::toggled, this, [this](bool enabled) {
+        updateRecordingControls();
+        if (enabled)
+            chooseRecordingDirectory();
+        updateRecording();
+    });
+    connect(m_autoSaveRows, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        if (m_recorder->isRecording())
+            updateRecording();
+    });
+    connect(m_recorder, &CanRecorder::failed, this, [this](const QString &reason, quint64 unsaved, bool current) {
+        if (current)
+            m_autoSave->setChecked(false);
+        if (context())
+            context()->notify(current ? tr("CAN 自动保存已停止") : tr("上一段 CAN 自动保存失败"),
+                              tr("%1；%2 帧未确认保存").arg(reason).arg(unsaved), NotifyType::Error, 6000);
+    });
     layout->addLayout(toolbar);
     connect(save, &QToolButton::clicked, this, [this]() { chooseExportFile(); });
     connect(m_displayMode, &FluentQt::ComboBox::currentIndexChanged, this, [this]() { updateDisplayMode(); });
@@ -1168,6 +1306,73 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     connect(m_sorted, &QAbstractItemModel::modelReset, this, [this]() { fitRowHeights(); });
 }
 
+CanMonitorWidget::~CanMonitorWidget() { m_recorder->stop(); }
+
+QString CanMonitorWidget::recordingDirectory() const
+{
+    return m_captureDirectory.isEmpty() ? QString() : QDir(assetBaseDir()).absoluteFilePath(m_captureDirectory);
+}
+
+void CanMonitorWidget::showRecordingDirectoryMenu()
+{
+    const QString directory = recordingDirectory();
+    auto *menu = new FluentQt::RoundMenu(this);
+    connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
+    auto *open = menu->addAction(FluentQt::FluentIcon::Folder, tr("打开保存目录"));
+    open->setEnabled(!directory.isEmpty());
+    connect(open, &QAction::triggered, this, [this, directory] {
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(directory)) && context())
+            context()->notify(tr("无法打开保存目录"), directory, NotifyType::Error);
+    });
+    connect(menu->addAction(FluentQt::FluentIcon::Edit, tr("更换保存目录…")), &QAction::triggered, this,
+            [this] { chooseRecordingDirectory(true); });
+    menu->exec(m_captureFolder->mapToGlobal(QPoint(0, m_captureFolder->height())), true);
+}
+
+void CanMonitorWidget::chooseRecordingDirectory(bool change)
+{
+    if (!context() || !m_autoSave->isChecked() || m_captureDialog || (!change && !m_captureDirectory.isEmpty()))
+        return;
+    auto *dialog = new QFileDialog(this, tr("选择 CAN 自动保存目录"), recordingDirectory());
+    m_captureDialog = dialog;
+    dialog->setFileMode(QFileDialog::Directory);
+    dialog->setOption(QFileDialog::ShowDirsOnly);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QDialog::finished, this, [this, dialog](int result) {
+        m_captureDialog.clear();
+        if (result == QDialog::Accepted) {
+            const QString directory = dialog->selectedFiles().value(0);
+            if (directory != recordingDirectory()) {
+                m_captureDirectory = directory;
+                updateRecordingControls();
+                updateRecording();
+            }
+        }
+        if (m_captureDirectory.isEmpty()) {
+            m_autoSave->setChecked(false);
+        }
+    });
+    dialog->open();
+}
+
+void CanMonitorWidget::updateRecordingControls()
+{
+    const bool active = m_autoSave->isChecked();
+    m_fileRowsRow->setVisible(active);
+    m_captureFolder->setVisible(active);
+    const QString directory = recordingDirectory();
+    m_captureFolder->setToolTip(directory.isEmpty() ? tr("选择 CAN 自动保存目录") : directory);
+}
+
+void CanMonitorWidget::updateRecording()
+{
+    if (!context() || !m_autoSave->isChecked() || m_captureDirectory.isEmpty()) {
+        m_recorder->stop();
+        return;
+    }
+    m_recorder->start(recordingDirectory(), m_autoSaveRows->value());
+}
+
 void CanMonitorWidget::updateDisplayMode()
 {
     const bool scrolling = m_displayMode->currentIndex() == 1;
@@ -1194,21 +1399,15 @@ bool CanMonitorWidget::saveCsv(const QString &path, QString *error)
         }
         return false;
     }
-    QTextStream stream(&file);
-    stream.setGenerateByteOrderMark(true); // UTF-8, also readable by Excel with Chinese names/signals.
-    const auto writeRow = [&stream](QStringList fields) {
-        for (QString &field : fields) {
-            field.replace(QLatin1Char('"'), QStringLiteral("\"\""));
-            field = QLatin1Char('"') + field + QLatin1Char('"');
-        }
-        stream << fields.join(QLatin1Char(',')) << QStringLiteral("\r\n");
+    const auto writeRow = [&file](QStringList fields) {
+        const auto line = canCsvLine(std::move(fields));
+        return file.write(line) == line.size();
     };
-    writeRow(m_model->csvHeaders());
-    for (int row = 0; row < m_sorted->rowCount(); ++row) {
-        writeRow(m_model->csvRow(m_sorted->mapToSource(m_sorted->index(row, 0)).row()));
+    bool written = file.write("\xef\xbb\xbf", 3) == 3 && writeRow(m_model->csvHeaders());
+    for (int row = 0; written && row < m_sorted->rowCount(); ++row) {
+        written = writeRow(m_model->csvRow(m_sorted->mapToSource(m_sorted->index(row, 0)).row()));
     }
-    stream.flush();
-    if (stream.status() != QTextStream::Ok || !file.commit()) {
+    if (!written || !file.commit()) {
         if (error) {
             *error = file.errorString();
         }
@@ -1282,7 +1481,12 @@ void CanMonitorWidget::fitRowHeights()
 
 void CanMonitorWidget::apply()
 {
-    const QSignalBlocker modeBlock(m_displayMode), maximumBlock(m_maxMessages), scrollBlock(m_autoScroll);
+    const QSignalBlocker modeBlock(m_displayMode), maximumBlock(m_maxMessages), scrollBlock(m_autoScroll),
+        saveBlock(m_autoSave), fileRowsBlock(m_autoSaveRows);
+    m_captureDirectory = text("autoSaveDirectory").trimmed();
+    m_autoSave->setChecked(flag("autoSave"));
+    m_autoSaveRows->setValue(integer("autoSaveRows"));
+    updateRecordingControls();
     selectValue(m_displayMode, text("displayMode"));
     m_maxMessages->setValue(std::clamp(integer("maxMessages"), 1, 50000));
     m_autoScroll->setChecked(flag("autoScroll"));
@@ -1331,6 +1535,7 @@ void CanMonitorWidget::apply()
         fit(CanMonitorModel::Period, advance(QStringLiteral("0000.0"))),
         fit(CanMonitorModel::Count, advance(QStringLiteral("0,000,000"))),
         fit(CanMonitorModel::Name, advance(QStringLiteral("MessageName_00"))),
+        fit(CanMonitorModel::Connection, advance(QStringLiteral("CAN_1 / USB CAN0"))),
     };
     for (int column = 0; column < int(std::size(widths)) && column < m_model->columnCount(); ++column) {
         header->setSectionResizeMode(column, QHeaderView::Interactive);
@@ -1342,21 +1547,35 @@ void CanMonitorWidget::onAttached()
 {
     // The first CAN link to connect starts afresh; a second card connecting keeps what the first one has shown.
     live(connect(context()->hub(), &CommHub::canLinkConnected, this, [this](CanLink *link) {
-        const QList<Link *> connected = context()->hub()->connectedLinks();
+        if (!receiveRoute().accepts(link ? link->dataSource() : DataSource{})) return;
+        const QList<Link *> connected = context()->hub()->connectedLinks(receiveRoute());
         const bool others = std::any_of(connected.begin(), connected.end(),
                                         [link](const Link *other) { return other != link && other->isCan(); });
         if (!others) {
             m_model->clear();
         }
+        if (!m_recorder->isRecording())
+            updateRecording();
     }));
     live(
         connect(context()->hub(), &CommHub::canFrames, this,
-                [this](CanLink *link, const QList<CanFrame> &frames, bool sent) { m_model->add(link, frames, sent); }));
+                [this](CanLink *link, const QList<CanFrame> &frames, bool sent, const DataSource &source) {
+                    if (!receiveRoute().accepts(source)) return;
+                    m_recorder->append(frames, sent, source, link ? link->description() : QString(), link ? link->signalSet() : nullptr);
+                    m_model->add(link, frames, sent, source);
+                }));
+    live(connect(context()->hub(), &CommHub::linkDisconnected, this, [this] {
+        if (context()->hub()->connectedCanLinks(receiveRoute()).isEmpty()) m_recorder->stop();
+    }));
+    chooseRecordingDirectory();
+    updateRecording();
     m_refresh->start();
 }
 
 void CanMonitorWidget::onDetached()
 {
+    delete m_captureDialog.data();
+    m_recorder->stop();
     m_refresh->stop();
     m_model->clear();
 }

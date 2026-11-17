@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     FluentHMIStudio
-    VERSION 0.7.0
+    VERSION 0.8
     DESCRIPTION "Visual HMI designer for hardware engineers, built on FluentQtWidgets"
     HOMEPAGE_URL "https://github.com/txp666/FluentHMI-Studio"
     LANGUAGES CXX
@@ -88,6 +88,10 @@ add_library(fhmi_core STATIC
     src/core/command_encoder.h
     src/core/dbc.cpp
     src/core/dbc.h
+    src/core/value_text.cpp
+    src/core/value_text.h
+    src/core/project_logic.cpp
+    src/core/project_logic.h
     src/core/expression.cpp
     src/core/expression.h
     src/core/gbk_table.cpp
@@ -118,8 +122,12 @@ target_link_libraries(fhmi_core PUBLIC Qt6::Core)
 # ---------------------------------------------------------------------------
 add_library(fhmi_comm STATIC
     src/comm/s7/s7_client.h src/comm/s7/s7_client.cpp
+    src/comm/can/can_discovery.cpp
+    src/comm/can/can_discovery.h
     src/comm/can/can_backend.cpp
     src/comm/can/can_backend.h
+    src/comm/can/can_session.cpp
+    src/comm/can/can_session.h
     src/comm/can/can_diagnostics.cpp
     src/comm/can/can_diagnostics.h
     src/comm/can/can_initial_state.cpp
@@ -161,6 +169,9 @@ add_library(fhmi_comm STATIC
 target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort PRIVATE snap7)
 target_compile_definitions(fhmi_comm PUBLIC
     $<$<BOOL:${FHMI_CAN_DIAGNOSTICS}>:FHMI_CAN_DIAGNOSTICS=1>)
+if(WIN32)
+    target_link_libraries(fhmi_comm PRIVATE setupapi)
+endif()
 # SocketCAN needs the Linux kernel's CAN headers. The PCAN and ZLG backends build everywhere (they only load their
 # vendor libraries at connect time); CanBackend::create() offers each where its vendor supports it.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -177,12 +188,20 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/industrial_widget.h
     src/runtime/appearance.cpp
     src/runtime/appearance.h
+    src/runtime/app_dialog.cpp
+    src/runtime/app_dialog.h
+    src/runtime/date_time_input.cpp
+    src/runtime/date_time_input.h
     src/runtime/field_help.cpp
     src/runtime/field_help.h
     src/runtime/hmi_widget.cpp
     src/runtime/hmi_widget.h
     src/runtime/modbus_poller.cpp
     src/runtime/modbus_poller.h
+    src/runtime/can_recorder.cpp
+    src/runtime/can_recorder.h
+    src/runtime/project_data.cpp
+    src/runtime/project_data.h
     src/runtime/runtime_context.cpp
     src/runtime/runtime_context.h
     src/runtime/runtime_surface.cpp
@@ -199,6 +218,8 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/container_widgets.h
     src/runtime/widgets/data_widgets.cpp
     src/runtime/widgets/data_widgets.h
+    src/runtime/widgets/alarm_widgets.cpp
+    src/runtime/widgets/alarm_widgets.h
     src/runtime/widgets/display_widgets.cpp
     src/runtime/widgets/display_widgets.h
     src/runtime/widgets/link_cards.cpp
@@ -214,6 +235,8 @@ add_library(fhmi_designer STATIC
     src/designer/canvas_item.h
     src/designer/design_scene.cpp
     src/designer/design_scene.h
+    src/designer/project_logic_dialog.cpp
+    src/designer/project_logic_dialog.h
     src/designer/property_editor.cpp
     src/designer/property_editor.h
     src/designer/widget_palette.cpp
@@ -328,6 +351,11 @@ foreach(target IN ITEMS FluentHMIStudio FluentHMIRuntime)
     elseif(WIN32)
         set(FHMI_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/resources/logo.ico")
         set(FHMI_TARGET ${target})
+        # Windows numeric version resources need a patch component even for X.Y versions.
+        set(FHMI_WINDOWS_PATCH "${PROJECT_VERSION_PATCH}")
+        if(FHMI_WINDOWS_PATCH STREQUAL "")
+            set(FHMI_WINDOWS_PATCH 0)
+        endif()
         if(target STREQUAL "FluentHMIStudio")
             set(FHMI_DESCRIPTION "FluentHMI Studio")
         else()

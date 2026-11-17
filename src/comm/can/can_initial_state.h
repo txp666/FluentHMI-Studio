@@ -11,8 +11,9 @@ class CanInitialState
   public:
     static std::optional<CanInitialState> build(const CanSignalSet &signalSet, const QString &mapping, QString *error);
     bool acceptsFilter(const CanFilter &filter, QString *error) const;
-    void observe(const CanFrame &frame, qint64 nowMs);
+    void observe(const CanFrame &frame, qint64 receivedAtMs);
     void clearReceived();
+    bool hasRule(const CanId &target) const { return m_rules.contains(target.key()); }
     // No rule: leaves the DBC initial state intact. A configured rule with no fresh complete feedback fails.
     bool initialize(const CanId &target, QByteArray &data, qint64 nowMs, int maxAgeMs, QString *error) const;
 
@@ -34,7 +35,7 @@ class CanInitialState
         CanId id;
         QString name;
         int length = 0;
-        bool fd = false;
+        std::optional<bool> fd; // DBC specifies the format; short inline signals allow classic CAN or CAN FD
         bool received = false;
         QByteArray data;
         qint64 receivedAt = 0;

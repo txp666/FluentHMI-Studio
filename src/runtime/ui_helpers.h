@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QStringList>
+#include <QtGui/QColor>
 #include <QtGui/QIcon>
 
 class QAbstractButton;
@@ -23,6 +25,9 @@ void keepSquareBeside(QAbstractButton *button, QWidget *field);
 // empty one shows nothing. Sets the tooltip too when text is given.
 void fluentToolTip(QWidget *widget, const QString &text = QString());
 
+// Uses the same Fluent picker as the settings page. Cancelling returns an invalid color.
+QColor chooseColor(const QColor &initial, const QString &title, QWidget *parent);
+
 // An image file as an icon, every size an .ico holds included, or a null icon when it cannot be read.
 // QIcon(path) decodes a JPEG at the size asked for, squashing a photo that is not square.
 QIcon iconFromFile(const QString &path);
@@ -34,5 +39,18 @@ void addValueItems(FluentQt::ComboBox *combo, const QStringList &values);
 QString selectedValue(const FluentQt::ComboBox *combo);
 // Selects the item holding `value` and returns whether there is one.
 bool selectValue(FluentQt::ComboBox *combo, const QString &value);
+void showInheritedParser(FluentQt::ComboBox *combo, const QString &projectType);
+
+// Keep one copy of the same error visible for the lifetime of a notification.
+class ConnectionErrorNotice
+{
+  public:
+    bool shouldShow(const QString &message, int durationMs);
+    void clear() { m_shownAt.invalidate(); }
+
+  private:
+    QString m_message;
+    QElapsedTimer m_shownAt;
+};
 
 } // namespace fhmi

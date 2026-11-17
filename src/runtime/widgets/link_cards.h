@@ -2,8 +2,7 @@
 
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
-
-#include <QtCore/QElapsedTimer>
+#include "runtime/ui_helpers.h"
 
 class QGridLayout;
 
@@ -44,6 +43,7 @@ class LinkCardBase : public HmiWidget
 {
   public:
     LinkCardBase(const WidgetMeta &meta, QWidget *parent);
+    bool fitsContentHeight() const override { return true; }
 
   protected:
     void paintEvent(QPaintEvent *event) override;
@@ -69,8 +69,6 @@ class LinkCardBase : public HmiWidget
     void finishFields();
     // The button at `column` of a single-row strip, then the same minimum height.
     void finishStrip(int column);
-    // Re-measure after an adapter changes which configuration rows are visible.
-    void updateMinimumHeight();
     // One flyout for a repeated driver error while its previous notification is still visible.
     void notifyError(const QString &title, const QString &message, int durationMs = 4000);
 
@@ -93,8 +91,7 @@ class LinkCardBase : public HmiWidget
     bool m_connected = false;
     QString m_connection; // what the status line says about the connection
     QString m_connectionTip;
-    QString m_lastError;
-    QElapsedTimer m_lastErrorAt;
+    ConnectionErrorNotice m_errorNotice;
 };
 
 class SerialConfigCardWidget : public LinkCardBase

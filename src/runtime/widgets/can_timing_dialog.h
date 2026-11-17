@@ -1,8 +1,7 @@
 #pragma once
 
 #include "comm/can/zlg_timing.h"
-
-#include <QtWidgets/QDialog>
+#include "runtime/app_dialog.h"
 
 class QCheckBox;
 class QDoubleSpinBox;
@@ -16,7 +15,7 @@ namespace fhmi {
 
 // Built-in SJA1000 calculator. Selecting a result only fills the card; opening/restarting hardware is left
 // to its normal Connect action. Other ZLG models retain their own calculator-string input.
-class CanTimingDialog : public QDialog
+class CanTimingDialog : public AppDialog
 {
     Q_OBJECT
 

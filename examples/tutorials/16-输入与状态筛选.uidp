@@ -1,0 +1,378 @@
+{
+  "version": "1.3",
+  "appName": "输入与状态筛选",
+  "canvas": {
+    "width": 1120,
+    "height": 805,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line",
+    "parserConfig": {
+      "separator": ","
+    }
+  },
+  "logic": {
+    "points": [
+      {
+        "name": "演示温度",
+        "expression": "85"
+      },
+      {
+        "name": "设备压力",
+        "binding": {
+          "key": "pressure"
+        }
+      }
+    ],
+    "alarms": [
+      {
+        "id": "温度过高",
+        "condition": "T[\"演示温度\"] > 80",
+        "level": 3,
+        "text": "演示：温度 85 ℃，超过阈值 80 ℃",
+        "ackRequired": true
+      },
+      {
+        "id": "压力过高",
+        "condition": "T[\"设备压力\"] > 1.2",
+        "level": 2,
+        "text": "未连接设备，等待压力数据",
+        "ackRequired": true
+      }
+    ]
+  },
+  "widgets": [
+    {
+      "type": "Label",
+      "id": "heading",
+      "geometry": {
+        "x": 24,
+        "y": 18,
+        "w": 1060,
+        "h": 28
+      },
+      "properties": {
+        "text": "输入与状态筛选",
+        "fontSize": 23,
+        "bold": true
+      }
+    },
+    {
+      "type": "Label",
+      "id": "intro",
+      "geometry": {
+        "x": 24,
+        "y": 57,
+        "w": 1060,
+        "h": 28
+      },
+      "properties": {
+        "text": "无需硬件。修改输入、切换选择。点击报警列表「筛选」查看组合条件，圆形信息图标提供说明。",
+        "fontSize": 13,
+        "bold": false
+      }
+    },
+    {
+      "type": "Label",
+      "id": "numbers",
+      "geometry": {
+        "x": 24,
+        "y": 105,
+        "w": 300,
+        "h": 28
+      },
+      "properties": {
+        "text": "小数数值框",
+        "fontSize": 16,
+        "bold": true
+      }
+    },
+    {
+      "type": "Label",
+      "id": "temperature_title",
+      "geometry": {
+        "x": 24,
+        "y": 140,
+        "w": 280,
+        "h": 28
+      },
+      "properties": {
+        "text": "温度设定 · 0.5 ℃ 一格",
+        "fontSize": 12,
+        "bold": false
+      }
+    },
+    {
+      "type": "SpinBox",
+      "id": "temperature",
+      "geometry": {
+        "x": 24,
+        "y": 174,
+        "w": 285,
+        "h": 38
+      },
+      "properties": {
+        "numberMode": "小数",
+        "decimals": 1,
+        "minimum": 0,
+        "maximum": 100,
+        "value": 23.5,
+        "singleStep": 0.5,
+        "suffix": "℃"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "gain_title",
+      "geometry": {
+        "x": 24,
+        "y": 221,
+        "w": 285,
+        "h": 28
+      },
+      "properties": {
+        "text": "比例系数 · 保留六位小数",
+        "fontSize": 12,
+        "bold": false
+      }
+    },
+    {
+      "type": "SpinBox",
+      "id": "gain",
+      "geometry": {
+        "x": 24,
+        "y": 255,
+        "w": 285,
+        "h": 38
+      },
+      "properties": {
+        "numberMode": "小数",
+        "decimals": 6,
+        "minimum": 0,
+        "maximum": 10,
+        "value": 0.123456,
+        "singleStep": 1e-06
+      }
+    },
+    {
+      "type": "Label",
+      "id": "choices",
+      "geometry": {
+        "x": 368,
+        "y": 105,
+        "w": 360,
+        "h": 28
+      },
+      "properties": {
+        "text": "同一组选择 · 三种样式",
+        "fontSize": 16,
+        "bold": true
+      }
+    },
+    {
+      "type": "ComboBox",
+      "id": "mode_0",
+      "geometry": {
+        "x": 368,
+        "y": 145,
+        "w": 350,
+        "h": 38
+      },
+      "properties": {
+        "selectionStyle": "下拉框",
+        "items": "手动\n自动\n维护",
+        "commands": "0\n1\n2",
+        "currentIndex": 1
+      }
+    },
+    {
+      "type": "ComboBox",
+      "id": "mode_1",
+      "geometry": {
+        "x": 368,
+        "y": 199,
+        "w": 350,
+        "h": 38
+      },
+      "properties": {
+        "selectionStyle": "分段",
+        "items": "手动\n自动\n维护",
+        "commands": "0\n1\n2",
+        "currentIndex": 1
+      }
+    },
+    {
+      "type": "ComboBox",
+      "id": "mode_2",
+      "geometry": {
+        "x": 368,
+        "y": 255,
+        "w": 350,
+        "h": 38
+      },
+      "properties": {
+        "selectionStyle": "单选组",
+        "items": "手动\n自动\n维护",
+        "commands": "0\n1\n2",
+        "currentIndex": 1
+      }
+    },
+    {
+      "type": "Label",
+      "id": "switches",
+      "geometry": {
+        "x": 772,
+        "y": 105,
+        "w": 300,
+        "h": 28
+      },
+      "properties": {
+        "text": "开关与复选框",
+        "fontSize": 16,
+        "bold": true
+      }
+    },
+    {
+      "type": "ToggleSwitch",
+      "id": "switch",
+      "geometry": {
+        "x": 772,
+        "y": 151,
+        "w": 300,
+        "h": 36
+      },
+      "properties": {
+        "label": "设备使能",
+        "checked": true,
+        "commandNewline": "无"
+      }
+    },
+    {
+      "type": "ToggleSwitch",
+      "id": "checkbox",
+      "geometry": {
+        "x": 772,
+        "y": 205,
+        "w": 300,
+        "h": 36
+      },
+      "properties": {
+        "label": "允许报警",
+        "checked": true,
+        "switchStyle": "复选框",
+        "commandNewline": "无"
+      }
+    },
+    {
+      "type": "Label",
+      "id": "switch_hint",
+      "geometry": {
+        "x": 772,
+        "y": 262,
+        "w": 300,
+        "h": 28
+      },
+      "properties": {
+        "text": "共用开启判定与开／关命令",
+        "fontSize": 12,
+        "bold": false
+      }
+    },
+    {
+      "type": "Label",
+      "id": "status",
+      "geometry": {
+        "x": 24,
+        "y": 320,
+        "w": 1050,
+        "h": 28
+      },
+      "properties": {
+        "text": "紧凑状态徽标 · 复用枚举映射",
+        "fontSize": 16,
+        "bold": true
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "badge_0",
+      "geometry": {
+        "x": 24,
+        "y": 359,
+        "w": 340,
+        "h": 48
+      },
+      "properties": {
+        "title": "电机状态",
+        "displayStyle": "状态徽标",
+        "displayFormat": "枚举",
+        "textList": "0=待机|#626262\n1=运行|#107c10\n2=故障|#d13438",
+        "value": "1",
+        "unit": ""
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "badge_1",
+      "geometry": {
+        "x": 394,
+        "y": 359,
+        "w": 340,
+        "h": 48
+      },
+      "properties": {
+        "title": "运行模式",
+        "displayStyle": "状态徽标",
+        "displayFormat": "枚举",
+        "textList": "0=待机|#626262\n1=运行|#107c10\n2=故障|#d13438",
+        "value": "0",
+        "unit": ""
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "badge_2",
+      "geometry": {
+        "x": 764,
+        "y": 359,
+        "w": 340,
+        "h": 48
+      },
+      "properties": {
+        "title": "设备故障",
+        "displayStyle": "状态徽标",
+        "displayFormat": "枚举",
+        "textList": "0=待机|#626262\n1=运行|#107c10\n2=故障|#d13438",
+        "value": "2",
+        "unit": ""
+      }
+    },
+    {
+      "type": "Label",
+      "id": "alarm_heading",
+      "geometry": {
+        "x": 24,
+        "y": 433,
+        "w": 1050,
+        "h": 28
+      },
+      "properties": {
+        "text": "报警列表 · 关键词、级别、状态与时间筛选",
+        "fontSize": 16,
+        "bold": true
+      }
+    },
+    {
+      "type": "AlarmList",
+      "id": "alarm_list",
+      "geometry": {
+        "x": 24,
+        "y": 470,
+        "w": 1072,
+        "h": 310
+      },
+      "properties": {}
+    }
+  ]
+}

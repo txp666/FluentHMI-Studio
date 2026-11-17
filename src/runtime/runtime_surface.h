@@ -21,8 +21,8 @@ class RuntimeSurface : public QWidget
     explicit RuntimeSurface(QWidget *parent = nullptr);
     ~RuntimeSurface() override;
 
-    // Replaces whatever ran before. Widgets that fail to build are skipped.
-    void build(const Project &project);
+    // The export self-check builds the same window without attaching or starting services.
+    void build(const Project &project, bool startRuntime = true);
     void clear();
 
     RuntimeContext *context() const { return m_context; }

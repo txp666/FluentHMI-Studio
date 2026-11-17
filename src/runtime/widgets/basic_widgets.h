@@ -2,12 +2,19 @@
 
 #include "runtime/hmi_widget.h"
 
+class QAbstractSpinBox;
+class QButtonGroup;
+
 namespace FluentQt {
 class BodyLabel;
 class CaptionLabel;
+class CheckBox;
 class ComboBox;
+class DoubleSpinBox;
 class LineEdit;
 class PushButton;
+class SegmentedWidget;
+class SingleDirectionScrollArea;
 class Slider;
 class SpinBox;
 class SwitchButton;
@@ -23,10 +30,13 @@ class PushButtonWidget : public HmiWidget
 
   protected:
     void apply() override;
-    void onAttached() override;
 
   private:
+    void setButtonStyle(const QString &style);
+    void sendCommand();
+
     FluentQt::PushButton *m_button = nullptr;
+    QString m_buttonStyle;
 };
 
 class LabelWidget : public HmiWidget
@@ -64,10 +74,23 @@ class ComboBoxWidget : public HmiWidget
 
   protected:
     void apply() override;
-    void onAttached() override;
 
   private:
+    void rebuildSelection(const QString &style, const QStringList &items);
+    void setCurrentIndex(int index);
+    void selectIndex(int index);
+    void ensureSelectionVisible();
+
+    QWidget *m_selection = nullptr;
+    FluentQt::SingleDirectionScrollArea *m_selectionScroll = nullptr;
     FluentQt::ComboBox *m_combo = nullptr;
+    FluentQt::SegmentedWidget *m_segmented = nullptr;
+    QButtonGroup *m_radioGroup = nullptr;
+    QString m_selectionStyle;
+    QStringList m_items;
+    int m_currentIndex = -1;
+    int m_configuredIndex = 0;
+    bool m_applied = false;
 };
 
 class ToggleSwitchWidget : public HmiWidget
@@ -78,11 +101,20 @@ class ToggleSwitchWidget : public HmiWidget
 
   protected:
     void apply() override;
-    void onAttached() override;
 
   private:
+    void setSwitchStyle(const QString &style);
+    void setChecked(bool checked);
+    void checkedEdited(bool checked);
+
+    QWidget *m_control = nullptr;
     FluentQt::BodyLabel *m_label = nullptr;
     FluentQt::SwitchButton *m_switch = nullptr;
+    FluentQt::CheckBox *m_checkBox = nullptr;
+    QString m_switchStyle;
+    bool m_checked = false;
+    bool m_configuredChecked = false;
+    bool m_applied = false;
 };
 
 class SliderWidget : public HmiWidget
@@ -117,10 +149,18 @@ class SpinBoxWidget : public HmiWidget
 
   protected:
     void apply() override;
-    void onAttached() override;
 
   private:
+    void setNumberMode(bool decimal);
+    void setValue(double value);
+    void valueEdited(double value);
+
+    QAbstractSpinBox *m_editor = nullptr;
     FluentQt::SpinBox *m_spin = nullptr;
+    FluentQt::DoubleSpinBox *m_doubleSpin = nullptr;
+    double m_value = 0;
+    double m_configuredValue = 0;
+    bool m_applied = false;
 };
 
 } // namespace fhmi

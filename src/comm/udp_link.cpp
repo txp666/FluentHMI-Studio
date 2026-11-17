@@ -1,7 +1,11 @@
 #include "comm/udp_link.h"
 
+#include <QtCore/QUrl>
+
 #include <QtNetwork/QHostInfo>
 #include <QtNetwork/QNetworkDatagram>
+
+#include <optional>
 
 namespace fhmi {
 
@@ -15,6 +19,16 @@ constexpr int kSendBuffer = 65536 + 1024;
 QString streamKey(const QHostAddress &address, quint16 port)
 {
     return address.toString() + QLatin1Char('|') + QString::number(port);
+}
+
+std::optional<QPair<QHostAddress, quint16>> explicitPeer(const QString &endpoint)
+{
+    const QUrl url(QStringLiteral("udp://") + endpoint);
+    const QHostAddress address(url.host());
+    const int port = url.port();
+    if (!url.isValid() || address.isNull() || port < 1 || port > 65535)
+        return std::nullopt;
+    return QPair<QHostAddress, quint16>{address, quint16(port)};
 }
 
 } // namespace
@@ -112,12 +126,27 @@ QString UdpLink::description() const
     return QStringLiteral("UDP :%1 → %2").arg(m_socket.localPort()).arg(remote);
 }
 
+QStringList UdpLink::sendEndpoints() const
+{
+    if (!m_remote.isNull()) return {networkEndpoint(m_remote.toString(), m_remotePort)};
+    if (m_hasLastSender) return {networkEndpoint(m_lastAddress.toString(), m_lastPort)};
+    return {};
+}
+
+bool UdpLink::canSendTo(const QString &endpoint) const
+{
+    return endpoint.isEmpty() ? canSend() : m_open && explicitPeer(endpoint).has_value();
+}
+
+qint64 UdpLink::writeTo(const QByteArray &bytes, const QString &endpoint)
+{
+    if (endpoint.isEmpty()) return writeBytes(bytes);
+    const auto peer = explicitPeer(endpoint);
+    return peer ? writeTo(bytes, peer->first, peer->second) : -1;
+}
+
 qint64 UdpLink::writeBytes(const QByteArray &bytes)
 {
-    if (bytes.size() > MaxDatagram) {
-        emit errorOccurred(tr("UDP 数据报过大: %1 字节（最多 65507）").arg(bytes.size()));
-        return WriteFailureReported;
-    }
     if (!m_remote.isNull()) {
         return writeTo(bytes, m_remote, m_remotePort);
     }
@@ -140,6 +169,10 @@ qint64 UdpLink::writeReply(Parser *parser, const QByteArray &bytes)
 
 qint64 UdpLink::writeTo(const QByteArray &bytes, const QHostAddress &address, quint16 port)
 {
+    if (bytes.size() > MaxDatagram) {
+        emit errorOccurred(tr("UDP 数据报过大: %1 字节（最多 65507）").arg(bytes.size()));
+        return WriteFailureReported;
+    }
     m_writing = true;
     const qint64 written = m_socket.writeDatagram(bytes, address, port);
     m_writing = false;
@@ -180,16 +213,19 @@ void UdpLink::receive(const QHostAddress &sender, quint16 senderPort, const QByt
         if (m_streams.size() >= kMaxStreams) {
             dropStreams();
         }
-        it = m_streams.insert(key, {sender, senderPort, std::shared_ptr<Parser>(createStreamParser())});
+        const QString endpoint = networkEndpoint(sender.toString(), senderPort);
+        it = m_streams.insert(key, {sender, senderPort, std::shared_ptr<Parser>(createStreamParser(endpoint))});
+        registerStream(it->parser.get(), endpoint);
     }
     const std::shared_ptr<Parser> parser = it->parser; // a slot may close the link and drop the streams
     if (!parser) {
-        emit rawReceived(data);
+        emit rawReceived(data, dataSource(parser.get()));
         return;
     }
+    const DataSource source = dataSource(parser.get());
     // Each datagram is a whole record: a line parser gets its terminator if it is missing.
     const QByteArray terminator = parserType() == QLatin1String("line") ? lineTerminator(parserConfig()) : QByteArray();
-    const auto report = [this, &parser, &terminator](const QList<QByteArray> &units) {
+    const auto report = [this, &parser, &terminator, source](const QList<QByteArray> &units) {
         if (terminator.isEmpty()) {
             deliverUnits(parser.get(), units);
             return;
@@ -199,9 +235,9 @@ void UdpLink::receive(const QHostAddress &sender, quint16 senderPort, const QByt
             messages.append(parser->parse(unit.endsWith(terminator) ? unit : unit + terminator));
         }
         for (int i = 0; i < units.size(); ++i) {
-            emit rawReceived(units.at(i));
+            emit rawReceived(units.at(i), source);
             for (const Message &message : messages.at(i)) {
-                emit messageReceived(message);
+                emit messageReceived(message, source);
             }
         }
     };

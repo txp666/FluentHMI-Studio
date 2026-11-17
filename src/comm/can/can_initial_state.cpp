@@ -91,7 +91,9 @@ std::optional<CanInitialState> CanInitialState::build(const CanSignalSet &signal
             Source &entry = result.m_sources[source->id.key()];
             entry.id = source->id;
             entry.name = inputRef.first;
-            entry.fd = source->fd;
+            if (!source->name.isEmpty() || source->fd) {
+                entry.fd = source->fd;
+            }
             entry.length = std::max(entry.length, input.bytesNeeded());
             return true;
         };
@@ -139,17 +141,18 @@ bool CanInitialState::acceptsFilter(const CanFilter &filter, QString *error) con
     return true;
 }
 
-void CanInitialState::observe(const CanFrame &frame, qint64 nowMs)
+void CanInitialState::observe(const CanFrame &frame, qint64 receivedAtMs)
 {
     auto found = m_sources.find(CanId{frame.id, frame.extended}.key());
-    if (found == m_sources.end() || frame.error || frame.rtr || frame.fd != found->fd ||
+    if (found == m_sources.end() || receivedAtMs < 0 || frame.error || frame.rtr ||
+        (found->fd && frame.fd != *found->fd) ||
         frame.data.size() < found->length ||
         (frame.fd ? !Can::isValidFdLength(frame.data.size()) : frame.data.size() > 8)) {
         return;
     }
     found->received = true;
     found->data = frame.data;
-    found->receivedAt = nowMs;
+    found->receivedAt = receivedAtMs;
 }
 
 void CanInitialState::clearReceived()

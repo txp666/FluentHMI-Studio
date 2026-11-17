@@ -1,0 +1,38 @@
+#include "core/value_text.h"
+#include <QtCore/QCoreApplication>
+#include <QtCore/QRegularExpression>
+#include <cmath>
+
+namespace fhmi {
+QString valueTextKey(const QVariant &value)
+{
+    bool ok = false;
+    const double number = value.toDouble(&ok);
+    return ok && std::isfinite(number) ? QString::number(number, 'g', 17) : QString();
+}
+QHash<QString, ValueText> parseValueText(const QString &text, QString *error)
+{
+    QHash<QString, ValueText> result;
+    const auto lines = text.split(QLatin1Char('\n'));
+    static const QRegularExpression color(QStringLiteral("^#[0-9a-fA-F]{6}$"));
+    for (int i = 0; i < lines.size(); ++i) {
+        const QString line = lines[i].trimmed();
+        if (line.isEmpty())
+            continue;
+        const int equal = line.indexOf(QLatin1Char('='));
+        const QString key = valueTextKey(line.left(equal).trimmed());
+        const auto parts = line.mid(equal + 1).split(QLatin1Char('|'));
+        const QString tint = parts.value(1).trimmed();
+        if (equal < 1 || key.isEmpty() || result.contains(key) || parts.size() > 2 || parts[0].trimmed().isEmpty() ||
+            (!tint.isEmpty() && !color.match(tint).hasMatch())) {
+            if (error)
+                *error =
+                    QCoreApplication::translate("fhmi", "枚举映射第 %1 行无效：使用 数值=文字|#RRGGBB，数值不能重复")
+                        .arg(i + 1);
+            return {};
+        }
+        result.insert(key, {parts[0].trimmed(), tint});
+    }
+    return result;
+}
+} // namespace fhmi

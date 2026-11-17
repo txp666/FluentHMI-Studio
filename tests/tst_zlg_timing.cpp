@@ -142,6 +142,14 @@ class TestZlgTiming : public QObject
         QCOMPARE(*timing->btr, quint16(0x0007));
         QVERIFY(timing->description.contains(QStringLiteral("90%")));
         QVERIFY(!timing->description.contains(QStringLiteral("87.5%")));
+        input.standardZlgTiming = true;
+        const auto standard = channelTiming(model("USBCAN-I"), input);
+        QVERIFY(standard);
+        QCOMPARE(*standard->btr, quint16(0x0016));
+        input.bitrate = 1000000;
+        const auto oneMegabit = channelTiming(model("USBCAN-I"), input);
+        QVERIFY(oneMegabit);
+        QCOMPARE(*oneMegabit->btr, quint16(0x0014));
     }
 
     void nativeCalculatorValues_data()

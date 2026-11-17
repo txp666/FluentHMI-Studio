@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/value_text.h"
 #include "runtime/hmi_widget.h"
 
 #include <QtGui/QImage>
@@ -8,6 +9,7 @@
 namespace FluentQt {
 class BodyLabel;
 class CaptionLabel;
+class InfoBadge;
 class ProgressBar;
 class ProgressRing;
 } // namespace FluentQt
@@ -16,6 +18,8 @@ namespace fhmi {
 
 bool isDarkTheme();
 QColor accentColor();
+// Shared card surface; titles and child geometry stay with each widget.
+void paintCardSurface(QWidget *widget, const QString &style);
 
 class LedWidget : public HmiWidget
 {
@@ -30,6 +34,7 @@ class LedWidget : public HmiWidget
   private:
     FluentQt::BodyLabel *m_label = nullptr;
     bool m_on = true;
+    bool m_known = true;
 };
 
 class NumericDisplayWidget : public HmiWidget
@@ -43,8 +48,12 @@ class NumericDisplayWidget : public HmiWidget
     void paintEvent(QPaintEvent *event) override;
 
   private:
+    void showValue(const QVariant &value);
+    QVariant m_reading;
+    QHash<QString, ValueText> m_enumEntries;
     FluentQt::CaptionLabel *m_title = nullptr;
     FluentQt::BodyLabel *m_value = nullptr;
+    FluentQt::InfoBadge *m_badge = nullptr;
     FluentQt::CaptionLabel *m_unit = nullptr;
 };
 

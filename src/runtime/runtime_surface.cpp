@@ -54,16 +54,21 @@ void RuntimeSurface::clear()
     m_context->clear();
 }
 
-void RuntimeSurface::build(const Project &project)
+void RuntimeSurface::build(const Project &project, bool startRuntime)
 {
     clear();
     m_assetBaseDir = project.assetBaseDir();
     m_context->setBitProfiles(project.bitProfiles);
-    m_context->hub()->configure(project.serial);
+    if (startRuntime) {
+        m_context->configureData(project);
+        m_context->hub()->configure(project.serial);
+    }
     setFixedSize(project.canvasWidth, project.canvasHeight);
     for (const QJsonValue &value : project.widgets) {
         buildWidget(value.toObject(), nullptr);
     }
+    if (!startRuntime)
+        return;
     // Attach once every widget exists, so cards register links before anything sends.
     for (const QPointer<HmiWidget> &widget : std::as_const(m_widgets)) {
         if (widget) {
@@ -82,9 +87,9 @@ void RuntimeSurface::buildWidget(const QJsonObject &data, HmiWidget *container)
         return;
     }
     const QJsonObject geo = data.value(QStringLiteral("geometry")).toObject();
-    const QRect rect(int(geo.value(QStringLiteral("x")).toDouble(0)), int(geo.value(QStringLiteral("y")).toDouble(0)),
-                     int(geo.value(QStringLiteral("w")).toDouble(widget->width())),
-                     int(geo.value(QStringLiteral("h")).toDouble(widget->height())));
+    const QRect rect(QPoint(int(geo.value(QStringLiteral("x")).toDouble(0)), int(geo.value(QStringLiteral("y")).toDouble(0))),
+                     widget->sizeForGeometry(QSize(int(geo.value(QStringLiteral("w")).toDouble(widget->width())),
+                                                   int(geo.value(QStringLiteral("h")).toDouble(widget->height())))));
 
     if (container) {
         QWidget *host = container->childHost(data.value(QStringLiteral("tabIndex")).toInt(0));

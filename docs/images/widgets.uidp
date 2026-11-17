@@ -1,485 +1,604 @@
 {
-    "version": "1.0",
-    "appName": "控件一览",
-    "canvas": {
-        "width": 2010,
-        "height": 790,
-        "gridSize": 10
+  "version": "1.3",
+  "appName": "控件一览",
+  "canvas": {
+    "width": 1260,
+    "height": 1174,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line"
+  },
+  "widgets": [
+    {
+      "id": "inputs",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 24,
+        "w": 392,
+        "h": 30
+      },
+      "properties": {
+        "text": "输入控件",
+        "fontSize": 18,
+        "bold": true
+      }
     },
-    "widgets": [
+    {
+      "id": "apply",
+      "type": "PushButton",
+      "geometry": {
+        "x": 24,
+        "y": 70,
+        "w": 100,
+        "h": 36
+      },
+      "properties": {
+        "text": "应用",
+        "buttonStyle": "强调"
+      }
+    },
+    {
+      "id": "note",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 136,
+        "y": 70,
+        "w": 280,
+        "h": 36
+      },
+      "properties": {
+        "placeholderText": "输入备注"
+      }
+    },
+    {
+      "id": "setpoint",
+      "type": "SpinBox",
+      "geometry": {
+        "x": 24,
+        "y": 118,
+        "w": 182,
+        "h": 37
+      },
+      "properties": {
+        "numberMode": "小数",
+        "minimum": 0,
+        "maximum": 80,
+        "value": 23.5,
+        "decimals": 1,
+        "singleStep": 0.5,
+        "suffix": " °C"
+      }
+    },
+    {
+      "id": "enable",
+      "type": "ToggleSwitch",
+      "geometry": {
+        "x": 218,
+        "y": 120,
+        "w": 198,
+        "h": 34
+      },
+      "properties": {
+        "label": "设备使能",
+        "checked": true
+      }
+    },
+    {
+      "id": "setRate",
+      "type": "Slider",
+      "geometry": {
+        "x": 24,
+        "y": 168,
+        "w": 182,
+        "h": 34
+      },
+      "properties": {
+        "value": 65,
+        "minimum": 0,
+        "maximum": 100
+      }
+    },
+    {
+      "id": "permit",
+      "type": "ToggleSwitch",
+      "geometry": {
+        "x": 218,
+        "y": 168,
+        "w": 198,
+        "h": 34
+      },
+      "properties": {
+        "switchStyle": "复选框",
+        "label": "允许报警",
+        "checked": true
+      }
+    },
+    {
+      "id": "modeDropdown",
+      "type": "ComboBox",
+      "geometry": {
+        "x": 24,
+        "y": 216,
+        "w": 392,
+        "h": 36
+      },
+      "properties": {
+        "items": "手动\n自动\n维护",
+        "currentIndex": 1
+      }
+    },
+    {
+      "id": "modeSegments",
+      "type": "ComboBox",
+      "geometry": {
+        "x": 24,
+        "y": 264,
+        "w": 392,
+        "h": 36
+      },
+      "properties": {
+        "items": "手动\n自动\n维护",
+        "currentIndex": 1,
+        "selectionStyle": "分段"
+      }
+    },
+    {
+      "id": "modeRadio",
+      "type": "ComboBox",
+      "geometry": {
+        "x": 24,
+        "y": 312,
+        "w": 392,
+        "h": 36
+      },
+      "properties": {
+        "items": "手动\n自动\n维护",
+        "currentIndex": 1,
+        "selectionStyle": "单选组"
+      }
+    },
+    {
+      "id": "readings",
+      "type": "Label",
+      "geometry": {
+        "x": 434,
+        "y": 24,
+        "w": 392,
+        "h": 30
+      },
+      "properties": {
+        "text": "显示与仪表",
+        "fontSize": 18,
+        "bold": true
+      }
+    },
+    {
+      "id": "state",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 434,
+        "y": 70,
+        "w": 392,
+        "h": 45
+      },
+      "properties": {
+        "title": "电机状态",
+        "displayStyle": "状态徽标",
+        "displayFormat": "枚举",
+        "value": "1",
+        "unit": "",
+        "textList": "0=待机|#626262\n1=运行|#107c10\n2=故障|#d13438"
+      }
+    },
+    {
+      "id": "temperature",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 434,
+        "y": 126,
+        "w": 189,
+        "h": 88
+      },
+      "properties": {
+        "title": "温度",
+        "value": "35.8",
+        "unit": "°C"
+      }
+    },
+    {
+      "id": "pressure",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 635,
+        "y": 126,
+        "w": 191,
+        "h": 88
+      },
+      "properties": {
+        "title": "压力",
+        "value": "86.4",
+        "unit": "kPa",
+        "cardStyle": "描边"
+      }
+    },
+    {
+      "id": "battery",
+      "type": "TractionBattery",
+      "geometry": {
+        "x": 439,
+        "y": 223,
+        "w": 178,
+        "h": 110
+      },
+      "properties": {
+        "title": "动力电池",
+        "chargeColors": true,
+        "textLayout": "中心偏移",
+        "titleOffsetY": -40,
+        "showTitle": true,
+        "showValue": true
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "charge"
+      }
+    },
+    {
+      "id": "gauge",
+      "type": "GaugeMeter",
+      "geometry": {
+        "x": 643,
+        "y": 224,
+        "w": 175,
+        "h": 136
+      },
+      "properties": {
+        "title": "转速",
+        "unit": "rpm",
+        "minimum": 0,
+        "maximum": 1500,
+        "value": 900
+      }
+    },
+    {
+      "id": "ready",
+      "type": "LEDIndicator",
+      "geometry": {
+        "x": 434,
+        "y": 326,
+        "w": 182,
+        "h": 28
+      },
+      "properties": {
+        "label": "设备就绪",
+        "on": true
+      }
+    },
+    {
+      "id": "layouts",
+      "type": "Label",
+      "geometry": {
+        "x": 844,
+        "y": 24,
+        "w": 392,
+        "h": 30
+      },
+      "properties": {
+        "text": "布局与分页",
+        "fontSize": 18,
+        "bold": true
+      }
+    },
+    {
+      "id": "pages",
+      "type": "TabWidget",
+      "geometry": {
+        "x": 844,
+        "y": 70,
+        "w": 392,
+        "h": 171
+      },
+      "properties": {
+        "tabNames": "总览\n参数",
+        "navigationStyle": "下划线导航"
+      },
+      "children": [
         {
-            "id": "basicTitle",
-            "type": "Label",
-            "geometry": {
-                "x": 20,
-                "y": 20,
-                "w": 200,
-                "h": 30
-            },
-            "properties": {
-                "text": "基础控件",
-                "fontSize": 16,
-                "bold": true
-            }
+          "id": "progressLabel",
+          "type": "Label",
+          "geometry": {
+            "x": 18,
+            "y": 62,
+            "w": 330,
+            "h": 28
+          },
+          "properties": {
+            "text": "产线进度",
+            "fontSize": 14
+          },
+          "tabIndex": 0
         },
         {
-            "id": "button",
-            "type": "PushButton",
-            "geometry": {
-                "x": 20,
-                "y": 60,
-                "w": 118,
-                "h": 34
-            },
-            "properties": {
-                "text": "按钮"
-            }
+          "id": "progress",
+          "type": "ProgressBar",
+          "geometry": {
+            "x": 18,
+            "y": 104,
+            "w": 345,
+            "h": 12
+          },
+          "properties": {
+            "value": 65
+          },
+          "tabIndex": 0
         },
         {
-            "id": "input",
-            "type": "LineEdit",
-            "geometry": {
-                "x": 149,
-                "y": 60,
-                "w": 199,
-                "h": 34
-            }
-        },
-        {
-            "id": "combo",
-            "type": "ComboBox",
-            "geometry": {
-                "x": 20,
-                "y": 106,
-                "w": 158,
-                "h": 34
-            }
-        },
-        {
-            "id": "switch",
-            "type": "ToggleSwitch",
-            "geometry": {
-                "x": 192,
-                "y": 108,
-                "w": 156,
-                "h": 30
-            },
-            "properties": {
-                "label": "开关"
-            }
-        },
-        {
-            "id": "slider",
-            "type": "Slider",
-            "geometry": {
-                "x": 20,
-                "y": 152,
-                "w": 160,
-                "h": 30
-            },
-            "properties": {
-                "value": 50
-            }
-        },
-        {
-            "id": "spin",
-            "type": "SpinBox",
-            "geometry": {
-                "x": 192,
-                "y": 150,
-                "w": 156,
-                "h": 34
-            },
-            "properties": {
-                "value": 20,
-                "suffix": " ms"
-            }
-        },
-        {
-            "id": "displayTitle",
-            "type": "Label",
-            "geometry": {
-                "x": 20,
-                "y": 200,
-                "w": 200,
-                "h": 30
-            },
-            "properties": {
-                "text": "显示控件",
-                "fontSize": 16,
-                "bold": true
-            }
-        },
-        {
-            "id": "ledOn",
-            "type": "LEDIndicator",
-            "geometry": {
-                "x": 20,
-                "y": 235,
-                "w": 140,
-                "h": 30
-            },
-            "properties": {
-                "label": "状态",
-                "on": true
-            }
-        },
-        {
-            "id": "ledOff",
-            "type": "LEDIndicator",
-            "geometry": {
-                "x": 170,
-                "y": 235,
-                "w": 140,
-                "h": 30
-            },
-            "properties": {
-                "label": "报警",
-                "color": "red",
-                "on": false
-            }
-        },
-        {
-            "id": "temperature",
-            "type": "NumericDisplay",
-            "geometry": {
-                "x": 20,
-                "y": 276,
-                "w": 159,
-                "h": 88
-            },
-            "properties": {
-                "title": "温度",
-                "value": "0.00",
-                "unit": "°C"
-            }
-        },
-        {
-            "id": "pressure",
-            "type": "NumericDisplay",
-            "geometry": {
-                "x": 190,
-                "y": 276,
-                "w": 159,
-                "h": 88
-            },
-            "properties": {
-                "title": "压力",
-                "value": "101.3",
-                "unit": "kPa"
-            }
-        },
-        {
-            "id": "progress",
-            "type": "ProgressBar",
-            "geometry": {
-                "x": 20,
-                "y": 376,
-                "w": 328,
-                "h": 12
-            },
-            "properties": {
-                "value": 50
-            }
-        },
-        {
-            "id": "ring",
-            "type": "ProgressRingDisplay",
-            "geometry": {
-                "x": 25,
-                "y": 400,
-                "w": 110,
-                "h": 130
-            },
-            "properties": {
-                "label": "进度",
-                "value": 65
-            }
-        },
-        {
-            "id": "gauge",
-            "type": "GaugeMeter",
-            "geometry": {
-                "x": 150,
-                "y": 400,
-                "w": 185,
-                "h": 175
-            },
-            "properties": {
-                "title": "温度",
-                "unit": "°C",
-                "value": 42.5
-            }
-        },
-        {
-            "id": "image",
-            "type": "ImageDisplay",
-            "geometry": {
-                "x": 110,
-                "y": 592,
-                "w": 150,
-                "h": 150
-            },
-            "properties": {
-                "imagePath": "../../resources/logo.png"
-            }
-        },
-        {
-            "id": "layoutTitle",
-            "type": "Label",
-            "geometry": {
-                "x": 380,
-                "y": 20,
-                "w": 200,
-                "h": 30
-            },
-            "properties": {
-                "text": "布局容器",
-                "fontSize": 16,
-                "bold": true
-            }
-        },
-        {
-            "id": "hbox",
-            "type": "HBoxLayout",
-            "geometry": {
-                "x": 380,
-                "y": 60,
-                "w": 358,
-                "h": 80
-            },
-            "children": [
-                {
-                    "id": "left",
-                    "type": "PushButton",
-                    "geometry": {
-                        "x": 8,
-                        "y": 22,
-                        "w": 100,
-                        "h": 34
-                    },
-                    "properties": {
-                        "text": "左"
-                    }
-                },
-                {
-                    "id": "right",
-                    "type": "PushButton",
-                    "geometry": {
-                        "x": 116,
-                        "y": 22,
-                        "w": 100,
-                        "h": 34
-                    },
-                    "properties": {
-                        "text": "右"
-                    }
-                }
-            ]
-        },
-        {
-            "id": "group",
-            "type": "GroupBox",
-            "geometry": {
-                "x": 380,
-                "y": 150,
-                "w": 358,
-                "h": 110
-            },
-            "children": [
-                {
-                    "id": "groupSwitch",
-                    "type": "ToggleSwitch",
-                    "geometry": {
-                        "x": 8,
-                        "y": 28,
-                        "w": 342,
-                        "h": 30
-                    },
-                    "properties": {
-                        "label": "分组里的开关"
-                    }
-                }
-            ]
-        },
-        {
-            "id": "card",
-            "type": "CardContainer",
-            "geometry": {
-                "x": 380,
-                "y": 270,
-                "w": 358,
-                "h": 110
-            },
-            "properties": {
-                "title": "卡片容器"
-            }
-        },
-        {
-            "id": "tabs",
-            "type": "TabWidget",
-            "geometry": {
-                "x": 380,
-                "y": 390,
-                "w": 358,
-                "h": 200
-            },
-            "children": [
-                {
-                    "id": "tabTemperature",
-                    "type": "NumericDisplay",
-                    "geometry": {
-                        "x": 10,
-                        "y": 10,
-                        "w": 159,
-                        "h": 88
-                    },
-                    "properties": {
-                        "title": "温度",
-                        "value": "0.00",
-                        "unit": "°C"
-                    },
-                    "tabIndex": 0
-                }
-            ]
-        },
-        {
-            "id": "separator",
-            "type": "Separator",
-            "geometry": {
-                "x": 380,
-                "y": 600,
-                "w": 358,
-                "h": 2
-            }
-        },
-        {
-            "id": "vbox",
-            "type": "VBoxLayout",
-            "geometry": {
-                "x": 380,
-                "y": 610,
-                "w": 168,
-                "h": 134
-            }
-        },
-        {
-            "id": "flex",
-            "type": "FlexLayout",
-            "geometry": {
-                "x": 558,
-                "y": 610,
-                "w": 180,
-                "h": 134
-            }
-        },
-        {
-            "id": "chartTitle",
-            "type": "Label",
-            "geometry": {
-                "x": 768,
-                "y": 20,
-                "w": 200,
-                "h": 30
-            },
-            "properties": {
-                "text": "图表与通信",
-                "fontSize": 16,
-                "bold": true
-            }
-        },
-        {
-            "id": "chart",
-            "type": "RealtimeChart",
-            "geometry": {
-                "x": 768,
-                "y": 60,
-                "w": 418,
-                "h": 240
-            },
-            "properties": {
-                "curveCount": 2
-            }
-        },
-        {
-            "id": "table",
-            "type": "DataTable",
-            "geometry": {
-                "x": 768,
-                "y": 310,
-                "w": 418,
-                "h": 180
-            }
-        },
-        {
-            "id": "log",
-            "type": "LogBox",
-            "geometry": {
-                "x": 768,
-                "y": 498,
-                "w": 418,
-                "h": 122
-            }
-        },
-        {
-            "id": "send",
-            "type": "DataSendCard",
-            "geometry": {
-                "x": 768,
-                "y": 628,
-                "w": 418,
-                "h": 142
-            }
-        },
-        {
-            "id": "serial",
-            "type": "SerialConfigCard",
-            "geometry": {
-                "x": 1206,
-                "y": 20,
-                "w": 378,
-                "h": 338
-            }
-        },
-        {
-            "id": "receive",
-            "type": "DataRecvCard",
-            "geometry": {
-                "x": 1206,
-                "y": 368,
-                "w": 378,
-                "h": 402
-            }
-        },
-        {
-            "id": "tcp",
-            "type": "TcpConfigCard",
-            "geometry": {
-                "x": 1604,
-                "y": 20,
-                "w": 380,
-                "h": 290
-            }
-        },
-        {
-            "id": "mqtt",
-            "type": "MqttConfigCard",
-            "geometry": {
-                "x": 1604,
-                "y": 320,
-                "w": 380,
-                "h": 428
-            }
+          "id": "speedSetting",
+          "type": "SpinBox",
+          "geometry": {
+            "x": 18,
+            "y": 62,
+            "w": 180,
+            "h": 36
+          },
+          "properties": {
+            "minimum": 0,
+            "maximum": 1500,
+            "value": 900,
+            "suffix": " rpm"
+          },
+          "tabIndex": 1
         }
-    ],
-    "serial": {
-        "baudRate": 115200,
-        "dataBits": 8,
-        "parity": "None",
-        "stopBits": 1,
-        "parser": "line",
-        "parserConfig": {
-            "separator": ","
+      ]
+    },
+    {
+      "id": "summaryCard",
+      "type": "CardContainer",
+      "geometry": {
+        "x": 844,
+        "y": 255,
+        "w": 392,
+        "h": 95
+      },
+      "properties": {
+        "title": "任务统计",
+        "cardStyle": "描边"
+      },
+      "children": [
+        {
+          "id": "jobsDone",
+          "type": "Label",
+          "geometry": {
+            "x": 13,
+            "y": 40,
+            "w": 348,
+            "h": 30
+          },
+          "properties": {
+            "text": "已完成 32 / 50",
+            "fontSize": 14,
+            "bold": false
+          }
         }
+      ]
+    },
+    {
+      "id": "trends",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 382,
+        "w": 392,
+        "h": 30
+      },
+      "properties": {
+        "text": "趋势曲线",
+        "fontSize": 18,
+        "bold": true
+      }
+    },
+    {
+      "id": "records",
+      "type": "Label",
+      "geometry": {
+        "x": 434,
+        "y": 382,
+        "w": 392,
+        "h": 30
+      },
+      "properties": {
+        "text": "数据与记录",
+        "fontSize": 18,
+        "bold": true
+      }
+    },
+    {
+      "id": "connections",
+      "type": "Label",
+      "geometry": {
+        "x": 844,
+        "y": 382,
+        "w": 392,
+        "h": 30
+      },
+      "properties": {
+        "text": "通信连接",
+        "fontSize": 18,
+        "bold": true
+      }
+    },
+    {
+      "id": "chart",
+      "type": "RealtimeChart",
+      "geometry": {
+        "x": 24,
+        "y": 420,
+        "w": 392,
+        "h": 245
+      },
+      "properties": {
+        "title": "温度趋势",
+        "displayPoints": 48,
+        "curveCount": 2,
+        "_curve_0_name": "测量值",
+        "_curve_0_key": "temperature",
+        "_curve_1_name": "设定值",
+        "_curve_1_key": "setpoint"
+      }
+    },
+    {
+      "id": "table",
+      "type": "DataTable",
+      "geometry": {
+        "x": 434,
+        "y": 420,
+        "w": 392,
+        "h": 151
+      },
+      "properties": {
+        "columns": "字段\n值",
+        "maxRows": 16
+      }
+    },
+    {
+      "id": "log",
+      "type": "LogBox",
+      "geometry": {
+        "x": 434,
+        "y": 583,
+        "w": 392,
+        "h": 82
+      },
+      "properties": {
+        "maxLines": 100
+      }
+    },
+    {
+      "id": "can",
+      "type": "CanConfigCard",
+      "geometry": {
+        "x": 844,
+        "y": 420,
+        "w": 392,
+        "h": 245
+      },
+      "properties": {
+        "title": "CAN 连接",
+        "defaultAdapter": "ZLG",
+        "zlgModel": "USBCAN-II",
+        "defaultBitrate": "500k",
+        "zlgSamplePoint": "87.5%"
+      }
+    },
+    {
+      "id": "serialLink",
+      "type": "SerialConfigCard",
+      "geometry": {
+        "x": 24,
+        "y": 681,
+        "w": 392,
+        "h": 162
+      },
+      "properties": {
+        "title": "串口",
+        "displayMode": "简洁"
+      }
+    },
+    {
+      "id": "tcpLink",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 434,
+        "y": 681,
+        "w": 392,
+        "h": 162
+      },
+      "properties": {
+        "title": "TCP",
+        "displayMode": "简洁"
+      }
+    },
+    {
+      "id": "mqttLink",
+      "type": "MqttConfigCard",
+      "geometry": {
+        "x": 844,
+        "y": 681,
+        "w": 392,
+        "h": 162
+      },
+      "properties": {
+        "title": "MQTT",
+        "displayMode": "简洁"
+      }
+    },
+    {
+      "id": "alarms",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 866,
+        "w": 1212,
+        "h": 30
+      },
+      "properties": {
+        "text": "报警",
+        "fontSize": 18,
+        "bold": true
+      }
+    },
+    {
+      "id": "alarmSummary",
+      "type": "AlarmBanner",
+      "geometry": {
+        "x": 24,
+        "y": 903,
+        "w": 1212,
+        "h": 66
+      },
+      "properties": {}
+    },
+    {
+      "id": "alarmList",
+      "type": "AlarmList",
+      "geometry": {
+        "x": 24,
+        "y": 980,
+        "w": 1212,
+        "h": 170
+      },
+      "properties": {}
     }
+  ],
+  "logic": {
+    "soundEnabled": false,
+    "points": [
+      {
+        "name": "temperature",
+        "expression": "35.8"
+      },
+      {
+        "name": "charge",
+        "expression": "28"
+      }
+    ],
+    "alarms": [
+      {
+        "id": "温度超限",
+        "level": 3,
+        "ackRequired": true,
+        "condition": "T['temperature'] > 32",
+        "text": "检查冷却回路"
+      },
+      {
+        "id": "电量预警",
+        "level": 2,
+        "ackRequired": true,
+        "condition": "T['charge'] <= 40",
+        "text": "计划充电"
+      }
+    ]
+  }
 }

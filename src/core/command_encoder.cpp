@@ -416,6 +416,8 @@ CommandResult jsonCommand(const QJsonObject &props, const QString &value)
     const bool known = option == QLatin1String("\\r\\n") || option == QLatin1String("\\n")
                        || option == QLatin1String("\\r");
     EncodedCommand command;
+    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
+                     props.value(QStringLiteral("commandEndpoint")).toString()};
     command.bytes = (*fillJson(effective, valueJson) + (known ? newline(option) : QString())).toUtf8();
     return CommandResult::ok(command);
 }
@@ -618,6 +620,8 @@ int nextTransaction()
 
 CommandResult s7FromProperties(const QJsonObject &props, const std::optional<QString> &value)
 {
+    if (!props.value(QStringLiteral("commandEndpoint")).toString().isEmpty())
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "当前模式不支持子通道"));
     const auto settings = props.value(QStringLiteral("s7Command")).toObject();
     QString error;
     const auto point = S7::point(settings, &error);
@@ -626,7 +630,9 @@ CommandResult s7FromProperties(const QJsonObject &props, const std::optional<QSt
     if (target.isEmpty()) return CommandResult::failure(QCoreApplication::translate("fhmi", "请选择 S7 目标连接"));
     if (point->address.area == S7::MemoryArea::Input)
         return CommandResult::failure(QCoreApplication::translate("fhmi", "S7 输入区 I 只读，请选择 DB、M 或 Q 写入"));
-    EncodedCommand command; command.kind = EncodedCommand::Kind::S7;
+    EncodedCommand command;
+    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
+                     props.value(QStringLiteral("commandEndpoint")).toString()}; command.kind = EncodedCommand::Kind::S7;
     command.s7.targetId = target; command.s7.point = *point;
     const QVariant raw = value ? QVariant(*value) : settings.value(QStringLiteral("value")).isUndefined()
         ? QVariant(QStringLiteral("1")) : settings.value(QStringLiteral("value")).toVariant();
@@ -651,6 +657,8 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
         return CommandResult::failure(error);
     }
     EncodedCommand command;
+    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
+                     props.value(QStringLiteral("commandEndpoint")).toString()};
     command.kind = EncodedCommand::Kind::Modbus;
     command.modbus = *request;
     return CommandResult::ok(command);
@@ -676,7 +684,10 @@ std::optional<QString> hexCommandText(const QJsonObject &props, const QString &t
 
 CommandResult canCommand(const QJsonObject &props, const QString &templ, const QString &value)
 {
+    if (!props.value(QStringLiteral("commandEndpoint")).toString().isEmpty())
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "当前模式不支持子通道"));
     EncodedCommand command;
+    command.route.connectionId = props.value(QStringLiteral("commandTargetId")).toString();
     command.kind = EncodedCommand::Kind::Can;
     CanCommand &can = command.can;
     can.target = prop(props, "canId", QString()).trimmed();
@@ -721,6 +732,8 @@ CommandResult encode(const QJsonObject &props, const QString &value)
     }
 
     EncodedCommand command;
+    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
+                     props.value(QStringLiteral("commandEndpoint")).toString()};
     if (mode == QLatin1String("HEX")) {
         const auto hexText = hexCommandText(props, templ, value);
         if (!hexText) {

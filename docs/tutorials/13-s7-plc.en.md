@@ -99,7 +99,7 @@ Enter **1500** in the speed field and press **Enter**. Its send mode is S7 and t
 
 Save the project. The C++ edition exports an independent runtime application without requiring a compiler. The Python edition exports editable source or builds an application using its packaging flow; S7 exports include the native library and notices. Build/export for the target operating system and architecture.
 
-S7 projects use UIDP **1.1** and need an S7-capable desktop version; older designers reject them. Projects without S7 remain at UIDP 1.0.
+S7 projects use UIDP **1.1** and require FluentHMI Studio or PyQt UI Designer **0.7.0 or later**; versions before 0.7.0 reject them. Projects without S7 remain at UIDP 1.0.
 
 ## Troubleshooting and scope
 

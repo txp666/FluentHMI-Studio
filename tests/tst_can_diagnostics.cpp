@@ -1,4 +1,5 @@
 #include "comm/can/can_diagnostics.h"
+#include "comm/can/can_link.h"
 #include "comm/can/can_polling_backend.h"
 
 #include <QtCore/QDateTime>
@@ -64,6 +65,20 @@ class MockBackend : public CanPollingBackend
   private:
     bool m_open = false;
     bool m_emitted = false;
+};
+
+class MockLink : public CanLink
+{
+  public:
+    MockBackend *driver = nullptr;
+
+  protected:
+    std::unique_ptr<CanBackend> createBackend(const QString &, QString *) override
+    {
+        auto backend = std::make_unique<MockBackend>();
+        driver = backend.get();
+        return backend;
+    }
 };
 
 QList<QJsonObject> records()
@@ -132,6 +147,7 @@ class TestCanDiagnostics : public QObject
         QCOMPARE(frames.size(), 1);
         QCOMPARE(frames.front().id, quint32(0x64));
         QVERIFY(frames.front().timestampMs > 0); // existing software timestamp behavior is retained
+        QVERIFY(frames.front().receivedAtMs >= 0);
     }
 
     void explicitStatusQueriesAreRestored()
@@ -202,10 +218,11 @@ class TestCanDiagnostics : public QObject
 
     void workerAndGuiTimesDistinguishEventLoopDelay()
     {
-        MockBackend backend;
-        QSignalSpy received(&backend, &CanBackend::framesReceived);
-        const QString id = QString::number(quintptr(&backend), 16);
-        QVERIFY(backend.open({}, nullptr));
+        MockLink link;
+        QSignalSpy received(&link, &CanLink::canFrames);
+        const QString linkId = QString::number(quintptr(&link), 16);
+        QVERIFY(link.open({}, {}, {}, {}, nullptr));
+        const QString id = QString::number(quintptr(link.driver), 16);
         // Block only this test's GUI thread, while the actual production worker keeps running.
         QThread::msleep(150);
         QVERIFY(CanDiagnostics::flush());
@@ -215,10 +232,14 @@ class TestCanDiagnostics : public QObject
         QVERIFY(!posted.isEmpty());
         QCOMPARE(received.size(), 0);
         QTRY_COMPARE(received.size(), 1);
-        backend.close();
+        const auto frame = qvariant_cast<QList<CanFrame>>(received.front().front()).front();
+        QVERIFY(Can::monotonicMs() - frame.receivedAtMs >= 50);
+        link.close();
         QVERIFY(CanDiagnostics::flush());
-        const auto delivery = findRecord("gui_delivery", "backend", id);
+        const auto relayed = findRecord("backend_delivery", "backend", id);
+        const auto delivery = findRecord("gui_delivery", "link", linkId);
         QCOMPARE(read.value("count").toInteger(), qint64(1));
+        QCOMPARE(relayed.value("received").toInteger(), qint64(1));
         QCOMPARE(delivery.value("received").toInteger(), qint64(1));
         QVERIFY(posted.value("monotonic_us").toInteger() >= read.value("monotonic_us").toInteger());
         QVERIFY(delivery.value("monotonic_us").toInteger() - read.value("monotonic_us").toInteger() >= 50000);

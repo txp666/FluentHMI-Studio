@@ -17,6 +17,20 @@
 
 namespace fhmi {
 
+namespace LinkParser {
+inline const QString Inherit = QStringLiteral("项目设置"); // i18n: value
+
+inline bool inheritsProject(QStringView selection)
+{
+    return selection.isEmpty() || selection == Inherit;
+}
+
+inline QString effectiveType(const QString &selection, const QString &projectType)
+{
+    return inheritsProject(selection) ? projectType : selection;
+}
+} // namespace LinkParser
+
 // Incremental frame parsers, in two steps. frames() cuts the bytes a link read into complete
 // raw units (keeping partial input for the next call); parse() turns one unit into messages.
 // Links publish each unit as raw bytes (HEX byte bindings, HEX curves, logs) and then its
@@ -199,6 +213,9 @@ class ModbusRequests
     void note(int slave, int fc, int address, int count, int transaction = -1);
     // The read in an outgoing request frame, framed the way the link parses replies.
     void noteFrame(const QByteArray &frame, const QString &parserType);
+    // Late TCP replies to timed-out transactions must not update the current data.
+    void expireTcpRequest(const QByteArray &frame);
+    bool expiredTcpReply(int transaction) const;
     // {address, count} of the read this response answers. `answered` is the calling parser's
     // record of the RTU reads it has answered; with it, a read names one reply per parser.
     std::optional<std::pair<int, int>> take(int slave, int fc, int transaction = -1,
@@ -208,6 +225,7 @@ class ModbusRequests
     struct Read
     {
         int slave, fc, address, count;
+        bool expired = false;
     };
     struct Latest
     {
@@ -217,6 +235,7 @@ class ModbusRequests
     int m_noted = 0;
     QHash<int, Read> m_transactions;
     QList<int> m_order; // transactions, oldest first
+    void rememberTcp(int transaction, const Read &read);
 };
 
 // Modbus RTU responses, CRC-checked, resynchronising on noise.

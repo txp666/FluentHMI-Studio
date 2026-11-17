@@ -21,7 +21,8 @@
 - `canId`（CAN 报文，文本）默认 `""`，DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 `信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节
 - `canFd`（CAN FD 帧，true/false）默认 `false`，只用于原始 ID；DBC 报文是否 FD 由 DBC 决定
 - `canCycle`（循环周期(ms)，整数）默认 `0`，范围 0–60000，大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次
-- `commandTargetId`（S7 目标连接，文本）默认 `""`
+- `commandTargetId`（发送连接，文本）默认 `""`
+- `commandEndpoint`（发送子通道，文本）默认 `""`
 - `s7Command`（S7 写入，对象）默认 `{"address":"DB1.DBD4","dataType":"REAL","offValue":"0","onValue":"1","value":"1"}`
 
 <a id="link-properties"></a>
@@ -45,6 +46,7 @@
 另见[命令控件共有属性](#command-properties)。
 
 - `text`（文本，文本）默认 `"按钮"`
+- `buttonStyle`（按钮风格，选项）默认 `"标准"`，可选 `"标准"` `"强调"` `"轻量"` `"描边"`
 - `enabled`（启用，true/false）默认 `true`
 - `command`（发送内容，命令）默认 `""`
 - `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `"HEX字符串"` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
@@ -92,6 +94,7 @@
 
 另见[命令控件共有属性](#command-properties)。
 
+- `selectionStyle`（选择样式，选项）默认 `"下拉框"`，可选 `"下拉框"` `"分段"` `"单选组"`
 - `items`（选项，多行文本）默认 `"选项1\n选项2\n选项3"`
 - `currentIndex`（默认选项，整数）默认 `0`，范围 0–99
 - `sendOnSelect`（选中发送，true/false）默认 `false`
@@ -109,6 +112,7 @@
 
 另见[命令控件共有属性](#command-properties)。
 
+- `switchStyle`（开关样式，选项）默认 `"开关"`，可选 `"开关"` `"复选框"`
 - `label`（标签，文本）默认 `"开关"`
 - `checked`（默认开启，true/false）默认 `false`
 - `onCondition`（开启判定，选项）默认 `"非零为开"`，可选 `"非零为开"` `"等于指定值"`
@@ -147,9 +151,12 @@
 
 另见[命令控件共有属性](#command-properties)。
 
-- `minimum`（最小值，整数）默认 `0`，范围 -99999–99999
-- `maximum`（最大值，整数）默认 `100`，范围 -99999–99999
-- `value`（默认值，整数）默认 `0`，范围 -99999–99999
+- `numberMode`（数值模式，选项）默认 `"整数"`，可选 `"整数"` `"小数"`
+- `decimals`（小数位数，整数）默认 `2`，范围 0–6
+- `minimum`（最小值，小数）默认 `0`，范围 -99999–99999
+- `maximum`（最大值，小数）默认 `100`，范围 -99999–99999
+- `value`（默认值，小数）默认 `0`，范围 -99999–99999
+- `singleStep`（步长，小数）默认 `1`，范围 1e-06–99999
 - `suffix`（后缀，文本）默认 `""`
 - `sendOnChange`（变化发送，true/false）默认 `false`
 - `dataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
@@ -188,12 +195,13 @@
 
 - `title`（标题，文本）默认 `"分组"`
 
-#### `TabWidget` 选项卡
+#### `TabWidget` 分页容器
 
 默认尺寸 350×250，最小 150×80；**容器**，子控件放在 `children` 里
 
+- `navigationStyle`（导航风格，选项）默认 `"经典选项卡"`，可选 `"经典选项卡"` `"下划线导航"` `"分段导航"` `"文档页签"`
 - `tabNames`（标签名称，多行文本）默认 `"标签1\n标签2\n标签3"`
-- `currentTab`（当前标签页，整数）默认 `0`，范围 0–9999
+- `currentTab`（运行时启动页，整数）默认 `0`，范围 0–9999
 - `tabLayout`（当前页布局，选项）默认 `"自由"`，可选 `"自由"` `"垂直"` `"水平"` `"弹性(Flex)"`
 
 #### `Separator` 分割线
@@ -207,6 +215,7 @@
 默认尺寸 300×200，最小 80×60；**容器**，子控件放在 `children` 里
 
 - `title`（标题，文本）默认 `""`
+- `cardStyle`（卡片风格，选项）默认 `"标准"`，可选 `"标准"` `"透明"` `"描边"`
 - `layout`（布局，选项）默认 `"自由"`，可选 `"自由"` `"垂直"` `"水平"`
 - `spacing`（间距，整数）默认 `8`，范围 0–100
 
@@ -222,15 +231,30 @@
 - `onValue`（亮值，文本）默认 `"1"`
 - `offValue`（灭值，文本）默认 `"0"`
 
+#### `AlarmBanner` 报警栏
+
+默认尺寸 650×65，最小 320×50
+
+
+#### `AlarmList` 报警列表
+
+默认尺寸 800×320，最小 480×160
+
+
 #### `NumericDisplay` 数值显示
 
 默认尺寸 160×90，最小 30×20；绑定数据时写入 `value`
 
 - `title`（标题，文本）默认 `"温度"`
+- `displayStyle`（显示样式，选项）默认 `"数值"`，可选 `"数值"` `"状态徽标"`
+- `cardStyle`（卡片风格，选项）默认 `"标准"`，可选 `"标准"` `"透明"` `"描边"`
 - `value`（数值，文本）默认 `"0.00"`
 - `unit`（单位，文本）默认 `"°C"`
 - `fontSize`（字号，整数）默认 `28`，范围 12–72
-- `displayFormat`（显示格式，选项）默认 `"自动"`，可选 `"自动"` `"十进制"` `"十六进制(HEX)"` `"二进制(BIN)"`
+- `displayFormat`（显示格式，选项）默认 `"自动"`，可选 `"自动"` `"十进制"` `"十六进制(HEX)"` `"二进制(BIN)"` `"枚举"`
+- `textList`（枚举映射，多行文本）默认 `""`
+- `unknownText`（未匹配文字，文本）默认 `""`
+- `unknownColor`（未匹配颜色，颜色）默认 `"#d13438"`
 - `decimals`（小数位数，选项）默认 `"自动"`，可选 `"自动"` `"0"` `"1"` `"2"` `"3"` `"4"`
 
 #### `ProgressBar` 进度条
@@ -269,8 +293,9 @@
 - `curveCount`（曲线数量，整数）默认 `1`，范围 1–8
 - `currentCurve`（当前编辑曲线，整数）默认 `0`，范围 0–7
 - `curveName`（曲线名称，文本）默认 `"曲线1"`
-- `curveParseMode`（解析模式，选项）默认 `"键值匹配"`，可选 `"键值匹配"` `"JSON路径"` `"HEX字节提取"` `"Modbus"` `"CAN信号"` `"S7"`
-- `curveSourceCardId`（S7 来源连接，文本）默认 `""`
+- `curveParseMode`（解析模式，选项）默认 `"键值匹配"`，可选 `"工程数据点"` `"键值匹配"` `"JSON路径"` `"HEX字节提取"` `"Modbus"` `"CAN信号"` `"S7"`
+- `curveSourceCardId`（来源连接，文本）默认 `""`
+- `curveSourceEndpoint`（来源子通道，文本）默认 `""`
 - `curveS7`（S7 采集，对象）默认 `{"address":"DB1.DBD4","dataType":"REAL","period":0}`
 - `curveKey`（匹配键，文本）默认 `""`
 - `curveJsonPath`（JSON路径，文本）默认 `""`
@@ -308,6 +333,8 @@
 
 默认尺寸 350×250，最小 200×100
 
+- `sourceCardId`（来源连接，文本）默认 `""`
+- `sourceEndpoint`（来源子通道，文本）默认 `""`
 - `columns`（列名，多行文本）默认 `"字段\n值"`
 - `recordMode`（记录方式，选项）默认 `"最新值"`，可选 `"最新值"` `"逐行记录"`
 - `maxRows`（最大行数，整数）默认 `500`，范围 10–50000
@@ -429,17 +456,20 @@
 - `title`（标题，文本）默认 `"CAN 连接"`
 - `displayMode`（显示模式，选项）默认 `"完整"`，可选 `"完整"` `"简洁"`
 - `defaultAdapter`（默认适配器，选项）默认 `"PCAN"`，可选 `"PCAN"` `"ZLG"` `"SocketCAN"` `"slcan"`，PCAN：Windows、macOS；ZLG：Windows；SocketCAN：Linux；slcan：所有系统
-- `zlgModel`（ZLG 型号，选项）默认 `"USBCANFD-200U"`，可选 `"USBCAN-I"` `"USBCAN-I+"` `"USBCAN-I-mini"` `"USBCAN-II"` `"USBCAN-II+"` `"USBCAN-E-U"` `"USBCAN-2E-U"` `"USBCAN-4E-U"` `"USBCAN-8E-U"` `"USBCANFD-100U-mini"` `"USBCANFD-100U"` `"USBCANFD-200U"` `"USBCANFD-400U"` `"USBCANFD-800U"`
+- `zlgModel`（ZLG 型号，选项）默认 `"USBCANFD-200U"`，可选 `"USBCAN-I"` `"USBCAN-I+"` `"USBCAN-I-mini"` `"USBCAN-II"` `"USBCAN-II+"` `"USBCAN-E-U"` `"USBCAN-E-mini"` `"USBCAN-2E-U"` `"USBCAN-4E-U"` `"USBCAN-8E-U"` `"USBCANFD-100U-mini"` `"USBCANFD-100U"` `"USBCANFD-200U"` `"USBCANFD-400U"` `"USBCANFD-800U"`
 - `defaultDeviceIndex`（ZLG 设备索引，整数）默认 `0`，范围 0–15，同型号插了多个时的序号，从 0 开始
 - `defaultChannel`（ZLG 通道，整数）默认 `0`，范围 0–7，设备上的第几路 CAN，从 0 开始
 - `defaultBitrate`（默认波特率，选项）默认 `"500k"`，可选 `"10k"` `"20k"` `"50k"` `"100k"` `"125k"` `"250k"` `"500k"` `"800k"` `"1M"`
 - `defaultSamplePoint`（默认采样点，选项）默认 `"87.5%"`，可选 `"87.5%"` `"81.25%"` `"80%"` `"75%"`
+- `zlgSamplePoint`（ZLG 采样点，选项）默认 `"设备标准"`，可选 `"设备标准"` `"87.5%"` `"81.25%"` `"80%"` `"75%"`
 - `canFd`（CAN FD，true/false）默认 `false`
 - `defaultDataBitrate`（数据域波特率，选项）默认 `"2M"`，可选 `"1M"` `"2M"` `"4M"` `"5M"` `"8M"`
 - `defaultDataSamplePoint`（数据域采样点，选项）默认 `"75%"`，可选 `"75%"` `"80%"`
 - `canBrs`（加速 (BRS)，true/false）默认 `true`，CAN FD 报文的数据段用数据域波特率发送
-- `customTiming`（自定义位时序，文本）默认 `""`，PCAN：`BRP,TSEG1,TSEG2,SJW`，FD 加 `;BRP,TSEG1,TSEG2,SJW`。时钟为经典 CAN 8 MHz、FD 80 MHz。ZLG USBCAN-I/II：`00,1C` 或 `1,13,2,1`，留空按采样点计算。其他 ZLG 粘贴对应型号的 ZCANPRO 完整结果；4E-U 填十进制 bps
+- `customTiming`（自定义位时序，文本）默认 `""`，PCAN：`BRP,TSEG1,TSEG2,SJW`，FD 加 `;BRP,TSEG1,TSEG2,SJW`。时钟为经典 CAN 8 MHz、FD 80 MHz
+- `zlgCustomTiming`（ZLG 自定义位时序，文本）默认 `""`，USBCAN-I/II 填 `00,1C` 或 `1,13,2,1`。留空使用设备标准或所选采样点。其他型号粘贴对应的 ZCANPRO 完整结果。4E-U 填十进制 bps
 - `listenOnly`（只听模式，true/false）默认 `false`
+- `autoRecover`（总线关闭自动恢复，true/false）默认 `false`
 - `termination`（终端电阻，true/false）默认 `false`，ZLG USBCANFD 系列可由软件开关，其他适配器忽略
 - `dbcFile`（DBC 文件，文本）默认 `""`，相对 .uidp 所在文件夹的路径；导出时复制进应用
 - `canSignals`（CAN 信号，多行文本）默认 `""`，DBC 之外的信号，每行一个：`ID 名字 : 起始位|长度@1+ (因子,偏移) [最小|最大] "单位"`，ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号
@@ -453,11 +483,15 @@
 
 - `title`（标题，文本）默认 `"数据发送"`
 - `placeholder`（提示文字，文本）默认 `"输入要发送的数据..."`
+- `commandTargetId`（发送连接，文本）默认 `""`
+- `commandEndpoint`（发送子通道，文本）默认 `""`
 
 #### `DataRecvCard` 数据接收卡片
 
 默认尺寸 350×250，最小 240×120
 
+- `sourceCardId`（来源连接，文本）默认 `""`
+- `sourceEndpoint`（来源子通道，文本）默认 `""`
 - `title`（标题，文本）默认 `"数据接收"`
 - `maxLines`（最大行数，整数）默认 `1000`，范围 50–50000
 
@@ -465,22 +499,29 @@
 
 默认尺寸 400×200，最小 200×80
 
+- `sourceCardId`（来源连接，文本）默认 `""`
+- `sourceEndpoint`（来源子通道，文本）默认 `""`
 - `maxLines`（最大行数，整数）默认 `500`，范围 50–50000
 
 #### `CanMonitor` 报文监视
 
 默认尺寸 560×280，最小 240×100
 
+- `sourceCardId`（来源连接，文本）默认 `""`
 - `displayMode`（显示模式，选项）默认 `"按 ID 汇总"`，可选 `"按 ID 汇总"` `"滚动日志"`
-- `maxMessages`（最大报文数量，整数）默认 `1000`，范围 1–50000，超出上限时移除最早记录；汇总模式按最近更新的 ID 保留
+- `maxMessages`（显示行数，整数）默认 `1000`，范围 1–50000，超出上限时移除最早记录；汇总模式按最近更新的 ID 保留
 - `autoScroll`（自动滚动，true/false）默认 `true`
 - `showSignals`（显示信号，true/false）默认 `false`，多一列，列出 DBC 和 canSignals 解出的信号值
 - `showFilter`（显示筛选，true/false）默认 `true`，在表格上方显示按 ID 和类型筛选
+- `autoSave`（自动保存，true/false）默认 `false`
+- `autoSaveRows`（每文件行数，整数）默认 `100000`，范围 1–1000000
+- `autoSaveDirectory`（自动保存目录，文本）默认 `""`
 
 #### `ModbusSlaveTable` 从站寄存器表
 
 默认尺寸 260×300，最小 160×120
 
+- `sourceCardId`（来源连接，文本）默认 `""`
 - `mbArea`（区，选项）默认 `"保持寄存器"`，可选 `"保持寄存器"` `"输入寄存器"` `"线圈"` `"离散输入"`
 - `displayFormat`（显示格式，选项）默认 `"无符号"`，可选 `"无符号"` `"有符号"` `"十六进制"`，线圈和离散输入总是显示 0/1
 

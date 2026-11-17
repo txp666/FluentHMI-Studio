@@ -481,18 +481,26 @@ QByteArray IndustrialWidget::renderedSvg() const
         replace(it.key(), QString::number(from + (to - from) * drivers.value(spec.at(0).toString()), 'g', 12));
     }
     const bool dark = isDarkTheme();
-    const QHash<QString, QString> colors{{"ink", dark ? "#e8edf4" : "#273549"},
-                                         {"edge", dark ? "#718198" : "#708297"},
-                                         {"muted", dark ? "#a4b3c5" : "#64748b"},
-                                         {"body", dark ? "#39495e" : "#dbe4ed"},
-                                         {"surface", dark ? "#172332" : "#f4f7fa"},
-                                         {"accent", accentColor().name()},
-                                         {"liquid", "#29a9d6"},
-                                         {"warm", "#f49b38"},
-                                         {"danger", "#e55252"},
-                                         {"green", "#3dbd84"},
-                                         {"yellow", "#e8b643"},
-                                         {"grain", "#cfa568"}};
+    QHash<QString, QString> colors{{"ink", dark ? "#e8edf4" : "#273549"},
+                                   {"edge", dark ? "#718198" : "#708297"},
+                                   {"muted", dark ? "#a4b3c5" : "#64748b"},
+                                   {"body", dark ? "#39495e" : "#dbe4ed"},
+                                   {"surface", dark ? "#172332" : "#f4f7fa"},
+                                   {"accent", accentColor().name()},
+                                   {"liquid", "#29a9d6"},
+                                   {"warm", "#f49b38"},
+                                   {"danger", "#e55252"},
+                                   {"green", "#3dbd84"},
+                                   {"yellow", "#e8b643"},
+                                   {"grain", "#cfa568"}};
+    if (typeName() == QLatin1String("TractionBattery") && flag("chargeColors") && known) {
+        const char *key = value <= real("chargeLow")       ? "chargeLowColor"
+                          : value <= real("chargeWarning") ? "chargeWarningColor"
+                                                           : "chargeNormalColor";
+        const QColor color(text(key));
+        if (color.isValid())
+            colors[QStringLiteral("green")] = color.name();
+    }
     for (auto it = colors.begin(); it != colors.end(); ++it) {
         replace(it.key(), it.value());
     }

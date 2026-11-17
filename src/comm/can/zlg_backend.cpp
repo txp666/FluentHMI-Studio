@@ -1,4 +1,6 @@
 #include "comm/can/zlg_backend.h"
+#include <QtCore/QRecursiveMutex>
+#include <QtCore/QSet>
 #include "comm/can/can_diagnostics.h"
 #include "comm/can/zlg_status_internal.h"
 #include "comm/can/zlg_timing.h"
@@ -364,8 +366,11 @@ QString loadFailure(const QString &path, const QString &reason)
     return ZlgBackend::tr("找到了 %1 但无法加载：%2").arg(shownPath(path), reason);
 }
 
+QRecursiveMutex &lifecycleMutex() { static QRecursiveMutex mutex; return mutex; }
+
 bool loadApi(QString *error)
 {
+    QMutexLocker lock(&lifecycleMutex());
     Api &a = api();
     if (a.loaded) {
         return true;
@@ -450,11 +455,11 @@ bool loadApi(QString *error)
 }
 
 // The devices open now, by type and index, with how many channels use each: a device is opened once however
-// many cards use its channels (GUI thread only).
+// many cards use its channels. lifecycleMutex protects device ownership and channel initialization.
 struct SharedDevice
 {
     DEVICE_HANDLE handle = nullptr;
-    int users = 0;
+    QSet<int> channels;
 };
 
 QHash<quint64, SharedDevice> &openDevices()
@@ -491,10 +496,8 @@ CanAdapterCaps ZlgBackend::caps(const QString &model)
     caps.dataSamplePoint = false;
     caps.customTiming = found != nullptr;
     caps.fd = family == Family::CanFd;
+    caps.autoRecover = true;
     caps.termination = found && found->termination;
-    caps.fixedTimingReason = found && found->deviceType == ZCAN_USBCAN_4E_U
-                                 ? tr("此型号的采样点由设备决定")
-                                 : tr("采样点可在 ZCANPRO 计算后粘贴到自定义位时序；留空使用设备默认值");
 #ifndef Q_OS_WIN
     caps.supported = false;
 #endif
@@ -503,6 +506,7 @@ CanAdapterCaps ZlgBackend::caps(const QString &model)
 
 bool ZlgBackend::open(const CanSettings &settings, QString *error)
 {
+    QMutexLocker lock(&lifecycleMutex());
     close();
     if constexpr (CanDiagnostics::BuildEnabled) {
         CanDiagnostics::record("connect_settings", {{"backend", QString::number(quintptr(this), 16)},
@@ -572,7 +576,9 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
             // clang-format on
         }
     }
-    ++shared.users;
+    if (shared.channels.contains(settings.channelIndex)) return fail(tr("该 ZLG 设备的 CAN 通道已被另一张连接卡使用"));
+    shared.channels.insert(settings.channelIndex);
+    m_channelIndex = settings.channelIndex;
     m_model = model;
     m_device = shared.handle;
     m_deviceIndex = settings.deviceIndex;
@@ -637,6 +643,7 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
                                                   {"device", QString::number(quintptr(m_device), 16)},
                                                   {"channel", QString::number(quintptr(m_channel), 16)}});
     }
+    setAutoRecover(settings.autoRecover);
     startWorker();
     if (!notes.isEmpty()) {
         emit sendFailed(notes.join(QStringLiteral("; ")));
@@ -646,6 +653,7 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
 
 void ZlgBackend::close()
 {
+    QMutexLocker lock(&lifecycleMutex());
     stopWorker();
     if (m_channel) {
         traced("ZCAN_ResetCAN", m_channel, [&] { return api().resetCan(m_channel); });
@@ -661,7 +669,8 @@ void ZlgBackend::releaseDevice()
     }
     const quint64 key = deviceKey(m_model->deviceType, m_deviceIndex);
     auto it = openDevices().find(key);
-    if (it != openDevices().end() && --it->users <= 0) {
+    if (it != openDevices().end()) it->channels.remove(m_channelIndex);
+    if (it != openDevices().end() && it->channels.isEmpty()) {
         traced("ZCAN_CloseDevice", it->handle, [&] { return api().closeDevice(it->handle); });
         openDevices().erase(it);
     }
@@ -785,6 +794,19 @@ bool ZlgBackend::writeFrame(const CanFrame &frame, QString *error)
         if (error) {
             *error = tr("ZLG 发送失败（%1）").arg(Can::idText(frame.id, frame.extended));
         }
+        return false;
+    }
+    return true;
+}
+
+bool ZlgBackend::recoverBus(QString *error)
+{
+    // Called on this channel's polling thread, between receive calls. The shared device stays open.
+    auto &a = api();
+    if (traced("ZCAN_ResetCAN", m_channel, [&] { return a.resetCan(m_channel); }) != STATUS_OK ||
+        traced("ZCAN_StartCAN", m_channel, [&] { return a.startCan(m_channel); }) != STATUS_OK) {
+        if (error)
+            *error = tr("CAN 总线自动恢复失败，将在 1 秒后重试");
         return false;
     }
     return true;

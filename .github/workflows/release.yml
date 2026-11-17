@@ -1,13 +1,13 @@
 name: Release
 
-# Push a tag vX.Y.Z matching project(VERSION) in CMakeLists.txt. Every platform builds,
+# Push a tag vX.Y or vX.Y.Z matching project(VERSION) in CMakeLists.txt. Every platform builds,
 # tests and packages; the release is published only when every package passed its check.
 # A tag with a suffix (v0.2.0-rc.1) builds the same way but is published as a pre-release,
 # which the in-app update check does not offer. Run by hand, or by a pull request that
 # changes the packaging, it packages and checks without publishing.
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v*.*"]
   workflow_dispatch:
   pull_request:
     paths:

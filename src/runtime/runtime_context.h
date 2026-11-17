@@ -4,6 +4,8 @@
 #include "comm/s7/s7_client.h"
 #include "core/binding.h"
 #include "core/command_encoder.h"
+#include "core/project.h"
+#include "runtime/project_data.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
@@ -45,27 +47,25 @@ class RuntimeContext : public QObject
     void registerWidget(const QString &id, HmiWidget *widget);
     void addBinding(BindingEntry binding);
     void clear();
+    void configureData(const Project &project);
+    ProjectData *projectData() const { return m_data; }
 
     void setActive(bool active);
     void setBitProfiles(const QJsonObject &profiles) { m_bitProfiles = profiles; emit bitProfilesChanged(); }
     QJsonObject bitProfiles() const { return m_bitProfiles; }
     bool isActive() const { return m_active; }
 
-    // Sends a widget's command over every connected link, or explains why not.
-    // `sent` collects the frames the links accepted, for a status line. A Modbus write (FC 05, 06, 16) is also
-    // made in the table of every Modbus slave (CommHub::modbusSlaves()) whose area holds its addresses; one
-    // that some slave took needs no link.
+    // Sends a widget's command to the selected connections. Modbus writes can also address a local slave table.
+    // `sent` collects the frames the links accepted, for a status line.
     bool send(const CommandResult &result, QList<QByteArray> *sent = nullptr);
-    // A Modbus request queued as `how` says (CommHub::sendModbus), explained the same way when no link takes it.
-    bool sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how);
 
-    // A control's own change to `value` (a ToggleSwitch, Slider or SpinBox the user moved): written into every
-    // Modbus slave's table at the address of the control's Modbus binding, unless the binding has an expression.
-    void writeModbusSlaves(const HmiWidget *widget, double value);
+    // A control without an explicitly routed command can write through its Modbus binding to a local slave.
+    void writeModbusSlaves(const HmiWidget *widget, double value, bool sendsCommand);
 
     // What the Modbus poller reads: every Modbus binding, visible while its widget is on screen (not on a
     // tab page in the background), then the curves charts registered.
     QList<ModbusNeed> modbusNeeds() const;
+    void modbusReadFailed(const Link &link, const QString &endpoint, const ModbusBlock &block, int fallbackSlave);
     // A chart's Modbus curves; an empty list removes them.
     void setCurveNeeds(const QObject *chart, const QList<ModbusNeed> &needs);
 
@@ -82,11 +82,13 @@ class RuntimeContext : public QObject
     void notificationRequested(const QString &title, const QString &content, const QString &type, int durationMs);
 
   private:
-    void onMessage(const Message &message);
-    void onRaw(const QByteArray &bytes);
-    void onCanFrames(const QList<CanFrame> &frames, bool sent);
-    void push(const BindingEntry &binding, const QVariant &raw);
+    void onMessage(const Message &message, const DataSource &source);
+    void onRaw(const QByteArray &bytes, const DataSource &source);
+    void onCanFrame(const CanFrame &frame, const Message &message, const DataSource &source);
+    void push(const BindingEntry &binding, const QVariant &raw, const DataSource &source = {});
 
+    ProjectData *m_data = nullptr;
+    QTimer *m_alarmSound = nullptr;
     CommHub *m_hub = nullptr;
     S7Client *m_s7 = nullptr;
     QTimer *m_s7Timer = nullptr;
@@ -95,6 +97,7 @@ class RuntimeContext : public QObject
     QHash<QString, QPointer<HmiWidget>> m_widgets;
     std::vector<BindingEntry> m_bindings;
     QHash<quint64, QList<size_t>> m_canBindings; // CanId::key() -> the CAN信号 bindings' indices in m_bindings
+    QList<size_t> m_parsedProjectBindings;
     QList<QPair<const QObject *, QList<ModbusNeed>>> m_curveNeeds; // in the order charts registered
     bool m_active = false;
     QJsonObject m_bitProfiles;

@@ -11,6 +11,12 @@ FluentHMI Studio is the native C++/Qt 6 visual HMI designer in the [modusignal](
 
 ## Screenshots
 
+### New in v0.8
+
+v0.8 adds separate send and receive routing, CAN bit timing and automatic CSV capture, shared project data and alarm history, and four page navigation styles. Try the new features with the bundled examples. [Illustrated guide](docs/tutorials/v0.8-guide.en.md) · [Release notes](docs/release-notes/v0.8.md#english)
+
+![Alarm history with separate date and time fields and filtered CSV export](docs/images/v0.8/en/alarm-history-filter.png)
+
 ### Designing
 
 Drag widgets onto the canvas, and edit their properties and data bindings on the right:
@@ -23,13 +29,19 @@ The same project runs live once it is connected to a device, and exported apps u
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/preview-en-dark.jpg"><img src="docs/images/preview-en-light.jpg" alt="Live preview"></picture>
 
-### All widgets
+### Widget gallery
 
-A selection of the core widgets in the light and dark themes:
+A selection of inputs, readouts, page containers, communication cards and alarm widgets in both themes, with sample trend and alarm data. [Gallery project](docs/images/widgets-en.uidp)
 
-![All widgets (light)](docs/images/widgets-en-light.jpg)
+![Widget gallery in the light theme](docs/images/widgets-en-light.jpg)
 
-![All widgets (dark)](docs/images/widgets-en-dark.jpg)
+![Widget gallery in the dark theme](docs/images/widgets-en-dark.jpg)
+
+### Dynamic widgets
+
+Sample feedback drives the pump, pressure gauge, tank level, reversible conveyor, battery charge colors and digital timing chart. [Full dynamic widget project](examples/industrial/动态控件全景.uidp)
+
+![Six dynamic widgets responding to sample feedback](docs/images/widgets-dynamic-en.gif)
 
 ## Let AI write the project
 
@@ -47,9 +59,9 @@ The guide includes a working serial project that you can copy. For other devices
 
 ## Compared with the Python version
 
-Both use the same project format, and their widget and protocol rules match:
+Both use the same project format, widget properties and protocol rules for shared UIDP 1.0 and 1.1 features.
 
-- **Compatible project format**: it reads `.uidp` versions 1.0 and 1.1. Projects with S7 features use 1.1; other projects keep 1.0. Widget types, property names, default values and enum options match PyQt UI Designer. The projects in `examples/` open, preview, and save back unchanged. [Industrial pump station and feedback replay](examples/industrial)
+- **Project compatibility**. Studio v0.8 reads UIDP 1.0 through 1.3. Shared projects continue to use 1.0, or 1.1 for S7. Projects with explicit routing or new logic features use 1.2 or 1.3 and require Studio v0.8 or later. [Project format](docs/uidp-format.md) · [Industrial pump station and feedback replay](examples/industrial)
 - **Same parsing and binding rules**: the five parsers (line text with key-value / JSON / CSV; binary HEX frames with header and footer, length field, checksum, fixed length or idle-gap framing; Modbus RTU; Modbus TCP; Modbus ASCII), the four kinds of binding (key-value matching / JSON path / HEX byte extraction / Modbus) and the four command encodings (text / HEX / JSON / Modbus) were ported from the Python version rule by rule and are covered by unit tests.
 - **Same Modbus features for PLCs**: read requests sent from here are remembered, so the registers in a reply are also named by address (holding register 100 is `hr100`) and a binding picks a register table and an address; pick a Modbus parser on the link card and bind a register address, and it is read automatically: nearby addresses are merged into blocks read at their periods, one request at a time, only for the controls on screen, with writes sent ahead of queued reads; FC16 writes int16, 32-bit integers and float32 values by data type.
 - **Modbus RTU / TCP slave**: a serial, TCP or UDP card can act as a slave and answer an external master from its own data table; bindings, controls and write commands read and write that table, and the slave register table widget shows and edits it.
@@ -159,25 +171,41 @@ Nothing is bundled; what each adapter needs:
 | Adapter | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | PEAK (PCAN-USB, PCAN-USB FD) | PEAK's device driver, which installs `PCANBasic.dll` | the PCBUSB library from [mac-can.com](https://mac-can.github.io/drivers/libPCBUSB.html) (`libPCBUSB.dylib` in `/usr/local/lib`) | choose SocketCAN: the kernel's `peak_usb` driver |
-| ZLG (USBCAN-I/II, USBCAN-E-U family, USBCANFD) | ZLG's device driver, and from the `zlgcan_x64` folder of ZLG's "CAN(FD) interface function library" `zlgcan.dll` with its `kerneldlls` folder, next to the program or in a `zlgcan` folder beside it. The library needs the Visual C++ 2013 x64 runtime (USBCAN-I/II also the 2008 x64 runtime with MFC). zlgcan.dll looks for each device's kernel DLL on the system path first, then in `kerneldlls`; the library has none for the USBCAN-E-U family (`USBCAN_E_64.dll` and the like). The card names any missing file when it connects | – | – |
+| ZLG (USBCAN-I/II, USBCAN-E-mini, USBCAN-E-U family, USBCANFD) | ZLG's device driver, and from the `zlgcan_x64` folder of ZLG's "CAN(FD) interface function library" `zlgcan.dll` with its `kerneldlls` folder, next to the program or in a `zlgcan` folder beside it. The library needs the Visual C++ 2013 x64 runtime (USBCAN-I/II also the 2008 x64 runtime with MFC). zlgcan.dll looks for each device's kernel DLL on the system path first, then in `kerneldlls`; the library has none for the USBCAN-E-U family (`USBCAN_E_64.dll` and the like). The card names any missing file when it connects | – | – |
 | SocketCAN | – | – | built in; the interface's bitrate is set with `ip link` (the card shows the command, e.g. `sudo ip link set can0 up type can bitrate 500000 sample-point 0.875`) |
 | slcan (CANable, CANUSB and other Lawicel-protocol adapters) | the adapter's serial port | the adapter's serial port | the adapter's serial port; classic CAN only, 10k–1M |
 
-The CAN guide covers card settings, DBC keys, inline signal definitions, and commands. [CAN project guide](docs/uidp/can.md)
+The illustrated guide shows ZLG bit timing, feedback for the first control frame, and automatic CSV recording. The CAN reference covers card settings, DBC keys, inline signal definitions, and commands. [CAN walkthrough](docs/tutorials/v0.8-guide.en.md#can-timing-individual-outputs-and-recording) · [CAN reference](docs/uidp/can.md)
 
 ## Architecture
 
+The designer reuses the runtime widget classes for the canvas and manages selection, layout and page editing. Preview runs inside Studio. Export bundles the project and resources with FluentHMIRuntime. Both build the running interface with `RuntimeSurface`.
+
+```mermaid
+flowchart TB
+    Design["Studio designer"] --> Project["Project model (.uidp)"]
+    Project --> Preview["Preview in Studio"]
+    Project --> Export["Exported app"]
+    Preview --> Surface["RuntimeSurface"]
+    Export --> Surface
+    Surface <-->|"Bindings and commands"| Context["RuntimeContext"]
+    Context <-->|"Points and alarm state"| Data["ProjectData"]
+    Context <-->|"Connection and endpoint"| Hub["CommHub"]
+    Hub <-->|"Messages and frames"| Links["Serial, TCP, UDP, MQTT and CAN"]
+    Context <-->|"PLC reads and writes"| S7["Classic S7 client"]
 ```
-src/core      fhmi_core     Project model, widget metadata, protocol parsing, data binding, command encoding, CAN signals / DBC / bit timing (Qt Core only)
-src/comm      fhmi_comm     Link interface + serial / TCP client / TCP server / MQTT / UDP / CAN (src/comm/can: PCAN, ZLG, SocketCAN, slcan); CommHub gathers all links
-src/runtime   fhmi_runtime  Runtime widgets built on FluentQtWidgets, RuntimeSurface, binding engine
+
+Received data carries its connection ID and, where applicable, an endpoint such as a TCP peer or MQTT topic. Bindings select a receive source. Commands select a destination independently. `ProjectData` evaluates shared points, expressions and alarm rules. The CAN card performs adapter operations in a background session per channel. `CanRecorder` writes segmented CSV files for the selected connections.
+
+```
+src/core      fhmi_core     Project model, widget registry, parsing, data source and route types, command encoding, CAN signals and bit timing
+src/comm      fhmi_comm     CommHub and transport links, CAN sessions and adapter backends, classic S7 client
+src/runtime   fhmi_runtime  FluentQtWidgets controls, RuntimeSurface, RuntimeContext, bindings, project data, alarms and CAN recording
 src/designer  fhmi_designer Canvas (QGraphicsScene), widget panel, property editor, alignment and container nesting
 src/studio    FluentHMIStudio   The designer app: design / preview / settings pages, export service
 src/player    FluentHMIRuntime  The runner for exported apps: reads the project.uidp and appearance.json next to it (or inside the .app)
 tools         uidp_reference    Regenerates docs/uidp-widgets.md and the widget list at the end of docs/uidp-format.md from the widget registry
 ```
-
-The design canvas shows the real runtime widgets, wrapped in QGraphicsProxyWidget and ignoring the mouse. The preview and exported apps attach the same widgets to a RuntimeContext, which receives data from the links, applies the bindings and sends commands.
 
 ## Building
 
@@ -205,10 +233,10 @@ Exported applications scale the complete canvas to fit the window, including con
 
 The Language setting on the Settings page offers Follow system, 简体中文 and English, and takes effect when Studio restarts. Following the system shows Simplified Chinese on a Chinese system and English anywhere else; an exported app set to follow the system follows the system of the computer it runs on.
 
-The runner can render a whole project to an image; the widget overviews in `docs/images` were made this way:
+The runner can render the gallery project to an image. Run it from the source directory after setting the interface language.
 
 ```bash
-FluentHMIRuntime <project.uidp> --theme dark --screenshot widgets-dark.png
+FluentHMIRuntime docs/images/widgets-en.uidp --theme dark --screenshot widgets-dark.png
 ```
 
 ## Online updates
@@ -236,9 +264,11 @@ python3 scripts/package.py --build-dir build/release --output-dir dist
 
 On macOS this produces `FluentHMI Studio.app`, with the runner at `Contents/Helpers/FluentHMIRuntime.app`; on Windows it produces `FluentHMI-Studio/`, with the Studio and runner exes in the same folder; on Linux it produces a .deb that installs the same flat folder as `/opt/FluentHMIStudio`, with Qt's libraries in `lib/` and its plugins in `plugins/`, plus the launcher `/usr/bin/fluenthmi-studio`, a desktop entry and an icon. The package holds a single copy of Qt: on macOS Qt lives in the runner and Studio uses it through its rpath and `qt.conf`; on Windows and Linux both share the Qt libraries and plugins in the folder, and `runtime-files.txt` lists the files the runner needs. On Linux both programs find `lib/` through their RUNPATH (`$ORIGIN/lib`, set with patchelf), and the X11 helper libraries that minimal systems lack are bundled beside Qt's, so an exported app runs where nothing was installed. Exporting an app copies only the runner and its Qt, which is why exported apps can be copied straight to another computer and run. At the end, the script exports `examples/demo.uidp` with the packaged Studio and starts the exported app with `--check`; if any step fails, no archive is produced. On macOS it also checks that no library is still loaded from the build machine's Qt folder, and uses `DYLD_PRINT_LIBRARIES` to confirm that at run time Studio and the exported app load only system libraries and libraries inside the package. On Linux it checks the same with RUNPATHs and `ldd` (no library may be missing), and at run time with `LD_DEBUG=libs`, for Studio unpacked from the finished .deb and for the export unpacked from its tar.gz and started with `start.sh --check`; the programs it starts need a display, so run it under `xvfb-run -a` or in a desktop session. The output is a zip plus a `.sha256` file (on Linux a .deb plus a `.sha256`); macOS builds are only ad hoc signed, without Developer ID signing or notarization.
 
-To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`, optionally add `docs/release-notes/vX.Y.Z.md`, then push a `vX.Y.Z` tag. The `Release` workflow builds, tests and packages on Windows, macOS (universal) and Linux (x64 and arm64, on Ubuntu 24.04). For each .deb it checks the package name, version, architecture and dependencies, lets apt resolve it, installs it and exports the demo with it, and runs that export in a clean Ubuntu 24.04 container with only the system libraries listed above. It only publishes the GitHub Release when everything passes. Started by hand, or by a pull request that changes the packaging, it packages and checks without publishing.
+To release a new version, change `project(... VERSION ...)` in `CMakeLists.txt`, optionally add the matching file in `docs/release-notes/`, and push a matching tag such as `v0.8` or `v0.7.0`. The `Release` workflow builds, tests and packages on Windows, macOS (universal) and Linux (x64 and arm64, on Ubuntu 24.04). For each .deb it checks the package name, version, architecture and dependencies, lets apt resolve them, installs it and exports the demo with it, and runs that export in a clean Ubuntu 24.04 container with only the system libraries listed above. It only publishes the GitHub Release when everything passes. Started by hand, or by a pull request that changes the packaging, it packages and checks without publishing.
 
-## Current status (0.7.0)
+## Current status (0.8)
+
+Projects saved with versions before 0.8 retain their default behavior when opened in 0.8. Explicit multi-channel routing and the new data/alarm features use UIDP 1.2 or 1.3 and require FluentHMI Studio 0.8 or later. Projects that only use the existing UIDP 1.0/1.1 features continue to use those formats. See the [project format guide](docs/uidp-format.md) for the feature boundaries.
 
 Done: 111 widgets, including 25 industrial devices, 12 instruments, 13 Automotive electronics, 14 Electronics DIY and 14 Embedded systems widgets, drag-and-drop design, grid snapping, zoom, alignment and distribution, undo / redo, copy / paste (with the same clipboard format as the Python version), container nesting (horizontal / vertical / flex / card / tab), property and data binding editing, save / open / save as (relative image paths follow the project folder when it moves), serial / TCP / MQTT / UDP / CAN / classic S7 preview, standalone app export (with the project's own icon if it has one), the live chart's full history, cursor and CSV/JSON save / load for comparison, CAN summaries and scrolling logs with bounded retention and CSV export, Windows, macOS and Linux (x64 and arm64 .deb) packaging, light and dark themes, Fluent-style scroll bars everywhere, online updates (check, download and verify, replace and restart), Modbus bindings named by address and polled automatically, binary frames with a length field and checksum, text parsing with configurable terminator and encoding, and Modbus ASCII.
 

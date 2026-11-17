@@ -1,5 +1,6 @@
 #include "runtime/field_help.h"
 
+#include "runtime/app_dialog.h"
 #include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
@@ -15,8 +16,6 @@
 #include <QtGui/QClipboard>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QGuiApplication>
-#include <QtGui/QScreen>
-#include <QtWidgets/QDialog>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QVBoxLayout>
 
@@ -44,6 +43,56 @@ struct HelpContent
 HelpContent contentFor(FieldHelpTopic topic)
 {
     switch (topic) {
+    case FieldHelpTopic::PageNavigation:
+        return {tr("分页与导航"), tr("从控件库拖入「分页容器」，在「导航风格」选择经典选项卡、下划线导航、分段导航或文档页签。四种风格共用同一组页面。"), {},
+            {{tr("添加与命名"), tr("点击画布页签或选择「当前编辑页」进入编辑。点击添加创建空白页。「运行时启动页」决定预览和导出应用打开时显示哪一页。")},
+             {tr("删除与调整顺序"), tr("删除当前页会把其中的控件并入相邻的保留页，不删除控件。前移、后移时，页面内容与该页布局一起移动；最后一页不能删除。这些操作可撤销。")},
+             {tr("切换风格"), tr("风格只改变导航外观，页面内容、数据绑定与发送设置继续保留。0.8 之前版本保存的工程仍使用原来的选项卡样式；切换时自由布局保持内容相对页顶的位置，自动布局按该页设置重新排列。")}}};
+    case FieldHelpTopic::WidgetAppearance:
+        return {tr("控件风格"), tr("选中控件后，在属性中选择按钮风格或卡片风格。风格跟随应用的浅色、深色和主题色。"), {},
+            {{tr("按钮"), tr("标准适合普通操作，强调用于主要操作，轻量减少背景，描边突出轮廓。四种样式都保持一次点击执行一次原来的命令，描边按钮不会变成开关。")},
+             {tr("卡片与数值显示"), tr("标准保留原来的卡片底色，透明只显示内容，描边保留边框。切换风格不改变控件位置、数值格式或绑定。")},
+             {tr("0.8 之前的工程"), tr("未设置风格的按钮和卡片继续使用标准样式。选择新风格后，预览、保存和导出的应用使用同一设置。")}}};
+    case FieldHelpTopic::SelectionStyles:
+        return {tr("选择控件与开关"), tr("选择样式和开关样式只改变外观，原来的选项、数据绑定及发送设置继续使用。"),
+            {{tr("模式选择"), QStringLiteral("手动\n自动\n维护")}, // i18n: ignore
+             {tr("对应的发送命令表"), QStringLiteral("0\n1\n2")}},
+            {{tr("下拉、分段与单选组"), tr("选项每行一个。默认选项和接收绑定使用从 0 开始的选项序号；发送命令表按行对应，命令为空时发送选项文字。分段和单选组适合少量短选项，选项较多时使用下拉框。")},
+             {tr("开关与复选框"), tr("两种样式共用开启判定、开启命令和关闭命令。复选框只有选中和未选中两种状态，不表示第三种设备状态。")},
+             {tr("反馈与操作"), tr("接收数据更新选中状态时不会发送命令。只有用户操作才按发送设置执行；切换外观不会发送。")}}};
+    case FieldHelpTopic::NumberInput:
+        return {tr("整数与小数输入"), tr("数值框的「数值模式」选择小数后，可设置 0～6 位小数和步长。0.8 之前版本保存的工程默认使用整数，步长为 1。"),
+            {{tr("温度设定示例"), tr("数值模式：小数\n小数位数：1\n最小值：0\n最大值：100\n默认值：23.5\n步长：0.5\n后缀：℃")}},
+            {{tr("显示与编码"), tr("后缀只用于显示，不加入发送值。小数位数决定输入精度；HEX 或 Modbus 发送小数时，数据类型应选择设备支持的 float32。设备若使用整数比例值，请按协议填写整数值；发送模板只替换内容，不计算比例。小数输入不会自动改变协议的数据类型。")},
+             {tr("发送时机"), tr("文本、HEX、JSON 和 CAN 按「变化发送」设置执行；Modbus 和 S7 延续原来的写入行为。接收反馈更新数值不会反向发送。")}}};
+    case FieldHelpTopic::AlarmFilters:
+        return {tr("报警筛选"), tr("在报警列表点击「筛选」，可以组合关键词、级别、状态和时间条件。收起筛选区仍保留当前条件，清除筛选后显示全部。"), {},
+            {{tr("关键词与状态"), tr("关键词匹配报警名称或文字。当前报警按活动、未确认、已恢复或数据未知等状态筛选；历史记录按触发、恢复、确认和消音事件筛选。切换当前与历史时使用各自的条件。")},
+             {tr("时间范围"), tr("当前报警按触发时间，历史记录按事件时间筛选。自定义起止时间使用本机时间，包含两个端点；不限时间时也能显示尚未收到数据的报警。")},
+             {tr("日期与时间输入"), tr("自定义范围中，点击日历图标选日期，点击时间图标选择时、分、秒并确认；取消不修改时间。也可直接用键盘编辑两个输入框，按 Enter 或移开焦点后生效。")},
+             {tr("确认与导出"), tr("当前报警页提供确认和消音。历史记录页可以导出筛选结果或全部历史。")}}};
+    case FieldHelpTopic::CanRecovery:
+        return {tr("总线关闭自动恢复"), tr("默认关闭。开启后，PCAN 使用驱动自动恢复；ZLG 在本通道线程中每秒尝试复位并重新启动，不关闭其他通道。"), {},
+            {{tr("适用情况"), tr("仅针对控制器 Bus-off 状态，不处理 USB 拔出或设备失联。若接线、终端电阻或波特率仍有问题，恢复后可能再次 Bus-off。")},
+             {tr("SocketCAN"), tr("需要按卡片提示执行带 restart-ms 1000 的系统配置命令；本程序不修改系统网络配置。slcan 不提供自动恢复开关。")},
+             {tr("设备识别"), tr("PCAN 列出驱动报告的通道。ZLG 搜索已安装驱动提供的 USB 型号名称；兼容卡未提供明确型号时请手动选择，同型号多台设备仍需核对序号。")}}};
+    case FieldHelpTopic::EnumDisplay:
+        return {tr("枚举显示"), tr("显示格式选「枚举」，每行填写 数值=文字，可在末尾加 |#RRGGBB 指定颜色。"),
+            {{tr("状态映射"), QStringLiteral("0=停止\n1=运行|#107c10\n2=故障|#d13438")}}, // i18n: ignore
+            {{tr("未匹配值"), tr("没有匹配时显示原始值，或填写「未匹配文字」；「未匹配颜色」留空使用默认颜色。")},
+             {tr("状态徽标"), tr("数值显示的「显示样式」选择「状态徽标」，再把显示格式设为枚举，即可显示紧凑的状态文字。映射颜色仍表示文字颜色，徽标背景随主题生成浅色衬底；枚举模式不显示单位。")}}};
+    case FieldHelpTopic::ValueThreshold:
+        return {tr("电量分段变色"), tr("开启后按当前百分比选择颜色，0.8 之前版本保存的工程默认关闭。"), {},
+            {{tr("示例"), tr("低电量上限 20，预警上限 40：≤20% 红色，20%～40% 黄色，>40% 绿色。两个边界都计入较低区间，可自行设置颜色。")}}};
+    case FieldHelpTopic::ProjectLogic:
+        return {tr("工程数据与报警"), tr("点击设计器顶部「数据与报警」，或在工程属性打开「工程数据与报警」。控件、曲线选择「工程数据点」，再从绑定字段下拉框选择或搜索点名。"),
+            {{tr("任一路故障触发总故障"), QStringLiteral("T[\"L1\"] or T[\"L2\"] or T[\"L3\"]")},
+             {tr("温度报警条件"), QStringLiteral("T[\"温度\"] > 80")}}, // i18n: ignore
+            {{tr("数据点"), tr("接收数据点选择来源连接和地址；计算表达式可引用多个已定义的数据点。不同连接使用不同名称。Modbus 和 S7 数据点在后台持续采集。")},
+             {tr("重命名"), tr("双击数据点名称修改，计算表达式、报警条件、控件和曲线绑定会同步更新。点击确定一起保存，取消不会改变工程；也可一次撤销整次修改。设备原始字段名和普通显示文字不随点名改变。")},
+             {tr("故障与未知"), tr("工程表达式的 and/or 返回布尔结果。任一路已知故障，or 汇总就为真；正常与未知做 or 时仍为未知，不误报恢复。and 有已知假值时为假。未知输入不当作零参与算术计算。")},
+             {tr("报警"), tr("级别 1～3，3 最高。条件从假变真时触发，从真变假时恢复；确认不会修改设备，恢复后未确认的报警仍保留。消音只停止本次提醒，再次触发会恢复提醒。")},
+             {tr("历史"), tr("最近 2000 条触发、恢复、确认和消音记录保存在本机，可在报警列表切换查看、导出。历史按工程标识区分；没有报警定义的工程不会创建记录文件。")}}};
     case FieldHelpTopic::IndustrialTextLayout:
         return {
             tr("工业组件文字定位"),
@@ -73,7 +122,7 @@ HelpContent contentFor(FieldHelpTopic topic)
              {tr("读取状态字第 4 位：位号从 0 开始，输入需为整数"), QStringLiteral("(value >> 4) & 1")},
              {tr("阈值判断：大于 80 时为真"), QStringLiteral("value > 80")}},
             {{tr("支持的运算"),
-              tr("可用 + - * / // % **、整数位运算 & | ^ ~ << >>、比较、and / or / not 和括号。比较产生 True 或 False；曲线将其记录为 1 或 0。表达式不能调用函数，也不能引用其他控件或多个寄存器。")},
+              tr("可用 + - * / // % **、整数位运算 & | ^ ~ << >>、比较、and / or / not 和括号。比较产生 True 或 False；曲线将其记录为 1 或 0。绑定转换表达式处理当前 value；跨信号计算请在「工程数据与报警」定义计算数据点，用 T[\"名称\"] 引用。表达式不能调用函数。")},
              {tr("计算失败与发送"),
               tr("计算失败（如除以零、对小数做位运算）时使用原值。这里的换算只处理接收值，不会自动对发送值做反向换算；发送模板、写入地址和值应单独配置。")}}};
     case FieldHelpTopic::CommandTemplates:
@@ -118,7 +167,7 @@ HelpContent contentFor(FieldHelpTopic topic)
     case FieldHelpTopic::ReceiveFraming:
         return {
             tr("接收分帧与字段"),
-            tr("连接卡片先把收到的字节整理成完整记录，再交给控件取值。「项目设置」使用工程的解析模式与帧格式；卡片选择自己的模式时可单独配置。"),
+            tr("「跟随工程」显示生效的工程解析模式，并使用工程的帧格式。继承 Modbus 时仍可设置卡片自己的轮询或从站参数。"),
             {{tr("line：行结束符填写反斜杠 n"), QStringLiteral("\\n")},
              {tr("hex：字段表每行一个，省略字节序时使用大端"), QStringLiteral("temperature,0,2,uint16")}},
             {{tr("行文本何时更新"),
@@ -175,7 +224,7 @@ HelpContent contentFor(FieldHelpTopic topic)
              {tr("DBC 文件路径"), tr("相对路径以工程文件所在目录为基准。保存工程后将 DBC 与工程一起保留；导出应用时会复制已引用的 DBC 文件。")}}};
     case FieldHelpTopic::CanTiming:
         return {tr("采样点与自定义位时序"),
-                tr("ZLG USBCAN-I/II 系列可直接选择波特率和采样点，自定义留空即可自动计算。「时序」显示硬件实际可实现的值，也可点击「计算」选择并回填参数。"),
+                tr("ZLG USBCAN-I/II 系列的采样点默认使用设备标准。也可选择具体百分比或填写自定义参数。「时序」显示实际值，点击「计算」可选择并回填参数。"),
                 {{tr("USBCAN-I/II：500k、87.5%、SJW=1 的 BTR 参数"), QStringLiteral("00,1C")},
                  {tr("同一组合：十进制 BRP,TSEG1,TSEG2,SJW"), QStringLiteral("1,13,2,1")},
                  {tr("同一型号的 ZCANPRO 完整结果也可粘贴"), QStringLiteral("500Kbps(87%),(00,1C)")}},
@@ -183,7 +232,7 @@ HelpContent contentFor(FieldHelpTopic topic)
                  {tr("自定义与下拉框"), tr("填写自定义后，以自定义参数为准，波特率和采样点下拉框停用；清空后恢复自动或设备标准设置。修改后点击连接才会配置硬件，连接期间参数锁定。")},
                  {tr("其他 ZLG 型号"),
                   tr("E-U 和 CAN FD 型号应从 ZCANPRO 中选择实际型号，再粘贴完整计算结果；不要套用 USBCAN-I/II 的 00,1C。USBCAN-4E-U 使用十进制 bps，其接口不提供独立采样点设置。")},
-                 {tr("保存计算结果"), tr("计算器的「应用到卡片」只回填当前运行卡片。要作为工程默认值，请复制到设计器的「自定义位时序」属性并保存工程。")}}};
+                 {tr("保存计算结果"), tr("计算器的「应用到卡片」只回填当前运行卡片。要作为工程默认值，请复制到设计器的「ZLG 自定义位时序」属性并保存工程。")}}};
     case FieldHelpTopic::CanReceiveFilter:
         return {
             tr("CAN 接收过滤"),
@@ -194,6 +243,13 @@ HelpContent contentFor(FieldHelpTopic topic)
               tr("不大于 7FF 的短 ID 默认标准帧；八位十六进制写法明确指定扩展帧。数值相同的标准帧和扩展帧分别匹配。")},
              {tr("与监视器筛选的区别"), tr("连接卡片的接收过滤影响整条链路的绑定和反馈缓存，修改后需要重连。监视器上方的筛选只改变表格和 CSV 显示，不会阻止其他控件收到报文。")},
              {tr("使用反馈映射时"), tr("必须允许接收映射右侧的反馈报文，否则连接时会报告配置冲突。过滤条件使用 ID，不能填写 IO 或 HMI 等报文名。")}}};
+    case FieldHelpTopic::DataRouting:
+        return {tr("连接与子通道"), tr("来源连接决定控件读取哪张连接卡的数据，发送连接决定命令发到哪张连接卡。两者可以分别设置。"),
+            {{tr("两路 CAN 使用相同 ID"), tr("把两个显示控件的来源连接分别选为 CAN_A 和 CAN_B；控制按钮的发送连接也选相应的卡片。CAN ID 不承担通道选择。")},
+             {tr("TCP、UDP 和 MQTT"), tr("子通道填写 TCP 服务端客户端或 UDP 发送方的 IP:端口，例如 192.168.1.20:502；IPv6 使用 [地址]:端口。MQTT 填具体 Topic，例如 device/1/state，按完整名称匹配。")}},
+            {{tr("留空与版本兼容"), tr("连接留空时接收所有匹配连接的数据，命令发往所有匹配连接，保持 0.8 之前版本的默认行为。选择具体连接后，断线不会转发到其他连接。子通道留空时接收全部来源；发送采用连接卡原有目标，TCP 服务端发给全部客户端。")},
+             {tr("切换连接"), tr("子通道随所选连接显示。更换连接后请按新连接重新填写子通道。")},
+             {tr("独立缓存"), tr("各连接以及各客户端、UDP 发送方、MQTT Topic 独立拼帧。断开或重连一个连接不会清空其他连接的接收缓存。S7 必须选择具体 S7 卡片。")}}};
     case FieldHelpTopic::CanMonitorModes:
         return {
             tr("报文监视模式"),
@@ -201,9 +257,12 @@ HelpContent contentFor(FieldHelpTopic topic)
             {},
             {{tr("滚动日志"), tr("每帧一行，按到达顺序显示；隐藏周期和次数，禁止表头排序。「自动滚动」控制是否跟随最新行，关闭后可翻阅已有记录。")},
              {tr("按 ID 汇总"),
-              tr("按 ID、标准/扩展格式和收发方向合并，显示最新数据、周期和次数，允许排序；隐藏自动滚动。周期按最近最多 10 次报文间隔计算平均值。")},
+              tr("按连接、ID、标准/扩展格式和收发方向合并，显示最新数据、周期和次数，允许排序；隐藏自动滚动。周期按最近最多 10 次报文间隔计算平均值。")},
              {tr("序号与切换模式"),
               tr("序号随进入监视器的收发报文累计；筛选和淘汰记录不重新编号。汇总模式显示该项最近一次更新的序号。切到滚动时只带入各汇总项的最新一帧；切回汇总时合并当前保留的记录。")},
+             {tr("显示与保存行数"), tr("「显示行数」只限制表格保留记录；「每文件行数」决定自动保存的 CSV 分段大小，两者独立。新控件默认每文件 100000 行；0.8 之前版本保存的工程未设置此项时沿用原显示上限。修改每文件行数会写完当前尾段，再按新值记录；修改显示行数不影响保存。")},
+             {tr("自动保存"), tr("勾选后先选择目录，后台保存所选来源连接的全部收发报文。每个 CSV 达到「每文件行数」就新建下一份，关闭保存、断开最后一个所选 CAN 连接或退出运行时，会保存不足一份的尾段。显示模式、ID 筛选、清空表格均不影响记录；再次连接会开始新一组文件。目录可在属性中预设，已有文件不会覆盖或自动删除。写盘失败会停止保存并提示，通信继续。")},
+             {tr("保存目录"), tr("自动保存开启时，文件夹按钮可以打开或更换目录。更换目录后会写完旧目录的尾段，后续报文进入新目录。")},
              {tr("导出内容"),
               tr("CSV 导出当前筛选后的保留记录，滚动模式省略周期与次数。time 包含日期、毫秒和时区；timestamp_ms 保留原始整数时间。已清空或超出上限淘汰的记录不在导出范围内。")}}};
     }
@@ -214,16 +273,11 @@ HelpContent contentFor(FieldHelpTopic topic)
 
 QDialog *showHelp(const HelpContent &content, QWidget *parent)
 {
-    auto *dialog = new QDialog(parent);
+    auto *dialog = new AppDialog(content.title, parent);
     dialog->setObjectName(QStringLiteral("fieldHelpDialog"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(tr("帮助：%1").arg(content.title));
-    auto *layout = new QVBoxLayout(dialog);
-    layout->setContentsMargins(20, 16, 20, 16);
-    layout->setSpacing(12);
-    auto *heading = new FluentQt::SubtitleLabel(content.title, dialog);
-    heading->setWordWrap(true);
-    layout->addWidget(heading);
+    auto *layout = dialog->viewLayout();
     auto *scroll = new FluentQt::ScrollArea(dialog);
     scroll->setObjectName(QStringLiteral("fieldHelpScroll"));
     scroll->setWidgetResizable(true);
@@ -281,37 +335,72 @@ QDialog *showHelp(const HelpContent &content, QWidget *parent)
     items->addStretch();
     scroll->setWidget(body);
     layout->addWidget(scroll, 1);
-    auto *footer = new QHBoxLayout;
     if (!content.examples.isEmpty()) {
-        footer->addWidget(paragraph(tr("点击“复制示例”，再粘贴到对应字段。"), dialog), 1);
-    } else {
-        footer->addStretch();
+        layout->addWidget(paragraph(tr("点击“复制示例”，再粘贴到对应字段。"), dialog));
     }
-    auto *close = new FluentQt::PrimaryPushButton(tr("关闭"), dialog);
+    dialog->hideCancelButton();
+    auto *close = dialog->yesButton();
+    close->setText(tr("关闭"));
     close->setObjectName(QStringLiteral("fieldHelpClose"));
     close->setDefault(true);
-    footer->addWidget(close);
-    layout->addLayout(footer);
-    QObject::connect(close, &QPushButton::clicked, dialog, &QDialog::accept);
-    dialog->setMinimumSize(320, 260);
-    const QSize available = parent->screen()->availableGeometry().size() - QSize(48, 48);
-    dialog->resize(QSize(680, 700).boundedTo(available));
+    dialog->setPreferredSize(QSize(680, 700));
     dialog->open();
+    // Short help topics fit their text; longer topics retain the scrollable height cap.
+    dialog->widget()->layout()->activate();
+    const int chrome = dialog->widget()->height() - scroll->height() + 2 * scroll->frameWidth();
+    const int bodyHeight = items->totalHeightForWidth(scroll->viewport()->width());
+    dialog->setPreferredSize(QSize(680, qMin(700, chrome + bodyHeight)));
     return dialog;
 }
 
 } // namespace
 
+std::optional<FieldHelpTopic> fieldHelpTopic(QStringView key)
+{
+    static const struct {
+        const char *key;
+        FieldHelpTopic topic;
+    } topics[] = {{"layout.pages", FieldHelpTopic::PageNavigation},
+                  {"widget.appearance", FieldHelpTopic::WidgetAppearance},
+                  {"widget.selection", FieldHelpTopic::SelectionStyles},
+                  {"input.number", FieldHelpTopic::NumberInput},
+                  {"alarm.filters", FieldHelpTopic::AlarmFilters},
+                  {"data.routing", FieldHelpTopic::DataRouting},
+                  {"can.initial-state", FieldHelpTopic::CanInitialState},
+                  {"can.signal-command", FieldHelpTopic::CanSignalCommand},
+                  {"can.signal-definitions", FieldHelpTopic::CanSignalDefinitions},
+                  {"can.timing", FieldHelpTopic::CanTiming},
+                  {"can.receive-filter", FieldHelpTopic::CanReceiveFilter},
+                  {"can.monitor-modes", FieldHelpTopic::CanMonitorModes},
+                  {"data.binding", FieldHelpTopic::DataBinding},
+                  {"data.expression", FieldHelpTopic::TransformExpression},
+                  {"display.enum", FieldHelpTopic::EnumDisplay},
+                  {"display.threshold", FieldHelpTopic::ValueThreshold},
+                  {"project.logic", FieldHelpTopic::ProjectLogic},
+                  {"can.recovery", FieldHelpTopic::CanRecovery},
+                  {"command.templates", FieldHelpTopic::CommandTemplates},
+                  {"modbus.addressing", FieldHelpTopic::ModbusAddressing},
+                  {"s7.addressing", FieldHelpTopic::S7Addressing},
+                  {"receive.framing", FieldHelpTopic::ReceiveFraming},
+                  {"industrial.text-layout", FieldHelpTopic::IndustrialTextLayout}};
+    for (const auto &entry : topics) {
+        if (key == QLatin1String(entry.key)) {
+            return entry.topic;
+        }
+    }
+    return std::nullopt;
+}
+
 QToolButton *createFieldHelpButton(FieldHelpTopic topic, QWidget *parent)
 {
-    auto *button = new FluentQt::TransparentToolButton(FluentQt::icon(FluentQt::FluentIcon::Question), parent);
+    auto *button = new FluentQt::TransparentToolButton(FluentQt::icon(FluentQt::FluentIcon::Info), parent);
     button->setIconSize(QSize(16, 16));
     const QString style = QStringLiteral("QToolButton { padding: 0px; min-width: 0px; min-height: 0px; }");
     FluentQt::FluentStyleSheet::setCustomStyleSheet(button, style, style);
     button->setFixedSize(24, 24);
     button->setAccessibleName(tr("查看%1的帮助").arg(contentFor(topic).title));
     fluentToolTip(button, button->accessibleName());
-    // A separate window owns the help, so rebuilding the property panel cannot leave a dangling callback.
+    // The window owns the help, so rebuilding the property panel cannot leave a dangling callback.
     QObject::connect(button, &QToolButton::clicked, button,
                      [button, topic]() { showHelp(contentFor(topic), button->window()); });
     return button;

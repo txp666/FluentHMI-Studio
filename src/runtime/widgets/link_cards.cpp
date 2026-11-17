@@ -29,8 +29,6 @@ namespace fhmi {
 
 namespace {
 
-const QString kProjectParser = QStringLiteral("项目设置"); // i18n: value
-
 // A combo box of a property's options, .uidp values shown translated.
 FluentQt::ComboBox *comboOf(QWidget *parent, const QStringList &values)
 {
@@ -102,11 +100,12 @@ void LinkCardBase::paintEvent(QPaintEvent *)
 
 void LinkCardBase::onAttached()
 {
+    showInheritedParser(m_parser, context()->hub()->defaultParserType());
     if (text("modbusRole") == ModbusRole::Slave) {
         // The table lives while the project runs, through every connection.
         m_slave = new ModbusSlave(ModbusSlave::settingsFromProperties(properties()),
                                   ModbusSlaveStore::fromProperties(properties()), this);
-        context()->hub()->addModbusSlave(m_slave);
+        context()->hub()->addModbusSlave(m_slave, property("fhmiWidgetId").toString());
         connect(m_slave, &ModbusSlave::statusChanged, this, [this]() { showStatus(); });
     }
     live(connect(context()->modbusPoller(), &ModbusPoller::statusChanged, this, [this]() { showStatus(); }));
@@ -119,8 +118,7 @@ void LinkCardBase::onDetached()
     delete m_slave; // its links are gone already
     m_slave = nullptr;
     setConnectedUi(false, tr("未连接"));
-    m_lastError.clear();
-    m_lastErrorAt.invalidate();
+    m_errorNotice.clear();
 }
 
 ModbusPoller::Settings LinkCardBase::pollingSettings() const
@@ -143,19 +141,14 @@ void LinkCardBase::updatePolling()
 bool LinkCardBase::configureParser(Link *link)
 {
     CommHub *hub = context()->hub();
-    QString type = selectedValue(m_parser);
-    QJsonObject config;
+    const QString selection = selectedValue(m_parser);
+    const QString type = LinkParser::effectiveType(selection, hub->defaultParserType());
     // The card's own frame format applies once it picks its own mode; left empty, a card on
     // the project's mode still uses the project's format.
     const QJsonObject own = prop("parserConfig").toObject();
-    if (type.isEmpty() || type == kProjectParser) {
-        type = hub->defaultParserType();
-        config = hub->defaultParserConfig();
-    } else if (!own.isEmpty()) {
-        config = own;
-    } else if (type == hub->defaultParserType()) {
-        config = hub->defaultParserConfig();
-    }
+    const QJsonObject config = LinkParser::inheritsProject(selection) ||
+                                      (own.isEmpty() && type == hub->defaultParserType())
+                                  ? hub->defaultParserConfig() : own;
     // A slave's counts start again with each connection.
     link->setModbusSlave(m_slave);
     if (m_slave) {
@@ -197,9 +190,9 @@ void LinkCardBase::showStatus()
             text += QStringLiteral(" · ") + link->modbusSlave()->status();
             polling = true;
         } else if (link && link->isConnected() && link->parsesModbus() && link->canSend() &&
-                   !poller->status().isEmpty() && !poller->isWaiting()) {
-            text += QStringLiteral(" · ") + poller->status();
-            toolTip = poller->blocks().isEmpty() ? text : poller->toolTip();
+                   !poller->status(link).isEmpty() && !poller->isWaiting()) {
+            text += QStringLiteral(" · ") + poller->status(link);
+            toolTip = poller->blocks().isEmpty() ? text : poller->toolTip(link);
             polling = true;
         }
     }
@@ -272,26 +265,10 @@ void LinkCardBase::finishStrip(int column)
     updateMinimumHeight();
 }
 
-void LinkCardBase::updateMinimumHeight()
-{
-    const bool fitted = minimumHeight() > 0 && height() == minimumHeight() &&
-                        maximumHeight() == QWIDGETSIZE_MAX;
-    layout()->invalidate();
-    layout()->activate(); // measures every row afresh
-    setMinimumHeight(minimumSizeHint().height());
-    if (fitted) {
-        resize(width(), minimumHeight());
-    }
-}
-
 void LinkCardBase::notifyError(const QString &title, const QString &message, int durationMs)
 {
-    if (message == m_lastError && m_lastErrorAt.isValid() && m_lastErrorAt.elapsed() < durationMs) {
-        return;
-    }
-    m_lastError = message;
-    m_lastErrorAt.start();
-    context()->notify(title, message, NotifyType::Error, durationMs);
+    if (m_errorNotice.shouldShow(message, durationMs))
+        context()->notify(title, message, NotifyType::Error, durationMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +383,7 @@ void SerialConfigCardWidget::refreshPorts()
 void SerialConfigCardWidget::onAttached()
 {
     m_link = new SerialLink(this);
-    context()->hub()->addLink(m_link);
+    context()->hub()->addLink(m_link, property("fhmiWidgetId").toString());
     refreshPorts();
     live(connect(m_connect, &QPushButton::clicked, this, &SerialConfigCardWidget::toggleConnection));
     live(connect(m_link, &Link::connectedChanged, this, [this](bool connected) {
@@ -568,7 +545,7 @@ void TcpConfigCardWidget::toggleConnection()
         return;
     }
     m_link = link;
-    context()->hub()->addLink(link);
+    context()->hub()->addLink(link, property("fhmiWidgetId").toString());
     updatePolling();
     connect(link, &Link::connectedChanged, this, [this, link](bool connected) {
         setConnectedUi(connected, connected ? link->description() : tr("未连接"));
@@ -689,7 +666,7 @@ void MqttConfigCardWidget::apply()
 void MqttConfigCardWidget::onAttached()
 {
     m_link = new MqttLink(this);
-    context()->hub()->addLink(m_link);
+    context()->hub()->addLink(m_link, property("fhmiWidgetId").toString());
     live(connect(m_connect, &QPushButton::clicked, this, &MqttConfigCardWidget::toggleConnection));
     live(connect(m_link, &Link::connectedChanged, this, &MqttConfigCardWidget::refreshState));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
@@ -817,7 +794,7 @@ void UdpConfigCardWidget::apply()
 void UdpConfigCardWidget::onAttached()
 {
     m_link = new UdpLink(this);
-    context()->hub()->addLink(m_link);
+    context()->hub()->addLink(m_link, property("fhmiWidgetId").toString());
     live(connect(m_connect, &QPushButton::clicked, this, &UdpConfigCardWidget::toggleConnection));
     live(connect(m_link, &Link::connectedChanged, this, &UdpConfigCardWidget::refreshState));
     // The first datagram of a link without a remote gives it someone to send to: the poller may start.

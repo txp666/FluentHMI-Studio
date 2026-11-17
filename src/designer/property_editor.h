@@ -33,7 +33,13 @@ class PropertyEditor : public FluentQt::ScrollArea
 
     void setScene(DesignScene *scene) { m_scene = scene; }
     void setProject(Project *project);
+    void editProjectLogic();
     void showItem(CanvasItem *item);
+    void showBinding(CanvasItem *item)
+    {
+        m_bindingOnly = true;
+        showItem(item);
+    }
     CanvasItem *currentItem() const { return m_item; }
     // Reload the geometry fields after the item moved on the canvas.
     void refreshGeometry();
@@ -54,7 +60,8 @@ class PropertyEditor : public FluentQt::ScrollArea
     void rebuild();
     void clearContent();
     QFormLayout *addSection(const QString &title);
-    void addRow(QFormLayout *form, const QString &key, const QString &label, QWidget *editor);
+    void addRow(QFormLayout *form, const QString &key, const QString &label, QWidget *editor,
+                const QString &helpKey = {});
     QWidget *createEditor(const PropDef &def, const QJsonValue &value, const Commit &commit);
 
     void buildProjectForm();
@@ -62,6 +69,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     // The project's icon beside its name: choose an image or go back to the default.
     QWidget *createIconButton(QWidget *nameField);
     void buildItemForm();
+    void addPageRows(QFormLayout *form);
     void buildBindingForm();
     // The parserConfig rows, the same for the project's default frame format and a link card's
     // own; `prefix` keeps the card's row keys apart from its properties'. Every edit hands
@@ -81,6 +89,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     void commitBinding(const QString &field);
     void updateVisibility();
     void setRowVisible(const QString &key, bool visible);
+    void updateRouteEndpoint(const QString &connection, const QString &endpoint, bool active = true);
 
     QPointer<CanvasItem> m_item;
     DesignScene *m_scene = nullptr;
@@ -93,6 +102,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     QHash<QString, QWidget *> m_bindingEditors;
     FluentQt::SpinBox *m_geometry[4] = {};
     bool m_loading = false;
+    bool m_bindingOnly = false;
 };
 
 } // namespace fhmi

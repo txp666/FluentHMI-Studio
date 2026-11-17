@@ -41,3 +41,29 @@ Update the two language projects, simulator address/initial values, address tabl
 本期网站素材存放于 `tutorials/assets/12-s7-plc/v070/`。视频源工程本地保留在 `video-workflow/projects/FluentHMI-Studio/tutorials/12-s7-plc/`，不放入软件源码仓库。教程工程在软件 v0.7.0 发布后新增，下载链接应使用教程提交 / 主分支或网站静态资源，不能假设它们存在于软件 `v0.7.0` tag 内。
 
 This directory contains examples and documentation only. Changes to it use `[skip ci]`; validate edited project files locally rather than rerunning desktop packaging CI for prose changes.
+
+## v0.8 示例 / v0.8 examples
+
+[中文操作图解](../../docs/tutorials/v0.8-guide.zh.md) · [English illustrated guide](../../docs/tutorials/v0.8-guide.en.md)
+
+### 14 · 工程数据与报警
+
+打开 [14-工程数据与报警.uidp](14-工程数据与报警.uidp) 并预览，启动两路 TCP 服务端（9201、9202）。用客户端接入后，设备 A 每行发送 `fault=0,soc=65`，设备 B 每行发送 `fault=0`。将任一 `fault` 改为 1 可触发总故障，`soc` 改为 20 可触发低电量。点击设计器顶部「数据与报警」可查看数据点、表达式与报警规则。
+
+Start the two TCP servers in Preview and connect with local clients. The example combines both devices' fault states, shows battery charge, and records alarm events. See the illustrated guide for the sample messages and configuration.
+
+### 15 · 分页与控件风格
+
+打开 [15-分页与控件风格.uidp](15-分页与控件风格.uidp) 并预览，无需硬件或连接。四列分别演示经典选项卡、下划线导航、分段导航和文档页签；点击「总览 / 参数」切换静态读数。中间比较标准、强调、轻量和描边按钮，点击仅显示本地通知；下方比较标准、透明和描边卡片及数值卡。
+
+返回设计器后，选中分页容器，在属性区切换导航风格，添加、删除、重命名或前后移动页面。用「当前编辑页」选设计器正在编辑的页，用「运行时启动页」选预览和导出应用的首页。页内控件随页面移动，删除页面时移至相邻页。按钮和卡片也可在属性区直接选择风格。
+
+Open this project and run Preview without a device or connection. Compare four page navigation styles, four button styles and three card styles. Buttons show local notifications only. Select a container in the designer to change its style or manage its pages.
+
+### 16 · 输入与状态筛选
+
+打开 [16-输入与状态筛选.uidp](16-输入与状态筛选.uidp) 并预览，无需硬件。上方对比小数数值框（含六位精度）、下拉／分段／单选组、开关／复选框；这些演示输入不发送设备命令。中间的状态徽标复用枚举文字与颜色。
+
+下方使用固定计算值模拟温度报警，压力报警保留无数据状态。点击「筛选」组合关键词、级别、状态和时间。切换到「历史记录」后可按事件类型筛选，也可选「自定义时间」分别填写起止日期和时间。「导出筛选结果」保存匹配的事件，「导出全部历史」保存完整历史。重新运行预览后，固定温度值会再次满足报警条件。
+
+Open this project without a device to compare decimal inputs, selector styles, checkboxes and status badges. A constant calculated temperature demonstrates alarms; pressure remains unknown. Expand Filter to combine conditions, or switch to history to filter events. Demo inputs do not send device commands.

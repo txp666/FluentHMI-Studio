@@ -1,6 +1,7 @@
 #include "studio/settings_page.h"
 
 #include "core/i18n.h"
+#include "runtime/ui_helpers.h"
 #include "studio/update_controller.h"
 
 #include <FluentQtWidgets/Config.h>
@@ -27,10 +28,10 @@ FluentQt::PushSettingCard *createLinkCard(const QString &title, const QString &d
     auto *card = new FluentQt::PushSettingCard(SettingsPage::tr("打开"), icon, title, description, parent);
     card->setObjectName(objectName + QStringLiteral("Card"));
     card->setProperty("targetUrl", url);
-    card->setToolTip(url);
+    fluentToolTip(card, url);
     card->button()->setObjectName(objectName + QStringLiteral("Button"));
     card->button()->setProperty("targetUrl", url);
-    card->button()->setToolTip(url);
+    fluentToolTip(card->button(), url);
     QObject::connect(card, &FluentQt::PushSettingCard::clicked, card,
                      [url]() { QDesktopServices::openUrl(QUrl(url)); });
     return card;

@@ -29,14 +29,12 @@ QString btrText(quint16 btr)
 
 } // namespace
 
-CanTimingDialog::CanTimingDialog(const CanSettings &settings, QWidget *parent) : QDialog(parent)
+CanTimingDialog::CanTimingDialog(const CanSettings &settings, QWidget *parent)
+    : AppDialog(tr("CAN 位时序计算器"), parent)
 {
     setObjectName(QStringLiteral("canTimingCalculator"));
-    setWindowTitle(tr("CAN 位时序计算器"));
-    resize(800, 560);
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(20, 16, 20, 16);
-    layout->setSpacing(12);
+    setPreferredSize(QSize(840, 600));
+    auto *layout = viewLayout();
     auto *caption = new FluentQt::BodyLabel(tr("USBCAN-I/II · 晶振 16 MHz（位时序时钟 8 MHz）"), this);
     layout->addWidget(caption);
     auto *inputs = new QGridLayout;
@@ -107,25 +105,15 @@ CanTimingDialog::CanTimingDialog(const CanSettings &settings, QWidget *parent) :
     m_status->setWordWrap(true);
     layout->addWidget(m_status);
 
-    auto *buttons = new QHBoxLayout;
-    m_copy = new FluentQt::PushButton(tr("复制参数"), this);
+    m_copy = new FluentQt::PushButton(tr("复制参数"), buttonGroup());
     m_copy->setObjectName(QStringLiteral("timingCalculatorCopy"));
-    auto *cancel = new FluentQt::PushButton(tr("取消"), this);
-    cancel->setObjectName(QStringLiteral("timingCalculatorCancel"));
-    m_apply = new FluentQt::PrimaryPushButton(tr("应用到卡片"), this);
+    m_copy->setAutoDefault(false);
+    m_apply = yesButton();
+    m_apply->setText(tr("应用到卡片"));
     m_apply->setObjectName(QStringLiteral("timingCalculatorApply"));
     m_apply->setDefault(true);
-    buttons->addWidget(m_copy);
-    buttons->addStretch();
-    buttons->addWidget(cancel);
-    buttons->addWidget(m_apply);
-    layout->addLayout(buttons);
-    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
-    connect(m_apply, &QPushButton::clicked, this, [this]() {
-        if (!selectedTiming().isEmpty()) {
-            accept();
-        }
-    });
+    buttonLayout()->insertWidget(0, m_copy);
+    setValidator([this] { return !selectedTiming().isEmpty(); });
     connect(m_copy, &QPushButton::clicked, this, [this]() { QGuiApplication::clipboard()->setText(selectedTiming()); });
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &CanTimingDialog::updateSelection);
     connect(m_table, &QTableWidget::cellDoubleClicked, this, [this]() { m_apply->click(); });

@@ -33,6 +33,10 @@ class CanPollingBackend : public CanBackend
     virtual bool writeFrame(const CanFrame &frame, QString *error) = 0;
     // Worker thread, every 500 ms.
     virtual CanBusState readBusState() = 0;
+    virtual bool recoverBus(QString *) { return false; }
+    void setAutoRecover(bool enabled) { m_autoRecover = enabled; }
+    // A status returned by read/write must take effect before the rest of a send batch.
+    void observeWorkerBusState(CanBusState state);
     // Worker thread: waits up to `ms` for frames to arrive or send(); the default only wakes on send().
     virtual void waitForActivity(int ms);
     // Any thread: ends waitForActivity() early.
@@ -43,9 +47,10 @@ class CanPollingBackend : public CanBackend
 
   private:
     void run();
-    void post(QList<CanFrame> &received, QList<CanFrame> &sent);
+    void post(const QList<CanFrame> &received, const QList<CanFrame> &sent);
     void deliver();
 
+    bool m_autoRecover = false;
     QThread *m_thread = nullptr;
     std::atomic<bool> m_running{false};
     QMutex m_mutex; // guards everything below
@@ -53,6 +58,7 @@ class CanPollingBackend : public CanBackend
     QList<CanFrame> m_queue;    // to send
     QList<CanFrame> m_received; // for the next delivery
     QList<CanFrame> m_sent;
+    QList<QPair<CanFrame, QString>> m_rejected;
     QStringList m_sendErrors;
     QString m_failure;
     bool m_stateChanged = false;

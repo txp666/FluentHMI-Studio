@@ -1,4 +1,5 @@
 #pragma once
+#include "core/data_source.h"
 
 #include "core/can_signal.h"
 #include "core/s7.h"
@@ -21,6 +22,7 @@ QString prefix(const QString &area); // "hr", "ir", "co", "di"; empty for anythi
 } // namespace ModbusArea
 
 namespace ParseMode {
+inline const QString DataPoint = QStringLiteral("工程数据点"); // i18n: value
 inline const QString KeyValue = QStringLiteral("键值匹配");    // i18n: value
 inline const QString JsonPath = QStringLiteral("JSON路径");    // i18n: value
 inline const QString HexBytes = QStringLiteral("HEX字节提取"); // i18n: value
@@ -28,6 +30,15 @@ inline const QString S7 = QStringLiteral("S7");
 inline const QString Modbus = QStringLiteral("Modbus");
 inline const QString CanSignal = QStringLiteral("CAN信号"); // i18n: value
 } // namespace ParseMode
+
+inline RouteTransport bindingRouteTransport(QStringView mode)
+{
+    if (mode == ParseMode::CanSignal)
+        return RouteTransport::Can;
+    if (mode == ParseMode::S7)
+        return RouteTransport::S7;
+    return mode == ParseMode::HexBytes || mode == ParseMode::Modbus ? RouteTransport::Bytes : RouteTransport::Any;
+}
 
 // Which bit a CAN信号 binding's canStartBit names. Fixed values in the file, not translated.
 namespace CanByteOrder {
@@ -67,8 +78,11 @@ class BindingEntry
     static std::optional<BindingEntry> fromWidget(const QJsonObject &widget);
 
     QString sourceCardId;
+    QString sourceEndpoint;
+    DataRoute route() const { return {sourceCardId, sourceEndpoint}; }
     std::optional<S7::Point> s7;
     QString widgetId;
+    QString projectPoint; // Internal destination, separate from widget IDs.
     QString typeName;
     QString propName;
     QString parseMode = ParseMode::KeyValue;
@@ -97,17 +111,22 @@ class BindingEntry
     CanSignalDef canSignal;
 
     // Which feed a binding reads: parsed messages, the bytes of a byte link, or CAN frames (extractFromCan).
-    bool usesParsedData() const { return parseMode != ParseMode::HexBytes && parseMode != ParseMode::CanSignal && parseMode != ParseMode::S7; }
+    bool usesParsedData() const
+    {
+        return parseMode != ParseMode::DataPoint && parseMode != ParseMode::HexBytes &&
+               parseMode != ParseMode::CanSignal && parseMode != ParseMode::S7;
+    }
     bool usesRawData() const { return parseMode == ParseMode::HexBytes; }
 
     // An invalid QVariant means "no value in this message".
     QVariant extractFromParsed(const Message &data) const;
     QVariant extractFromRaw(const QByteArray &raw) const;
-    QList<QVariant> extractAllFromRaw(const QByteArray &raw);
+    QList<QVariant> extractAllFromRaw(const QByteArray &raw, quint64 stream = 0, bool keepInvalid = false);
     // A CAN信号 binding's physical value (raw × factor + offset) in a received frame; invalid for another ID, a
     // remote or error frame, or data too short for the signal.
     QVariant extractFromCan(const CanFrame &frame) const;
     void resetStream();
+    void resetStream(quint64 stream);
 
     QVariant evaluate(const QVariant &raw) const;
     // Charts require a finite source before applying an expression; bad results retain that source.
@@ -120,7 +139,7 @@ class BindingEntry
     QVariant extractModbus(const Message &data) const;
     std::optional<QByteArray> stripFrame(const QByteArray &raw) const;
 
-    RawFrameBuffer m_rawFrames;
+    QHash<quint64, RawFrameBuffer> m_rawFrames;
 };
 
 } // namespace fhmi

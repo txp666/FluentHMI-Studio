@@ -1,4 +1,5 @@
 #include "comm/can/pcan_backend.h"
+#include <QtCore/QMutex>
 
 #include "core/can_timing.h"
 
@@ -54,6 +55,8 @@ Api &api()
 // Loads the library once, on the GUI thread, the first time a PCAN card lists channels or connects.
 bool loadApi(QString *error)
 {
+    static QMutex mutex;
+    QMutexLocker lock(&mutex);
     Api &a = api();
     if (a.loaded) {
         return true;
@@ -260,6 +263,12 @@ bool PcanBackend::open(const CanSettings &settings, QString *error)
     if (status != PCAN_ERROR_OK) {
         return fail(tr("PCAN 通道 %1 打开失败: %2").arg(handleText(m_handle), errorText(status)));
     }
+    quint32 autoReset = settings.autoRecover ? 1 : 0;
+    const auto resetStatus = a.setValue(m_handle, PCAN_BUSOFF_AUTORESET, &autoReset, sizeof autoReset);
+    if (settings.autoRecover && resetStatus != PCAN_ERROR_OK) {
+        a.uninitialize(m_handle);
+        return fail(tr("PCAN 自动恢复设置失败：%1").arg(errorText(resetStatus)));
+    }
     if (settings.listenOnly && listenStatus != PCAN_ERROR_OK &&
         a.setValue(m_handle, PCAN_LISTEN_ONLY, &listen, sizeof listen) != PCAN_ERROR_OK) {
         a.uninitialize(m_handle);
@@ -331,6 +340,10 @@ bool PcanBackend::readFrames(QList<CanFrame> &out, QString *error)
             frame.id = message.ID;
             frame.data = QByteArray(reinterpret_cast<const char *>(message.DATA), std::min<int>(message.LEN, 8));
         }
+        if (status & PCAN_ERROR_BUSOFF) {
+            observeWorkerBusState(CanBusState::BusOff);
+            return true;
+        }
         if (status & PCAN_ERROR_QRCVEMPTY) {
             return true;
         }
@@ -388,6 +401,8 @@ bool PcanBackend::writeFrame(const CanFrame &frame, QString *error)
         status = api().write(m_handle, &message);
     }
     if (status != PCAN_ERROR_OK) {
+        if (status & PCAN_ERROR_BUSOFF)
+            observeWorkerBusState(CanBusState::BusOff);
         if (error) {
             *error = tr("PCAN 发送失败: %1").arg(errorText(status));
         }

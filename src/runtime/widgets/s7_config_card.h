@@ -1,6 +1,6 @@
 #pragma once
 #include "runtime/hmi_widget.h"
-#include <QtCore/QElapsedTimer>
+#include "runtime/ui_helpers.h"
 class QGridLayout;
 namespace FluentQt {
 class LineEdit;
@@ -16,6 +16,7 @@ class S7ConfigCardWidget final : public HmiWidget
   public:
     S7ConfigCardWidget(const WidgetMeta &meta, QWidget *parent);
     ~S7ConfigCardWidget() override;
+    bool fitsContentHeight() const override { return true; }
 
   protected:
     void apply() override;
@@ -23,11 +24,11 @@ class S7ConfigCardWidget final : public HmiWidget
     void onDetached() override;
     void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
+    void arrangeForWidth(int width) override;
 
   private:
     void toggle();
     void refresh();
-    void relayout();
     void showFailure(const QString &reason);
     QString id() const { return property("fhmiWidgetId").toString(); }
     FluentQt::LineEdit *m_host;
@@ -39,7 +40,6 @@ class S7ConfigCardWidget final : public HmiWidget
     QGridLayout *m_layout;
     QList<FluentQt::CaptionLabel *> m_labels;
     bool m_open = false;
-    QString m_lastError;
-    QElapsedTimer m_lastErrorAt;
+    ConnectionErrorNotice m_errorNotice;
 };
 } // namespace fhmi

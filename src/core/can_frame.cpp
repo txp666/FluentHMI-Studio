@@ -7,8 +7,32 @@
 #include <QtCore/QStringList>
 
 #include <algorithm>
+#include <chrono>
 
 namespace fhmi {
+
+double Can::estimatedFrameSeconds(const CanFrame &frame, double nominalBitrate, double dataBitrate)
+{
+    if (frame.error || nominalBitrate <= 0)
+        return 0;
+    const int dataBits = frame.rtr ? 0 : int(frame.data.size()) * 8;
+    if (!frame.fd) {
+        const int stuffedRegion = (frame.extended ? 54 : 34) + dataBits;
+        return (stuffedRegion + (stuffedRegion - 1) / 4 + 13) / nominalBitrate;
+    }
+    const int arbitration = frame.extended ? 36 : 17;
+    const int crc = frame.data.size() > 16 ? 21 : 17;
+    const int dataRegion = 5 + dataBits;
+    const int dataPhase = dataRegion + (dataRegion + 3) / 4 + crc + 4 + 1 + (crc + 3) / 4;
+    const double rate = frame.brs && dataBitrate > 0 ? dataBitrate : nominalBitrate;
+    return (arbitration + (arbitration - 1) / 4 + 13) / nominalBitrate + dataPhase / rate;
+}
+
+qint64 Can::monotonicMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 namespace {
 

@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 #include <QtCore/QVariant>
+#include <functional>
 
 namespace fhmi {
 
@@ -20,7 +22,15 @@ class Expression
     // `expression` with `value` (a bool, an integer or a double) as the variable `value`: a
     // bool, a qlonglong or a double, as eval gives a bool, an int or a float. Invalid where
     // eval raises, where an int outgrows 64 bits and where a float is infinite or NaN.
-    static QVariant evaluate(const QString &expression, const QVariant &value);
+    // With a project Resolver, and/or aggregate booleans: true OR unknown is true,
+    // false AND unknown is false; an undecidable result stays invalid. Plain value
+    // transforms retain Python's operand-returning and/or behavior.
+    using Resolver = std::function<QVariant(const QString &)>;
+    static QVariant evaluate(const QString &expression, const QVariant &value, const Resolver &resolve = {});
+    // T["name"] refers to a project data point; parsing never executes arbitrary code.
+    static QStringList references(const QString &expression, bool *valid = nullptr, bool *usesValue = nullptr);
+    // Rewrites only parsed T["name"] references, preserving whitespace and quote style.
+    static QString renameReference(const QString &expression, const QString &previous, const QString &current);
 };
 
 } // namespace fhmi

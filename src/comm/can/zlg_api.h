@@ -205,13 +205,14 @@ struct Model
     bool termination; // has n/initenal_resistance in its property file
 };
 
-// USBCAN-E-mini is not here: no ZLG document found says which device type it uses.
+// USBCAN-E-mini manual UM01010101 V1.04 §1.1: fully compatible with USBCAN-E-U.
 inline constexpr Model kModels[] = {
     {"USBCAN-I", ZCAN_USBCAN1, 1, Family::Sja1000, false},
     {"USBCAN-I+", ZCAN_USBCAN1, 1, Family::Sja1000, false},
     {"USBCAN-I-mini", ZCAN_USBCAN1, 1, Family::Sja1000, false},
     {"USBCAN-II", ZCAN_USBCAN2, 2, Family::Sja1000, false},
     {"USBCAN-II+", ZCAN_USBCAN2, 2, Family::Sja1000, false},
+    {"USBCAN-E-mini", ZCAN_USBCAN_E_U, 1, Family::EU, false},
     {"USBCAN-E-U", ZCAN_USBCAN_E_U, 1, Family::EU, false},
     {"USBCAN-2E-U", ZCAN_USBCAN_2E_U, 2, Family::EU, false},
     {"USBCAN-4E-U", ZCAN_USBCAN_4E_U, 4, Family::EU, false},

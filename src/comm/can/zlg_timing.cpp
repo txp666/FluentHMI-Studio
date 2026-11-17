@@ -14,6 +14,27 @@ namespace {
 
 constexpr quint32 kSjaClock = 8000000; // 16 MHz crystal / 2, per SJA1000 BTR0/BTR1
 
+CanTiming decodeBtr(quint16 value)
+{
+    const int btr0 = value >> 8;
+    const int btr1 = value & 0xff;
+    return {(btr0 & 0x3f) + 1, (btr1 & 0xf) + 1, ((btr1 >> 4) & 7) + 1, (btr0 >> 6) + 1};
+}
+
+std::optional<quint16> standardBtr(quint32 bitrate)
+{
+    // Keep the vendor timings used by the original USBCAN-I/II backend.
+    static constexpr struct { quint32 rate; quint16 btr; } timings[] = {
+        {10000, 0x311c}, {20000, 0x181c}, {50000, 0x091c}, {100000, 0x041c}, {125000, 0x031c},
+        {250000, 0x011c}, {500000, 0x001c}, {800000, 0x0016}, {1000000, 0x0014},
+    };
+    const auto preset = std::find_if(std::begin(timings), std::end(timings),
+                                     [bitrate](const auto &item) { return item.rate == bitrate; });
+    if (preset == std::end(timings))
+        return {};
+    return preset->btr;
+}
+
 QString tr(const char *text) { return QCoreApplication::translate("ZlgTiming", text); }
 
 QString percent(double samplePoint)
@@ -82,7 +103,7 @@ QList<SjaTimingCandidate> sjaTimingCandidates(double bitrate, double samplePoint
 QString customTimingHint(const Model &model)
 {
     if (model.family == Family::Sja1000) {
-        return tr("留空按波特率和采样点计算；支持 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 和 ZCANPRO 结果");
+        return tr("留空使用设备标准或所选采样点。支持 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 和 ZCANPRO 结果");
     }
     if (model.deviceType == ZCAN_USBCAN_4E_U) {
         return tr("此型号填十进制波特率（bps），如 200000；采样点由设备决定");
@@ -117,7 +138,13 @@ std::optional<ChannelTiming> channelTiming(const Model &model, const CanSettings
     if (model.family == Family::Sja1000) {
         CanTiming timing;
         quint16 btr = 0;
-        if (custom.isEmpty()) {
+        if (custom.isEmpty() && settings.standardZlgTiming) {
+            const auto preset = standardBtr(settings.bitrate);
+            if (!preset)
+                return fail(tr("%1 不支持波特率 %2").arg(settings.zlgModel, CanAdapter::bitrateText(settings.bitrate)));
+            btr = *preset;
+            timing = decodeBtr(btr);
+        } else if (custom.isEmpty()) {
             if (!std::isfinite(settings.samplePoint) || settings.samplePoint <= 0 || settings.samplePoint >= 1 ||
                 settings.bitrate == 0 || settings.bitrate > 1000000) {
                 return fail(tr("ZLG 波特率或采样点无效"));
@@ -145,7 +172,7 @@ std::optional<ChannelTiming> channelTiming(const Model &model, const CanSettings
                 const int btr0 = match.captured(1).toInt(nullptr, 16);
                 const int btr1 = match.captured(2).toInt(nullptr, 16);
                 btr = quint16((btr0 << 8) | btr1);
-                timing = {(btr0 & 0x3F) + 1, (btr1 & 0x0F) + 1, ((btr1 >> 4) & 7) + 1, (btr0 >> 6) + 1};
+                timing = decodeBtr(btr);
             } else {
                 const auto parsed = CanBitTiming::parseCustom(custom, error);
                 if (!parsed) {

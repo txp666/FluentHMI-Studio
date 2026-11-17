@@ -1123,13 +1123,29 @@ void ModbusRequests::note(int slave, int fc, int address, int count, int transac
         m_latest.insert(slave << 8 | fc, {address, count, ++m_noted});
         return;
     }
+    rememberTcp(transaction, {slave, fc, address, count});
+}
+
+void ModbusRequests::rememberTcp(int transaction, const Read &read)
+{
     if (!m_transactions.contains(transaction)) {
         m_order.append(transaction);
     }
-    m_transactions.insert(transaction, {slave, fc, address, count});
+    m_transactions.insert(transaction, read);
     while (m_order.size() > 256) {
         m_transactions.remove(m_order.takeFirst());
     }
+}
+
+void ModbusRequests::expireTcpRequest(const QByteArray &frame)
+{
+    rememberTcp(be16(frame, 0), {0, 0, 0, 0, true});
+}
+
+bool ModbusRequests::expiredTcpReply(int transaction) const
+{
+    const auto found = m_transactions.constFind(transaction);
+    return found != m_transactions.constEnd() && found->expired;
 }
 
 void ModbusRequests::noteFrame(const QByteArray &frame, const QString &parserType)
@@ -1144,6 +1160,8 @@ void ModbusRequests::noteFrame(const QByteArray &frame, const QString &parserTyp
                be16(frame, 4) == frame.size() - 6) {
         body = frame.mid(6);
         transaction = be16(frame, 0);
+        if (m_transactions.remove(transaction))
+            m_order.removeAll(transaction); // A fresh request may reuse an ID, including for a write.
     }
     if (body.size() < 6) {
         return;
@@ -1175,8 +1193,8 @@ std::optional<std::pair<int, int>> ModbusRequests::take(int slave, int fc, int t
         }
         return std::pair<int, int>{found->address, found->count};
     }
-    const auto found = m_transactions.constFind(transaction); // a server's clients all answer one request
-    if (found == m_transactions.constEnd() || found->slave != slave || found->fc != fc) {
+    const auto found = m_transactions.constFind(transaction);
+    if (found == m_transactions.constEnd() || found->expired || found->slave != slave || found->fc != fc) {
         return std::nullopt;
     }
     return std::pair<int, int>{found->address, found->count};
@@ -1290,9 +1308,12 @@ QList<Message> ModbusTcpParser::parse(const QByteArray &data)
         }
         const QByteArray frame = m_buf.left(length);
         m_buf.remove(0, length);
+        const int transaction = be16(frame, 0);
+        if (m_requests->expiredTcpReply(transaction))
+            continue;
         const int slave = quint8(frame.at(6));
         const int fc = quint8(frame.at(7));
-        results.append(modbusResponse(slave, fc, frame.mid(8), m_fields, m_requests->take(slave, fc, be16(frame, 0))));
+        results.append(modbusResponse(slave, fc, frame.mid(8), m_fields, m_requests->take(slave, fc, transaction)));
     }
     return results;
 }

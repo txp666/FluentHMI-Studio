@@ -60,6 +60,8 @@ class RecordingBackend : public CanBackend
   public:
     bool opened = false;
     bool accept = true;
+    bool deferred = false;
+    QList<CanFrame> pending;
     QList<CanFrame> sent;
     bool open(const CanSettings &, QString *) override
     {
@@ -77,11 +79,29 @@ class RecordingBackend : public CanBackend
             }
             return false;
         }
-        sent.append(frame);
-        emit framesSent({frame});
+        if (deferred) {
+            pending.append(frame);
+        } else {
+            sent.append(frame);
+            emit framesSent({frame});
+        }
         return true;
     }
-    void receive(const CanFrame &frame) { emit framesReceived({frame}); }
+    void complete(bool accepted)
+    {
+        const CanFrame frame = pending.takeFirst();
+        if (accepted) {
+            sent.append(frame);
+            emit framesSent({frame});
+        } else {
+            emit frameSendFailed(frame, QStringLiteral("rejected by adapter"));
+        }
+    }
+    void receive(CanFrame frame)
+    {
+        frame.receivedAtMs = Can::monotonicMs();
+        emit framesReceived({frame});
+    }
 };
 
 class RecordingLink : public CanLink
@@ -210,6 +230,8 @@ class TestCanInitialState : public QObject
         QVERIFY(prepared && link.commit(*prepared, &error));
         QVERIFY(link.open(settings(), fixture.file, {}, {}, &error));
         QVERIFY(!link.prepare(command(), &error));
+        link.driver->receive(feedback());
+        QVERIFY(!link.commit(*prepared, &error)); // a prepared write belongs to its original connection
         QCOMPARE(link.driver->sent.size(), 0);
     }
 
@@ -228,19 +250,46 @@ class TestCanInitialState : public QObject
         prepared = link.prepare(command(), &error);
         QVERIFY(prepared);
         QCOMPARE(prepared->frame.data, QByteArray::fromHex("1100000055010200"));
+
+        link.driver->accept = true;
+        link.driver->deferred = true;
+        QVERIFY(link.commit(*prepared, &error));
+        auto another = command(QStringLiteral("B4b5=1"));
+        another.cycleMs = 20;
+        const auto queued = link.prepare(another, &error);
+        QVERIFY(queued && link.commit(*queued, &error));
+        QCOMPARE(link.driver->pending.size(), 1); // the second bit edit waits for the first driver result
+
+        link.driver->receive(feedback(QByteArray::fromHex("AABBCCDD800102")));
+        link.driver->complete(false);
+        QTRY_COMPARE(link.driver->pending.size(), 1);
+        QCOMPARE(link.driver->pending.first().data, QByteArray::fromHex("11000000A5010200"));
+        link.driver->complete(true);
+
+        link.driver->receive(feedback()); // once submitted, the command image is the baseline
+        const auto edit = link.prepare(command(QStringLiteral("B4b4=1")), &error);
+        QVERIFY(edit && link.commit(*edit, &error));
+        QCOMPARE(link.driver->pending.first().data, QByteArray::fromHex("11000000B5010200"));
+        link.driver->complete(false);
+        QTRY_COMPARE(link.driver->pending.size(), 1);
+        QCOMPARE(link.driver->pending.first().data, QByteArray::fromHex("11000000A5010200"));
+        link.close();
     }
 
-    void staleFeedbackBlocksFirstSend()
+    void queuedStaleFeedbackBlocksFirstSend()
     {
         Fixture fixture;
         RecordingLink link;
         QString error;
         auto config = settings();
-        config.txInitialMaxAgeMs = 1;
         QVERIFY(link.open(config, fixture.file, {}, {}, &error));
-        link.driver->receive(feedback());
-        QTest::qWait(10);
+        auto frame = feedback();
+        frame.receivedAtMs = Can::monotonicMs() - config.txInitialMaxAgeMs - 100;
+        QMetaObject::invokeMethod(link.driver, [driver = link.driver, frame]() { emit driver->framesReceived({frame}); },
+                                  Qt::QueuedConnection);
+        QTRY_COMPARE(link.receivedCount(), quint64(1));
         QVERIFY(!link.prepare(command(), &error));
+        QVERIFY(error.contains(QStringLiteral("过期")));
         QCOMPARE(link.driver->sent.size(), 0);
         link.driver->receive(feedback());
         QVERIFY(link.prepare(command(), &error));
@@ -307,21 +356,36 @@ class TestCanInitialState : public QObject
         QVERIFY(!state->acceptsFilter(*filter, &error));
     }
 
+    void inlineSignalsUseTheSameExplicitMapping_data()
+    {
+        QTest::addColumn<bool>("fd");
+        QTest::newRow("classic") << false;
+        QTest::newRow("fd-eight-bytes") << true;
+    }
+
     void inlineSignalsUseTheSameExplicitMapping()
     {
-        const auto definitions = CanSignalSet::build(nullptr, QStringLiteral("321 Feedback : 7|8@0+\n"
-                                                                             "322 Command : 8|8@1+"));
-        QVERIFY(definitions);
+        QFETCH(bool, fd);
+        RecordingLink link;
+        auto config = settings();
+        config.fd = fd;
+        config.txInitialState = QStringLiteral("322.Command=321.Feedback");
         QString error;
-        auto state = CanInitialState::build(*definitions, QStringLiteral("322.Command=321.Feedback"), &error);
-        QVERIFY2(state, qPrintable(error));
+        QVERIFY2(link.open(config, {}, QStringLiteral("321 Feedback : 7|8@0+\n322 Command : 8|8@1+\n"
+                                                      "322 Enable : 0|1@1+"), {}, &error), qPrintable(error));
         CanFrame frame;
         frame.id = 0x321;
-        frame.data = QByteArray::fromHex("C5");
-        state->observe(frame, 100);
-        QByteArray data(8, '\0');
-        QVERIFY(state->initialize({0x322, false}, data, 101, 2000, &error));
-        QCOMPARE(data, QByteArray::fromHex("00C5000000000000"));
+        frame.fd = fd;
+        frame.data = QByteArray::fromHex("C500000000000000");
+        link.driver->receive(frame);
+        CanCommand send;
+        send.target = QStringLiteral("322");
+        send.fd = fd;
+        send.assignments = QStringLiteral("Enable=1");
+        const auto prepared = link.prepare(send, &error);
+        QVERIFY2(prepared, qPrintable(error));
+        QCOMPARE(prepared->frame.fd, fd);
+        QCOMPARE(prepared->frame.data, QByteArray::fromHex("01C5000000000000"));
     }
 
     void invalidConfigurationRejectedBeforeOpeningHardware()

@@ -8,9 +8,9 @@ namespace fhmi {
 
 CommHub::CommHub(QObject *parent) : QObject(parent) {}
 
-QString CommHub::decodeRaw(const QByteArray &bytes) const
+QString CommHub::decodeRaw(const QByteArray &bytes, const DataSource &source) const
 {
-    return LineParser::decode(bytes, m_rawEncoding);
+    return LineParser::decode(bytes, source.encoding);
 }
 
 void CommHub::configure(const QJsonObject &projectSerial)
@@ -20,34 +20,37 @@ void CommHub::configure(const QJsonObject &projectSerial)
     m_parserConfig = projectSerial.value(QStringLiteral("parserConfig")).toObject();
 }
 
-void CommHub::addLink(Link *link)
+void CommHub::addLink(Link *link, const QString &connectionId)
 {
     for (const QPointer<Link> &existing : m_links) {
         if (existing == link) {
             return;
         }
     }
+    if (!connectionId.isEmpty()) link->setConnectionId(connectionId);
     m_links.append(link);
-    connect(link, &Link::messageReceived, this, &CommHub::messageReceived);
-    connect(link, &Link::rawReceived, this, [this, link](const QByteArray &bytes) {
-        m_rawEncoding = link->textEncoding();
-        const bool outer = m_canText;
-        m_canText = link->isCan();
-        emit rawReceived(bytes);
-        m_canText = outer;
+    connect(link, &Link::streamClosed, this, &CommHub::streamClosed);
+    connect(link, &Link::messageReceived, this, [this, link](const Message &message, DataSource source) {
+        if (!source.stream) source = link->dataSource();
+        emit messageReceived(message, source);
     });
-    connect(link, &Link::bytesSent, this, [this, link](const QByteArray &bytes) {
-        const bool outer = m_canText;
-        m_canText = link->isCan();
-        emit bytesSent(bytes);
-        m_canText = outer;
+    connect(link, &Link::rawReceived, this, [this, link](const QByteArray &bytes, DataSource source) {
+        if (!source.stream) source = link->dataSource();
+        emit rawReceived(bytes, source);
+    });
+    connect(link, &Link::bytesSent, this, [this, link](const QByteArray &bytes, DataSource source) {
+        if (!source.stream) source = link->dataSource();
+        emit bytesSent(bytes, source);
     });
     connect(link, &Link::errorOccurred, this, &CommHub::linkError);
     connect(link, &Link::warningMessage, this, &CommHub::linkWarning);
     connect(link, &Link::infoMessage, this, &CommHub::linkInfo);
     if (auto *can = qobject_cast<CanLink *>(link)) {
         connect(can, &CanLink::canFrames, this,
-                [this, can](const QList<CanFrame> &frames, bool sent) { emit canFrames(can, frames, sent); });
+                [this, can](const QList<CanFrame> &frames, bool sent) { emit canFrames(can, frames, sent, can->dataSource()); });
+        connect(can, &CanLink::frameDecoded, this, [this, can](const CanFrame &frame, const Message &message) {
+            emit canFrameDecoded(frame, message, can->dataSource());
+        });
         connect(can, &Link::connectedChanged, this, [this, can](bool connected) {
             if (connected) {
                 emit canLinkConnected(can);
@@ -83,11 +86,11 @@ void CommHub::removeLink(Link *link)
     emit linksChanged();
 }
 
-QList<Link *> CommHub::connectedLinks() const
+QList<Link *> CommHub::connectedLinks(const DataRoute &route) const
 {
     QList<Link *> out;
     for (const QPointer<Link> &link : m_links) {
-        if (link && link->isConnected()) {
+        if (link && link->isConnected() && route.acceptsConnection(link->connectionId())) {
             out.append(link.data());
         }
     }
@@ -99,10 +102,11 @@ bool CommHub::isConnected() const
     return !connectedLinks().isEmpty();
 }
 
-QList<CanLink *> CommHub::connectedCanLinks() const
+QList<CanLink *> CommHub::connectedCanLinks(const DataRoute &route) const
 {
     QList<CanLink *> out;
-    for (Link *link : connectedLinks()) {
+    if (!route.endpoint.isEmpty()) return out;
+    for (Link *link : connectedLinks(route)) {
         if (auto *can = qobject_cast<CanLink *>(link)) {
             out.append(can);
         }
@@ -110,24 +114,14 @@ QList<CanLink *> CommHub::connectedCanLinks() const
     return out;
 }
 
-bool CommHub::hasConnectedByteLink() const
-{
-    for (Link *link : connectedLinks()) {
-        if (!link->isCan()) {
-            return true;
-        }
-    }
-    return false;
-}
-
-int CommHub::send(const QByteArray &bytes, QList<QByteArray> *sent)
+int CommHub::send(const QByteArray &bytes, QList<QByteArray> *sent, const DataRoute &route)
 {
     int accepted = 0;
-    for (Link *link : connectedLinks()) {
-        if (link->isCan()) {
+    for (Link *link : connectedLinks(route)) {
+        if (link->isCan() || (!route.endpoint.isEmpty() && !link->canSendTo(route.endpoint))) {
             continue; // bytes mean nothing on a CAN bus
         }
-        if (link->send(bytes)) {
+        if (link->send(bytes, route.endpoint)) {
             ++accepted;
             if (sent) {
                 sent->append(bytes);
@@ -137,41 +131,36 @@ int CommHub::send(const QByteArray &bytes, QList<QByteArray> *sent)
     return accepted;
 }
 
-int CommHub::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const ModbusSend &how)
+int CommHub::sendModbus(const ModbusRequest &request, QList<QByteArray> *sent, const DataRoute &route)
 {
     int accepted = 0;
-    for (Link *link : connectedLinks()) {
-        QByteArray frame;
-        if (link->answersModbus() || link->isCan()) {
-            continue; // a slave link puts no Modbus frame on the line, nor does a CAN bus carry one
-        }
-        if (link->parsesModbus()) {
-            // One request on the line at a time: the master sends it once the link is free.
-            frame = link->modbusMaster()->enqueue(request, how.timeoutMs, how.priority, how.done, how.owner);
-            if (!frame.isEmpty() && how.queuedOn) {
-                how.queuedOn->append(link->modbusMaster());
+    for (Link *link : connectedLinks(route)) {
+        if (link->answersModbus() || link->isCan()) continue;
+        const QStringList endpoints = route.endpoint.isEmpty() ? link->sendEndpoints() : QStringList{route.endpoint};
+        for (const QString &endpoint : endpoints) {
+            QByteArray frame;
+            if (link->parsesModbus()) {
+                if (!link->canSendTo(endpoint)) continue;
+                auto *master = link->modbusMaster(endpoint);
+                frame = master->enqueue(request, 1000, ModbusMaster::Priority::Write, {}, endpoint);
+            } else {
+                frame = CommandEncoder::rtuFrame(request);
+                if (!link->send(frame, endpoint)) frame.clear();
             }
-        } else if (!how.modbusLinksOnly) {
-            frame = CommandEncoder::rtuFrame(request);
-            if (!link->send(frame)) {
-                frame.clear();
-            }
-        }
-        if (!frame.isEmpty()) {
-            ++accepted;
-            if (sent) {
-                sent->append(frame);
+            if (!frame.isEmpty()) {
+                ++accepted;
+                if (sent) sent->append(frame);
             }
         }
     }
     return accepted;
 }
 
-int CommHub::sendCan(const CanCommand &command, QList<QByteArray> *sent, QString *error)
+int CommHub::sendCan(const CanCommand &command, QList<QByteArray> *sent, QString *error, const DataRoute &route)
 {
     // Every link resolves the command first, so a bad one goes nowhere rather than to some links.
     QList<QPair<CanLink *, CanLink::Prepared>> prepared;
-    for (CanLink *link : connectedCanLinks()) {
+    for (CanLink *link : connectedCanLinks(route)) {
         QString why;
         const auto frame = link->prepare(command, &why);
         if (!frame) {
@@ -198,10 +187,10 @@ int CommHub::sendCan(const CanCommand &command, QList<QByteArray> *sent, QString
     return accepted;
 }
 
-int CommHub::sendCanFrame(const CanFrame &frame, QString *error)
+int CommHub::sendCanFrame(const CanFrame &frame, QString *error, const DataRoute &route)
 {
     int accepted = 0;
-    for (CanLink *link : connectedCanLinks()) {
+    for (CanLink *link : connectedCanLinks(route)) {
         accepted += link->sendFrame(frame, error) ? 1 : 0;
     }
     return accepted;
@@ -213,32 +202,34 @@ int CommHub::send(const EncodedCommand &command, QList<QByteArray> *sent, QStrin
     case EncodedCommand::Kind::S7:
         return 0; // Addressed PLC operations never enter byte/Modbus broadcasts.
     case EncodedCommand::Kind::Modbus:
-        return sendModbus(command.modbus, sent);
+        return sendModbus(command.modbus, sent, command.route);
     case EncodedCommand::Kind::Can:
-        return sendCan(command.can, sent, error);
+        return sendCan(command.can, sent, error, command.route);
     case EncodedCommand::Kind::Bytes:
         break;
     }
-    return send(command.bytes, sent);
+    return send(command.bytes, sent, command.route);
 }
 
-void CommHub::addModbusSlave(ModbusSlave *slave)
+void CommHub::addModbusSlave(ModbusSlave *slave, const QString &connectionId)
 {
     m_slaves.append(slave);
-    connect(slave, &ModbusSlave::changed, this, &CommHub::deliverSlaveData);
+    m_slaveSources.insert(slave, {connectionId, nextDataStream(), {}, QStringLiteral("utf-8"), false, true});
+    connect(slave, &ModbusSlave::changed, this, [this, slave](const Message &message) { deliverSlaveData(message, slave); });
     connect(slave, &ModbusSlave::logged, this, &CommHub::slaveLog);
-    connect(slave, &QObject::destroyed, this, [this]() {
+    connect(slave, &QObject::destroyed, this, [this, slave]() {
+        emit streamClosed(m_slaveSources.take(slave));
         m_slaves.removeAll(QPointer<ModbusSlave>());
         emit slavesChanged();
     });
     emit slavesChanged();
 }
 
-QList<ModbusSlave *> CommHub::modbusSlaves() const
+QList<ModbusSlave *> CommHub::modbusSlaves(const DataRoute &route) const
 {
     QList<ModbusSlave *> out;
     for (const QPointer<ModbusSlave> &slave : m_slaves) {
-        if (slave) {
+        if (slave && route.accepts(m_slaveSources.value(slave))) {
             out.append(slave.data());
         }
     }
@@ -249,17 +240,14 @@ void CommHub::deliverSlaveStart()
 {
     for (ModbusSlave *slave : modbusSlaves()) {
         for (const Message &message : slave->startMessages()) {
-            deliverSlaveData(message);
+            deliverSlaveData(message, slave);
         }
     }
 }
 
-void CommHub::deliverSlaveData(const Message &message)
+void CommHub::deliverSlaveData(const Message &message, ModbusSlave *slave)
 {
-    const bool outer = m_slaveData;
-    m_slaveData = true;
-    emit messageReceived(message);
-    m_slaveData = outer;
+    emit messageReceived(message, m_slaveSources.value(slave));
 }
 
 void CommHub::disconnectAll()
