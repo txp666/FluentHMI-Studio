@@ -450,6 +450,7 @@ class CanMonitorModel : public QAbstractTableModel
   public:
     enum Column
     {
+        Sequence,
         Time,
         Id,
         Direction,
@@ -577,13 +578,14 @@ class CanMonitorModel : public QAbstractTableModel
 
     QStringList csvHeaders() const
     {
-        QStringList fields{QStringLiteral("time"), QStringLiteral("id"),     QStringLiteral("direction"),
-                           QStringLiteral("type"),         QStringLiteral("length"), QStringLiteral("data"),
-                           QStringLiteral("period_ms"),    QStringLiteral("count"),  QStringLiteral("name"),
-                           QStringLiteral("timestamp_ms")};
+        QStringList fields{QStringLiteral("sequence"),  QStringLiteral("time"),      QStringLiteral("id"),
+                           QStringLiteral("direction"), QStringLiteral("type"),      QStringLiteral("length"),
+                           QStringLiteral("data"),      QStringLiteral("period_ms"), QStringLiteral("count"),
+                           QStringLiteral("name")};
         if (m_showSignals) {
             fields << QStringLiteral("signals");
         }
+        fields << QStringLiteral("timestamp_ms");
         return fields;
     }
 
@@ -596,7 +598,8 @@ class CanMonitorModel : public QAbstractTableModel
                                  ? QDateTime::fromMSecsSinceEpoch(row.frame.timestampMs, QTimeZone::systemTimeZone())
                                        .toString(Qt::ISODateWithMs)
                                  : QString();
-        QStringList fields{time,
+        QStringList fields{QString::number(row.sequence),
+                           time,
                            Can::idText(row.id),
                            row.sent ? QStringLiteral("TX") : QStringLiteral("RX"),
                            data(index(at, Type), Qt::DisplayRole).toString(),
@@ -604,11 +607,11 @@ class CanMonitorModel : public QAbstractTableModel
                            row.frame.rtr ? QString() : toHexString(row.frame.data),
                            row.intervalCount > 0 ? QString::number(row.meanInterval(), 'f', 1) : QString(),
                            QString::number(row.count),
-                           row.name,
-                           QString::number(row.frame.timestampMs)};
+                           row.name};
         if (m_showSignals) {
             fields << row.signalText;
         }
+        fields << QString::number(row.frame.timestampMs);
         return fields;
     }
 
@@ -749,7 +752,8 @@ class CanMonitorModel : public QAbstractTableModel
         }
         const Row &row = m_rows.at(index.row());
         if (role == Qt::TextAlignmentRole) {
-            return index.column() == Length || index.column() == Period || index.column() == Count
+            return index.column() == Sequence || index.column() == Length || index.column() == Period ||
+                           index.column() == Count
                        ? QVariant(Qt::AlignRight | Qt::AlignVCenter)
                        : QVariant(Qt::AlignLeft | Qt::AlignVCenter);
         }
@@ -758,6 +762,8 @@ class CanMonitorModel : public QAbstractTableModel
         }
         if (role == SortRole) {
             switch (index.column()) {
+            case Sequence:
+                return row.sequence;
             case Time:
                 return row.frame.timestampMs;
             case Id:
@@ -779,6 +785,8 @@ class CanMonitorModel : public QAbstractTableModel
             return QVariant();
         }
         switch (index.column()) {
+        case Sequence:
+            return QString::number(row.sequence);
         case Time:
             return row.frame.timestampMs > 0
                        ? QDateTime::fromMSecsSinceEpoch(row.frame.timestampMs).toString(QStringLiteral("HH:mm:ss.zzz"))
@@ -814,6 +822,8 @@ class CanMonitorModel : public QAbstractTableModel
             return QVariant();
         }
         switch (section) {
+        case Sequence:
+            return CanLink::tr("序号");
         case Time:
             return CanLink::tr("时间");
         case Id:
@@ -1223,6 +1233,7 @@ void CanMonitorWidget::apply()
     // Hex is measured with D, one of its widest digits (0x18FF50E5 is wider than 0x18FF1001); an extended ID starts
     // with 0 or 1.
     const int widths[] = {
+        fit(CanMonitorModel::Sequence, advance(QStringLiteral("99999999"))),
         fit(CanMonitorModel::Time, advance(QStringLiteral("00:00:00.000"))),
         fit(CanMonitorModel::Id, advance(QStringLiteral("0x1DDDDDDD"))),
         fit(CanMonitorModel::Direction, advance(QStringLiteral("00"))),

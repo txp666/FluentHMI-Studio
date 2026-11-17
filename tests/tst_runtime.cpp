@@ -48,6 +48,7 @@
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QScrollBar>
@@ -354,8 +355,12 @@ class TestRuntime : public QObject
         }
         emit context.hub()->canFrames(nullptr, frames, false);
         QTRY_COMPARE(view->model()->rowCount(), 100);
-        QCOMPARE(view->model()->index(0, 0).data(Qt::UserRole).toLongLong(), 1700000000050LL);
-        QCOMPARE(view->model()->index(99, 5).data().toString(), QStringLiteral("95"));
+        QCOMPARE(view->model()->index(0, 1).data(Qt::UserRole).toLongLong(), 1700000000050LL);
+        QCOMPARE(view->model()->index(99, 6).data().toString(), QStringLiteral("95"));
+        for (int row = 0; row < 100; ++row) {
+            QCOMPARE(view->model()->index(row, 0).data().toString(), QString::number(row + 51));
+            QCOMPARE(view->model()->index(row, 0).data(Qt::UserRole).toULongLong(), quint64(row + 51));
+        }
         QTRY_VERIFY(view->verticalScrollBar()->maximum() > 0);
         QTRY_COMPARE(view->verticalScrollBar()->value(), view->verticalScrollBar()->maximum());
         follow->setChecked(false);
@@ -364,7 +369,9 @@ class TestRuntime : public QObject
         next.data = QByteArray::fromHex("AA");
         next.timestampMs++;
         emit context.hub()->canFrames(nullptr, {next}, false);
-        QTRY_COMPARE(view->model()->index(99, 5).data().toString(), QStringLiteral("AA"));
+        QTRY_COMPARE(view->model()->index(99, 6).data().toString(), QStringLiteral("AA"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("52"));
+        QCOMPARE(view->model()->index(99, 0).data().toString(), QStringLiteral("151"));
         QCOMPARE(view->verticalScrollBar()->value(), 0);
 
         // Export flushes the pending batch too, before the next 100 ms repaint.
@@ -381,18 +388,47 @@ class TestRuntime : public QObject
         QVERIFY(csv.startsWith(QByteArray::fromHex("EFBBBF")));
         QVERIFY(csv.contains("\"BB\""));
         QVERIFY(!csv.contains("\"32\"")); // oldest retained payload was evicted
+        const QStringList lines = QString::fromUtf8(csv).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 101);
+        for (int row = 0; row < 100; ++row) {
+            const QString first = lines.at(row + 1).section(QLatin1Char(','), 0, 0);
+            QCOMPARE(first, QLatin1Char('"') + view->model()->index(row, 0).data().toString() + QLatin1Char('"'));
+        }
         maximum->setValue(3);
         QCOMPARE(view->model()->rowCount(), 3);
-        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("95"));
+        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("95"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("150"));
         mode->setCurrentIndex(0);
         QCOMPARE(view->model()->rowCount(), 1);
-        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("3"));
-        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 8).data().toString(), QStringLiteral("3"));
+        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("152"));
         QVERIFY(!follow->isEnabled());
         mode->setCurrentIndex(1);
         QCOMPARE(view->model()->rowCount(), 1);
-        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("152"));
         QVERIFY(follow->isEnabled());
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 2);
+        QCOMPARE(view->model()->index(1, 0).data().toString(), QStringLiteral("153"));
+
+        // Exercise the actual Clear action, which resets the counter as well as the retained rows.
+        emit view->customContextMenuRequested(QPoint(4, 4));
+        auto *menu = monitor->findChild<QMenu *>();
+        QVERIFY(menu && !menu->actions().isEmpty());
+        menu->actions().first()->trigger();
+        menu->hide();
+        QCOMPARE(view->model()->rowCount(), 0);
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("1"));
+
+        emit context.hub()->canLinkConnected(nullptr); // the first connection follows the same clear path
+        QCOMPARE(view->model()->rowCount(), 0);
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("1"));
     }
 
     void canSummaryCapsIdsAndExportsFilteredFdAndRemoteFrames()
@@ -433,9 +469,10 @@ class TestRuntime : public QObject
         emit context.hub()->canFrames(nullptr, {frame, old, newer, fd}, false);
         emit context.hub()->canFrames(nullptr, {remote}, true);
         QTRY_COMPARE(view->model()->rowCount(), 3);
-        QCOMPARE(view->model()->index(0, 1).data().toString(), QStringLiteral("0x102"));
-        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("2"));
-        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("20.0"));
+        QCOMPARE(view->model()->index(0, 2).data().toString(), QStringLiteral("0x102"));
+        QCOMPARE(view->model()->index(0, 8).data().toString(), QStringLiteral("2"));
+        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("20.0"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("3"));
         type->setCurrentIndex(3);
         id->setText(QStringLiteral("00000102"));
         QCOMPARE(view->model()->rowCount(), 1);
@@ -459,6 +496,73 @@ class TestRuntime : public QObject
         QVERIFY(readCsv(dir.filePath("remote.csv")).contains(QStringLiteral("\"TX\",\"RTR\",\"8\",\"\"")));
         QVERIFY(!monitor->saveCsv(dir.filePath("missing/frames.csv"), &error));
         QVERIFY(!error.isEmpty());
+    }
+
+    void canSequenceSurvivesFilteringSortingAndSummaryUpdates()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("CanMonitor", {{"showSignals", true}}));
+        auto *monitor = dynamic_cast<CanMonitorWidget *>(widget.get());
+        QVERIFY(monitor);
+        monitor->attach(&context);
+        auto *view = monitor->findChild<QTableView *>("canMessages");
+        auto *filter = monitor->findChild<QLineEdit *>("canIdFilter");
+        auto *mode = monitor->findChild<FluentQt::ComboBox *>("canDisplayMode");
+        QVERIFY(view && filter && mode);
+        QList<CanFrame> frames;
+        for (int i = 0; i < 12; ++i) {
+            CanFrame frame;
+            frame.id = quint32(0x100 + i);
+            frame.data = QByteArray(1, char(i));
+            frame.timestampMs = 1700000000000LL + i;
+            frames.append(frame);
+        }
+        emit context.hub()->canFrames(nullptr, frames, false);
+        QTRY_COMPARE(view->model()->rowCount(), 12);
+        filter->setText(QStringLiteral("102-10B"));
+        QCOMPARE(view->model()->rowCount(), 10);
+        view->sortByColumn(0, Qt::DescendingOrder);
+        // Numeric sequence ordering: 12, 11, 10, 9, ... rather than lexical 9, 8, ... .
+        for (int row = 0; row < 10; ++row) {
+            QCOMPARE(view->model()->index(row, 0).data().toString(), QString::number(12 - row));
+        }
+
+        QTemporaryDir dir;
+        QString error;
+        const QString path = dir.filePath("sequence.csv");
+        QVERIFY2(monitor->saveCsv(path, &error), qPrintable(error));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QStringList lines = QString::fromUtf8(file.readAll()).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 11);
+        QVERIFY(lines.first().endsWith(QStringLiteral("\"signals\",\"timestamp_ms\"")));
+        for (int row = 0; row < 10; ++row) {
+            const QStringList fields = lines.at(row + 1).split(QLatin1Char(','));
+            QCOMPARE(fields.size(), 12); // includes both the optional signal column and the raw timestamp
+            QCOMPARE(fields.first(), QStringLiteral("\"%1\"").arg(view->model()->index(row, 0).data().toString()));
+            QCOMPARE(fields.at(2), QStringLiteral("\"%1\"").arg(view->model()->index(row, 2).data().toString()));
+        }
+
+        mode->setCurrentIndex(1); // switching to chronological log preserves each latest summary sequence
+        QCOMPARE(view->model()->rowCount(), 10);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("3"));
+        QCOMPARE(view->model()->index(9, 0).data().toString(), QStringLiteral("12"));
+        emit context.hub()->canFrames(nullptr, {frames.at(3)}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 11);
+        QCOMPARE(view->model()->index(10, 0).data().toString(), QStringLiteral("13"));
+        mode->setCurrentIndex(0);
+        QCOMPARE(view->model()->rowCount(), 10);
+        QCOMPARE(view->model()->index(1, 2).data().toString(), QStringLiteral("0x103"));
+        QCOMPARE(view->model()->index(1, 0).data().toString(), QStringLiteral("13"));
+        QCOMPARE(view->model()->index(1, 8).data().toString(), QStringLiteral("2"));
+
+        emit context.hub()->canFrames(nullptr, {frames.at(2)}, false);
+        QTRY_COMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("14"));
+        view->sortByColumn(0, Qt::DescendingOrder);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("14"));
+        QCOMPARE(view->model()->index(1, 0).data().toString(), QStringLiteral("13"));
+        QCOMPARE(view->model()->index(2, 0).data().toString(), QStringLiteral("12"));
     }
 
     void canCsvHasReadableMillisecondsAndRawTimestamp_data()
@@ -495,14 +599,15 @@ class TestRuntime : public QObject
         QFile file(path);
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QByteArray bytes = file.readAll();
-        QVERIFY(bytes.startsWith(QByteArray::fromHex("EFBBBF") + "\"time\",\"id\","));
+        QVERIFY(bytes.startsWith(QByteArray::fromHex("EFBBBF") + "\"sequence\",\"time\",\"id\","));
         const QStringList lines = QString::fromUtf8(bytes).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
         QCOMPARE(lines.size(), 3);
         QVERIFY(lines.first().contains(QStringLiteral("\"timestamp_ms\"")));
         for (int i = 0; i < 2; ++i) {
             const QStringList fields = lines.at(i + 1).split(QLatin1Char(','));
-            QCOMPARE(fields.size(), 10);
-            const QString time = fields.first().mid(1, fields.first().size() - 2);
+            QCOMPARE(fields.size(), 11);
+            QCOMPARE(fields.first(), QStringLiteral("\"%1\"").arg(i + 1));
+            const QString time = fields.at(1).mid(1, fields.at(1).size() - 2);
             const QString raw = fields.last().mid(1, fields.last().size() - 2);
             QVERIFY(QRegularExpression(QStringLiteral("\\.\\d{3}(?:Z|[+-]\\d{2}:\\d{2})$")).match(time).hasMatch());
             QVERIFY(time.startsWith(i == 0 ? QStringLiteral("2026-11-17T23:59:59.999")
