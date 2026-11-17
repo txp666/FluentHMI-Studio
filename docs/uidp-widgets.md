@@ -438,7 +438,7 @@
 - `defaultDataBitrate`（数据域波特率，选项）默认 `"2M"`，可选 `"1M"` `"2M"` `"4M"` `"5M"` `"8M"`
 - `defaultDataSamplePoint`（数据域采样点，选项）默认 `"75%"`，可选 `"75%"` `"80%"`
 - `canBrs`（加速 (BRS)，true/false）默认 `true`，CAN FD 报文的数据段用数据域波特率发送
-- `customTiming`（自定义位时序，文本）默认 `""`，`BRP,TSEG1,TSEG2,SJW`，CAN FD 再加 `;BRP,TSEG1,TSEG2,SJW`（数据域），按适配器时钟（PCAN 经典 CAN 8 MHz、CAN FD 80 MHz）；留空则按波特率和采样点计算
+- `customTiming`（自定义位时序，文本）默认 `""`，PCAN：`BRP,TSEG1,TSEG2,SJW`，FD 加 `;BRP,TSEG1,TSEG2,SJW`。时钟为经典 CAN 8 MHz、FD 80 MHz。ZLG USBCAN-I/II：`00,1C` 或 `1,13,2,1`，留空按采样点计算。其他 ZLG 粘贴对应型号的 ZCANPRO 完整结果；4E-U 填十进制 bps
 - `listenOnly`（只听模式，true/false）默认 `false`
 - `termination`（终端电阻，true/false）默认 `false`，ZLG USBCANFD 系列可由软件开关，其他适配器忽略
 - `dbcFile`（DBC 文件，文本）默认 `""`，相对 .uidp 所在文件夹的路径；导出时复制进应用

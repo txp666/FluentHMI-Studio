@@ -67,6 +67,8 @@ class LinkCardBase : public HmiWidget
     void finishFields();
     // The button at `column` of a single-row strip, then the same minimum height.
     void finishStrip(int column);
+    // Re-measure after an adapter changes which configuration rows are visible.
+    void updateMinimumHeight();
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_status = nullptr;
@@ -77,8 +79,6 @@ class LinkCardBase : public HmiWidget
     QList<QWidget *> m_fieldLabels;
 
   private:
-    // The card never gets shorter than its visible rows need, so they never overlap.
-    void updateMinimumHeight();
     ModbusPoller::Settings pollingSettings() const;
     // The connection text, followed by the poller's status while the link is connected and parses Modbus.
     void showStatus();

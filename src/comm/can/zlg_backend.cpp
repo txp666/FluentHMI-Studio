@@ -1,6 +1,7 @@
 #include "comm/can/zlg_backend.h"
 #include "comm/can/can_diagnostics.h"
 #include "comm/can/zlg_status_internal.h"
+#include "comm/can/zlg_timing.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
@@ -467,11 +468,6 @@ quint64 deviceKey(UINT type, int index)
     return (quint64(type) << 32) | quint32(index);
 }
 
-bool contains(const quint32 *begin, const quint32 *end, quint32 value)
-{
-    return std::find(begin, end, value) != end;
-}
-
 const Model *modelNamed(const QString &name)
 {
     const QByteArray latin = name.toLatin1();
@@ -489,16 +485,16 @@ CanAdapterCaps ZlgBackend::caps(const QString &model)
 {
     CanAdapterCaps caps;
     caps.channelList = false; // no device listing: the model, device index and channel are chosen
-    caps.samplePoint = false;
-    caps.dataSamplePoint = false;
-    caps.customTiming = false;
     const Model *found = modelNamed(model);
     const Family family = found ? found->family : Family::CanFd;
+    caps.samplePoint = family == Family::Sja1000;
+    caps.dataSamplePoint = false;
+    caps.customTiming = found != nullptr;
     caps.fd = family == Family::CanFd;
     caps.termination = found && found->termination;
-    caps.fixedTimingReason = family == Family::CanFd
-                                 ? tr("采样点由 ZLG 设备决定（仲裁域 80%，数据域 80%，5M 时 75%）")
-                                 : tr("采样点由 ZLG 设备决定");
+    caps.fixedTimingReason = found && found->deviceType == ZCAN_USBCAN_4E_U
+                                 ? tr("此型号的采样点由设备决定")
+                                 : tr("采样点可在 ZCANPRO 计算后粘贴到自定义位时序；留空使用设备默认值");
 #ifndef Q_OS_WIN
     caps.supported = false;
 #endif
@@ -534,17 +530,9 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
     if (settings.fd && model->family != Family::CanFd) {
         return fail(tr("%1 不支持 CAN FD").arg(settings.zlgModel));
     }
-    // The bitrates the model's property file offers; anything else the device cannot be set to.
-    if (model->family == Family::CanFd) {
-        if (!contains(std::begin(kFdArbitrationRates), std::end(kFdArbitrationRates), settings.bitrate)) {
-            return fail(tr("%1 不支持波特率 %2").arg(settings.zlgModel, CanAdapter::bitrateText(settings.bitrate)));
-        }
-        if (settings.fd && !contains(std::begin(kFdDataRates), std::end(kFdDataRates), settings.dataBitrate)) {
-            return fail(
-                tr("%1 不支持数据域波特率 %2").arg(settings.zlgModel, CanAdapter::bitrateText(settings.dataBitrate)));
-        }
-    } else if (!contains(std::begin(kClassicRates), std::end(kClassicRates), settings.bitrate)) {
-        return fail(tr("%1 不支持波特率 %2").arg(settings.zlgModel, CanAdapter::bitrateText(settings.bitrate)));
+    const auto timing = channelTiming(*model, settings, error);
+    if (!timing) {
+        return false;
     }
     if (!loadApi(error)) {
         return false;
@@ -603,33 +591,21 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
     std::memset(&config, 0, sizeof config);
     const BYTE mode = settings.listenOnly ? 1 : 0; // 0 normal, 1 listen only (work_mode)
     if (model->family == Family::CanFd) {
-        if (!setValue("canfd_abit_baud_rate", QString::number(settings.bitrate)) ||
-            !setValue("canfd_dbit_baud_rate", QString::number(settings.dataBitrate))) {
-            releaseDevice();
-            return fail(tr("%1 拒绝了波特率设置").arg(settings.zlgModel));
-        }
         config.can_type = TYPE_CANFD;
         config.config.canfd.mode = mode;
     } else {
-        const bool rateSet = setValue("baud_rate", QString::number(settings.bitrate));
-        if (model->family == Family::EU && !rateSet) {
-            releaseDevice();
-            return fail(tr("%1 拒绝了波特率设置").arg(settings.zlgModel));
-        }
         config.can_type = TYPE_CAN;
         // ZLG recommends the mask 0xFFFFFFFF, everything received (UM01010101, VCI_INIT_CONFIG).
         config.config.can.acc_code = 0;
         config.config.can.acc_mask = 0xFFFFFFFF;
         config.config.can.filter = 0;
         config.config.can.mode = mode;
-        if (model->family == Family::Sja1000) {
-            for (const Btr &btr : kBtrTable) {
-                if (btr.bitrate == settings.bitrate) {
-                    config.config.can.timing0 = btr.timing0;
-                    config.config.can.timing1 = btr.timing1;
-                }
-            }
-        }
+    }
+    if (!applyChannelTiming(*timing, config, setValue)) {
+        releaseDevice();
+        return fail(settings.customTiming.trimmed().isEmpty()
+                        ? tr("%1 拒绝了波特率设置").arg(settings.zlgModel)
+                        : tr("%1 拒绝了自定义位时序，请核对 ZCANPRO 中选择的型号及驱动版本").arg(settings.zlgModel));
     }
     m_channel =
         traced("ZCAN_InitCAN", m_device, [&] { return a.initCan(m_device, UINT(settings.channelIndex), &config); });
@@ -648,12 +624,11 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
         releaseDevice();
         return fail(tr("%1 通道 %2 启动失败").arg(settings.zlgModel).arg(settings.channelIndex));
     }
-    QString rates = CanAdapter::bitrateText(settings.bitrate);
-    if (settings.fd) {
-        rates += QLatin1Char('/') + CanAdapter::bitrateText(settings.dataBitrate);
-    }
-    m_description = QStringLiteral("%1 #%2 CAN%3 @ %4").arg(settings.zlgModel).arg(settings.deviceIndex).arg(
-        settings.channelIndex).arg(rates);
+    m_description = QStringLiteral("%1 #%2 CAN%3 @ %4")
+                        .arg(settings.zlgModel)
+                        .arg(settings.deviceIndex)
+                        .arg(settings.channelIndex)
+                        .arg(timing->description);
     if (settings.listenOnly) {
         m_description += tr(" 只听");
     }

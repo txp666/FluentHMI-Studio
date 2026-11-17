@@ -34,7 +34,7 @@ struct CanSettings
     quint32 dataBitrate = 2000000;
     double dataSamplePoint = 0.75;
     bool brs = true;
-    QString customTiming; // "BRP,TSEG1,TSEG2,SJW[;BRP,TSEG1,TSEG2,SJW]" in the adapter's clock, or empty
+    QString customTiming; // PCAN: BRP,TSEG1,TSEG2,SJW[;...]; ZLG: SJA BTR/BRP, or model-specific ZCANPRO result
     bool listenOnly = false;
     bool termination = false;
 };

@@ -1,7 +1,8 @@
 #include "runtime/widgets/can_widgets.h"
 
-#include "comm/can/can_link.h"
 #include "comm/can/can_diagnostics.h"
+#include "comm/can/can_link.h"
+#include "comm/can/zlg_timing.h"
 #include "core/can_timing.h"
 #include "core/hex_utils.h"
 #include "runtime/runtime_context.h"
@@ -123,11 +124,17 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
 
     m_bitrate = comboOf(this, enumOptions(meta, "defaultBitrate"));
     m_samplePoint = comboOf(this, enumOptions(meta, "defaultSamplePoint"));
+    m_adapter->setObjectName(QStringLiteral("canAdapter"));
+    m_zlgModel->setObjectName(QStringLiteral("canZlgModel"));
+    m_bitrate->setObjectName(QStringLiteral("canBitrate"));
+    m_samplePoint->setObjectName(QStringLiteral("canSamplePoint"));
     m_bitrateRow = row({{m_bitrate, 1}, {new FluentQt::CaptionLabel(tr("采样点"), this), 0}, {m_samplePoint, 1}});
 
     m_fd = new FluentQt::CheckBox(QStringLiteral("FD"), this);
+    m_fd->setObjectName(QStringLiteral("canFd"));
     m_dataBitrate = comboOf(this, enumOptions(meta, "defaultDataBitrate"));
     m_dataSamplePoint = comboOf(this, enumOptions(meta, "defaultDataSamplePoint"));
+    m_dataSamplePoint->setObjectName(QStringLiteral("canDataSamplePoint"));
     m_fdRow = row({{m_fd, 0}, {m_dataBitrate, 1}, {new FluentQt::CaptionLabel(tr("采样点"), this), 0},
                    {m_dataSamplePoint, 1}});
 
@@ -138,7 +145,16 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
         fluentToolTip(w);
     }
 
+    m_customTiming = new FluentQt::LineEdit(this);
+    m_customTiming->setObjectName(QStringLiteral("canCustomTiming"));
+    m_customTiming->setClearButtonEnabled(true);
+    m_customTiming->setMaxLength(512);
+    m_customTiming->setMinimumWidth(0);
+    fluentToolTip(m_customTiming);
+    m_customTiming->hide();
+
     m_hint = new FluentQt::CaptionLabel(this);
+    m_hint->setObjectName(QStringLiteral("canTimingHint"));
     m_hint->setWordWrap(true);
     m_hint->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_hint->hide();
@@ -160,6 +176,7 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
         }
     });
     connect(m_zlgModel, &FluentQt::ComboBox::currentIndexChanged, this, &CanConfigCardWidget::updateAdapterUi);
+    connect(m_customTiming, &QLineEdit::textChanged, this, &CanConfigCardWidget::updateAdapterUi);
     connect(m_fd, &QCheckBox::toggled, this, &CanConfigCardWidget::updateAdapterUi);
     for (FluentQt::ComboBox *combo : {m_bitrate, m_samplePoint, m_dataBitrate, m_dataSamplePoint}) {
         connect(combo, &FluentQt::ComboBox::currentIndexChanged, this, &CanConfigCardWidget::updateAdapterUi);
@@ -199,6 +216,7 @@ void CanConfigCardWidget::apply()
     m_fd->setChecked(flag("canFd"));
     selectValue(m_dataBitrate, text("defaultDataBitrate"));
     selectValue(m_dataSamplePoint, text("defaultDataSamplePoint"));
+    m_customTiming->setText(text("customTiming"));
     updatePolling();
 
     clearFields();
@@ -209,6 +227,8 @@ void CanConfigCardWidget::apply()
     if (text("displayMode") != QStringLiteral("简洁")) { // i18n: value
         addField(tr("数据域"), m_fdRow);
     }
+    addField(tr("自定义"), m_customTiming);
+    m_customTimingCaption = m_fieldLabels.last();
     // SocketCAN's command: shown only for that adapter (updateAdapterUi()).
     addField(QStringLiteral("ip link"), m_hint, true);
     m_hintCaption = m_fieldLabels.last();
@@ -235,7 +255,7 @@ CanSettings CanConfigCardWidget::settings() const
     s.dataBitrate = CanBitTiming::bitrateValue(selectedValue(m_dataBitrate));
     s.dataSamplePoint = CanBitTiming::samplePointValue(selectedValue(m_dataSamplePoint));
     s.brs = flag("canBrs");
-    s.customTiming = text("customTiming").trimmed();
+    s.customTiming = (s.adapter == CanAdapter::Zlg ? m_customTiming->text() : text("customTiming")).trimmed();
     s.listenOnly = flag("listenOnly");
     s.termination = flag("termination");
     return s;
@@ -250,7 +270,11 @@ void CanConfigCardWidget::updateAdapterUi()
     m_zlgRow->setVisible(zlg);
     m_zlgModel->setVisible(zlg);
     const bool editable = !(m_link && m_link->isConnected()); // settings are locked while connected
-    const bool custom = !text("customTiming").trimmed().isEmpty() && caps.customTiming;
+    if (!caps.fd && m_fd->isChecked()) {
+        const QSignalBlocker blocker(m_fd);
+        m_fd->setChecked(false);
+    }
+    const bool custom = !settings().customTiming.isEmpty() && caps.customTiming;
     const QString customTip = tr("使用卡片的自定义位时序");
     const auto field = [editable](QWidget *widget, bool settable, const QString &why) {
         widget->setEnabled(editable && settable);
@@ -270,7 +294,13 @@ void CanConfigCardWidget::updateAdapterUi()
                        static_cast<QWidget *>(m_zlgChannel)}) {
         w->setEnabled(editable);
     }
+    m_customTiming->setVisible(zlg);
+    m_customTiming->setEnabled(editable && caps.customTiming);
+    if (m_customTimingCaption) {
+        m_customTimingCaption->setVisible(zlg);
+    }
     const bool socketCan = adapter == CanAdapter::SocketCan;
+    bool timingHint = false;
     if (socketCan) {
         // The card's bitrate and sample points, which the interface must be set to by hand.
         CanSettings s = settings();
@@ -280,15 +310,31 @@ void CanConfigCardWidget::updateAdapterUi()
         s.dataSamplePoint = CanBitTiming::samplePointValue(text("defaultDataSamplePoint"));
         m_hint->setText(CanAdapter::socketCanCommand(s.channel, s));
     }
-    m_hint->setVisible(socketCan);
+    if (zlg) {
+        const QByteArray name = selectedValue(m_zlgModel).toLatin1();
+        if (const zlg::Model *model = zlg::findModel(name.constData(), name.size())) {
+            m_customTiming->setToolTip(zlg::customTimingHint(*model));
+            m_customTiming->setPlaceholderText(zlg::customTimingPlaceholder(*model));
+            QString error;
+            const auto timing = zlg::channelTiming(*model, settings(), &error);
+            m_customTiming->setError(!timing && custom);
+            timingHint = model->family == zlg::Family::Sja1000 || custom;
+            m_hint->setText(timing ? timing->description : error);
+        }
+    }
+    m_hint->setVisible(socketCan || timingHint);
     if (m_hintCaption) {
-        m_hintCaption->setVisible(socketCan);
+        m_hintCaption->setVisible(socketCan || timingHint);
+        if (auto *label = qobject_cast<QLabel *>(m_hintCaption.data())) {
+            label->setText(socketCan ? QStringLiteral("ip link") : tr("时序"));
+        }
     }
     if (!caps.supported && !(m_link && m_link->isConnected())) {
         m_connect->setToolTip(tr("此系统不支持 %1 适配器").arg(adapter));
     } else {
         m_connect->setToolTip(QString());
     }
+    updateMinimumHeight();
 }
 
 void CanConfigCardWidget::refreshChannels(bool announce)

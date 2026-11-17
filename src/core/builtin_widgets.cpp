@@ -637,8 +637,10 @@ QList<WidgetMeta> commWidgets()
               described(boolean(QStringLiteral("canBrs"), QT_TR_NOOP("加速 (BRS)"), true),
                         QStringLiteral("CAN FD 报文的数据段用数据域波特率发送")), // i18n: ignore
               described(str(QStringLiteral("customTiming"), QT_TR_NOOP("自定义位时序"), QString()),
-                        QStringLiteral("`BRP,TSEG1,TSEG2,SJW`，CAN FD 再加 `;BRP,TSEG1,TSEG2,SJW`（数据域），按适配器" // i18n: ignore
-                                       "时钟（PCAN 经典 CAN 8 MHz、CAN FD 80 MHz）；留空则按波特率和采样点计算")),  // i18n: ignore
+                        QStringLiteral("PCAN：`BRP,TSEG1,TSEG2,SJW`，FD 加 `;BRP,TSEG1,TSEG2,SJW`。" // i18n: ignore
+                                       "时钟为经典 CAN 8 MHz、FD 80 MHz。" // i18n: ignore
+                                       "ZLG USBCAN-I/II：`00,1C` 或 `1,13,2,1`，留空按采样点计算。" // i18n: ignore
+                                       "其他 ZLG 粘贴对应型号的 ZCANPRO 完整结果；4E-U 填十进制 bps")), // i18n: ignore
               boolean(QStringLiteral("listenOnly"), QT_TR_NOOP("只听模式"), false),
               described(boolean(QStringLiteral("termination"), QT_TR_NOOP("终端电阻"), false),
                         QStringLiteral("ZLG USBCANFD 系列可由软件开关，其他适配器忽略")), // i18n: ignore

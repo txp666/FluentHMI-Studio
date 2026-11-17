@@ -137,6 +137,8 @@ add_library(fhmi_comm STATIC
     src/comm/can/zlg_backend.cpp
     src/comm/can/zlg_backend.h
     src/comm/can/zlg_status_internal.h
+    src/comm/can/zlg_timing.cpp
+    src/comm/can/zlg_timing.h
     src/comm/comm_hub.cpp
     src/comm/comm_hub.h
     src/comm/link.cpp
@@ -359,6 +361,9 @@ if(FHMI_BUILD_TESTS)
     add_executable(tst_zlg_status tests/tst_zlg_status.cpp)
     target_link_libraries(tst_zlg_status PRIVATE fhmi_comm Qt6::Test)
     add_test(NAME zlg_status COMMAND tst_zlg_status)
+    add_executable(tst_zlg_timing tests/tst_zlg_timing.cpp)
+    target_link_libraries(tst_zlg_timing PRIVATE fhmi_comm Qt6::Test)
+    add_test(NAME zlg_timing COMMAND tst_zlg_timing)
     if(FHMI_CAN_DIAGNOSTICS)
         add_executable(tst_can_diagnostics tests/tst_can_diagnostics.cpp)
         target_link_libraries(tst_can_diagnostics PRIVATE fhmi_comm Qt6::Test)

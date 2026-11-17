@@ -72,7 +72,9 @@ class CanConfigCardWidget : public LinkCardBase
     FluentQt::CheckBox *m_fd = nullptr;
     FluentQt::ComboBox *m_dataBitrate = nullptr;
     FluentQt::ComboBox *m_dataSamplePoint = nullptr;
-    FluentQt::CaptionLabel *m_hint = nullptr; // SocketCAN's ip command
+    FluentQt::LineEdit *m_customTiming = nullptr;
+    QPointer<QWidget> m_customTimingCaption;
+    FluentQt::CaptionLabel *m_hint = nullptr;   // SocketCAN's ip command, or ZLG's effective bit timing
     FluentQt::CaptionLabel *m_detail = nullptr; // below the fields: the counters, or why the card is not connected
     QPointer<QWidget> m_hintCaption; // its label in the grid, rebuilt by apply()
     QTimer *m_statusTimer = nullptr;

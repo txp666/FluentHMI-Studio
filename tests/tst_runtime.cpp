@@ -627,6 +627,76 @@ class TestRuntime : public QObject
         }
     }
 
+    void zlgTimingFieldsFollowModelAndCustomValue()
+    {
+        std::unique_ptr<HmiWidget> widget(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"customTiming", "00,1C"}}));
+        auto *card = dynamic_cast<CanConfigCardWidget *>(widget.get());
+        QVERIFY(card);
+        card->resize(380, 420);
+        card->show();
+        auto *adapter = card->findChild<FluentQt::ComboBox *>("canAdapter");
+        auto *model = card->findChild<FluentQt::ComboBox *>("canZlgModel");
+        auto *rate = card->findChild<FluentQt::ComboBox *>("canBitrate");
+        auto *sample = card->findChild<FluentQt::ComboBox *>("canSamplePoint");
+        auto *dataSample = card->findChild<FluentQt::ComboBox *>("canDataSamplePoint");
+        auto *custom = card->findChild<FluentQt::LineEdit *>("canCustomTiming");
+        auto *hint = card->findChild<QLabel *>("canTimingHint");
+        auto *fd = card->findChild<QCheckBox *>("canFd");
+        QVERIFY(adapter && model && rate && sample && dataSample && custom && hint && fd);
+        QVERIFY(custom->isVisible());
+        QCOMPARE(custom->text(), QStringLiteral("00,1C"));
+        QVERIFY(!sample->isEnabled());
+        QVERIFY(!rate->isEnabled());
+        QVERIFY(hint->text().contains(QStringLiteral("87.5%")));
+        custom->clear();
+        QVERIFY(sample->isEnabled());
+        QVERIFY(rate->isEnabled());
+        sample->setCurrentText(QStringLiteral("75%"));
+        QVERIFY(hint->text().contains(QStringLiteral("75%")));
+        QVERIFY(hint->text().contains(QStringLiteral("00,3A")));
+        custom->setText(QStringLiteral("65,13,2,1"));
+        QVERIFY(custom->isError());
+        QVERIFY(hint->text().contains(QStringLiteral("BRP")));
+
+        model->setCurrentText(QStringLiteral("USBCANFD-200U"));
+        fd->setChecked(true);
+        custom->setText(QStringLiteral("1Mbps(75%),5Mbps(75%),(60,0080040D,00800001)"));
+        QVERIFY(!custom->isError());
+        QVERIFY(!rate->isEnabled());
+        QVERIFY(!sample->isEnabled());
+        QVERIFY(!dataSample->isEnabled());
+        QVERIFY(hint->text().contains(QStringLiteral("5Mbps(75%)")));
+        QVERIFY(custom->toolTip().contains(QStringLiteral("ZCANPRO")));
+        custom->clear();
+        QVERIFY(rate->isEnabled());
+        QVERIFY(!sample->isEnabled());
+        QVERIFY(sample->toolTip().contains(QStringLiteral("ZCANPRO")));
+
+        model->setCurrentText(QStringLiteral("USBCAN-4E-U"));
+        QVERIFY(!fd->isChecked());
+        custom->setText(QStringLiteral("200000"));
+        QVERIFY(!custom->isError());
+        QVERIFY(hint->text().contains(QStringLiteral("200k")));
+        QVERIFY(!sample->isEnabled());
+        adapter->setCurrentText(QStringLiteral("slcan"));
+        QVERIFY(!custom->isVisible());
+        QVERIFY(!hint->isVisible());
+        adapter->setCurrentText(QStringLiteral("ZLG"));
+        QVERIFY(custom->isVisible());
+        QCOMPARE(custom->text(), QStringLiteral("200000"));
+        QVERIFY(hint->isVisible());
+
+        const QString screenshots = qEnvironmentVariable("FHMI_CAN_TEST_SCREENSHOT_DIR");
+        if (!screenshots.isEmpty()) {
+            model->setCurrentText(QStringLiteral("USBCAN-II"));
+            custom->clear();
+            QVERIFY(QDir().mkpath(screenshots));
+            QApplication::processEvents();
+            QVERIFY(card->grab().save(QDir(screenshots).filePath(QStringLiteral("zlg-custom-timing.png"))));
+        }
+    }
+
     void copiedS7GroupRetargetsConnections()
     {
         const QJsonObject bit{{"address", "DB1.DBX0.1"}, {"dataType", "BOOL"}};

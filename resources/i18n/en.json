@@ -1193,5 +1193,21 @@
  "最大报文数量，超出时移除最早记录": "Maximum retained messages; oldest records are removed when full",
  "导出当前筛选后的报文 (CSV)": "Export retained, filtered messages (CSV)",
  "导出报文": "Export messages",
- "CSV文件 (*.csv)": "CSV files (*.csv)"
+ "CSV文件 (*.csv)": "CSV files (*.csv)",
+ "%1 拒绝了自定义位时序，请核对 ZCANPRO 中选择的型号及驱动版本": "%1 rejected the custom bit timing. Check the model selected in ZCANPRO and the driver version",
+ "USBCAN-4E-U 自定义位时序须为 1–1000000 的十进制波特率（bps）": "USBCAN-4E-U custom timing must be a decimal bitrate from 1 to 1000000 bps",
+ "ZLG 波特率或采样点无效": "Invalid ZLG bitrate or sample point",
+ "ZLG 经典 CAN 自定义波特率不能超过 1M": "ZLG classic CAN custom bitrate cannot exceed 1M",
+ "ZLG 自定义位时序格式与 %1 不符，请粘贴此型号的 ZCANPRO 完整计算结果": "The custom timing format does not match %1. Paste the complete ZCANPRO calculator result for this model",
+ "ZLG 自定义位时序格式无效，请粘贴此型号的 ZCANPRO 完整计算结果": "Invalid ZLG custom timing format. Paste the complete ZCANPRO calculator result for this model",
+ "时序": "Timing",
+ "此 ZLG 型号只有经典 CAN 位时序，不能填写数据域": "This ZLG model supports only classic CAN timing; do not add a data phase",
+ "此型号填十进制波特率（bps），如 200000；采样点由设备决定": "Enter a decimal bitrate in bps for this model, e.g. 200000. The device determines the sample point",
+ "此型号的采样点由设备决定": "The device determines the sample point for this model",
+ "粘贴 ZCANPRO 波特率计算器中此型号的完整结果（含速率、采样点和括号内参数）；留空使用设备标准波特率": "Paste the complete ZCANPRO calculator result for this model, including rates, sample points and parameters in parentheses. Leave empty for standard device bitrates",
+ "粘贴此型号的 ZCANPRO 计算结果": "Paste the ZCANPRO calculator result for this model",
+ "自定义": "Custom",
+ "采样点可在 ZCANPRO 计算后粘贴到自定义位时序；留空使用设备默认值": "Calculate the sample point in ZCANPRO and paste the result into Custom timing. Leave empty for device defaults",
+ "留空按波特率和采样点计算；支持 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 和 ZCANPRO 结果": "Leave empty to calculate from bitrate and sample point; supports BTR0,BTR1, BRP,TSEG1,TSEG2,SJW and ZCANPRO results",
+ "ZLG 位时序格式无效：请填 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 或 ZCANPRO 结果": "Invalid ZLG timing: enter BTR0,BTR1, BRP,TSEG1,TSEG2,SJW or a ZCANPRO result"
 }
