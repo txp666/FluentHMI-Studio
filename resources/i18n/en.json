@@ -129,6 +129,7 @@
  "UDP 错误: %1": "UDP error: %1",
  "Visual C++ 2008 SP1 运行库 (x64，含 MFC)": "Visual C++ 2008 SP1 runtime (x64, with MFC)",
  "Visual C++ 2013 运行库 (x64)": "Visual C++ 2013 runtime (x64)",
+ "ZLG %1 返回无效接收数量 %2，通道可能已断开；已停止接收": "ZLG %1 returned an invalid receive count %2; the channel may be disconnected. Reception has stopped",
  "ZLG 发送失败（%1）": "ZLG send failed (%1)",
  "ZLG 型号": "ZLG model",
  "ZLG 设备索引": "ZLG device index",

@@ -1,4 +1,5 @@
 #include "comm/can/can_polling_backend.h"
+#include "comm/can/can_diagnostics.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
@@ -94,6 +95,11 @@ void CanPollingBackend::run()
     QList<CanFrame> sent;
     qint64 nextState = 0;
     CanBusState state = CanBusState::Normal;
+    const bool queryState = CanDiagnostics::statusQueriesEnabled();
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        CanDiagnostics::record(
+            "worker_start", {{"backend", QString::number(quintptr(this), 16)}, {"status_queries_enabled", queryState}});
+    }
     while (m_running) {
         QList<CanFrame> outgoing;
         {
@@ -115,6 +121,10 @@ void CanPollingBackend::run()
         QString failure;
         const qsizetype before = received.size();
         if (!readFrames(received, &failure)) {
+            if constexpr (CanDiagnostics::BuildEnabled) {
+                CanDiagnostics::record("worker_read_failed",
+                                       {{"backend", QString::number(quintptr(this), 16)}, {"error", failure}});
+            }
             QMutexLocker lock(&m_mutex);
             m_failure = failure;
             m_running = false;
@@ -123,7 +133,14 @@ void CanPollingBackend::run()
         for (qsizetype i = before; i < received.size(); ++i) {
             received[i].timestampMs = now;
         }
-        if (now >= nextState && m_running) {
+        if constexpr (CanDiagnostics::BuildEnabled) {
+            if (received.size() > before) {
+                CanDiagnostics::record("worker_frames_read", {{"backend", QString::number(quintptr(this), 16)},
+                                                              {"count", received.size() - before},
+                                                              {"software_timestamp_ms", now}});
+            }
+        }
+        if (queryState && now >= nextState && m_running) {
             nextState = now + kStateIntervalMs;
             const CanBusState current = readBusState();
             if (current != state) {
@@ -142,6 +159,9 @@ void CanPollingBackend::run()
     }
     QList<CanFrame> none;
     post(none, none); // the failure, if any
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        CanDiagnostics::record("worker_stop", {{"backend", QString::number(quintptr(this), 16)}});
+    }
 }
 
 void CanPollingBackend::post(QList<CanFrame> &received, QList<CanFrame> &sent)
@@ -151,6 +171,14 @@ void CanPollingBackend::post(QList<CanFrame> &received, QList<CanFrame> &sent)
     m_sent += sent;
     const bool news = !m_received.isEmpty() || !m_sent.isEmpty() || !m_sendErrors.isEmpty() ||
                       !m_failure.isEmpty() || m_stateChanged;
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        if (!received.isEmpty() || !sent.isEmpty()) {
+            CanDiagnostics::record("worker_post", {{"backend", QString::number(quintptr(this), 16)},
+                                                   {"received", received.size()},
+                                                   {"sent", sent.size()},
+                                                   {"pending_received", m_received.size()}});
+        }
+    }
     if (news && !m_deliveryPending) {
         // One delivery per event-loop pass: everything that arrives meanwhile goes with it.
         m_deliveryPending = true;
@@ -176,6 +204,13 @@ void CanPollingBackend::deliver()
         stateChanged = m_stateChanged;
         m_stateChanged = false;
         state = m_state;
+    }
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        CanDiagnostics::record(
+            "gui_delivery", {{"backend", QString::number(quintptr(this), 16)},
+                             {"received", received.size()},
+                             {"sent", sent.size()},
+                             {"oldest_software_timestamp_ms", received.isEmpty() ? 0 : received.front().timestampMs}});
     }
     // Sent first: a reply can only follow its request.
     if (!sent.isEmpty()) {

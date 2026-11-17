@@ -17,6 +17,11 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 option(FHMI_BUILD_TESTS "Build unit tests" ON)
+option(FHMI_CAN_DIAGNOSTICS "Trace CAN driver calls and disable periodic bus-state queries by default" OFF)
+set(FHMI_APPLICATION_VERSION "${PROJECT_VERSION}")
+if(FHMI_CAN_DIAGNOSTICS)
+    string(APPEND FHMI_APPLICATION_VERSION "-can-diagnostics")
+endif()
 
 set(FLUENTQTWIDGETS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/FluentQtWidgets" CACHE PATH
     "Path to a FluentQtWidgets checkout")
@@ -112,6 +117,8 @@ add_library(fhmi_comm STATIC
     src/comm/s7/s7_client.h src/comm/s7/s7_client.cpp
     src/comm/can/can_backend.cpp
     src/comm/can/can_backend.h
+    src/comm/can/can_diagnostics.cpp
+    src/comm/can/can_diagnostics.h
     src/comm/can/can_link.cpp
     src/comm/can/can_link.h
     src/comm/can/can_polling_backend.cpp
@@ -144,6 +151,8 @@ add_library(fhmi_comm STATIC
     src/comm/udp_link.h
 )
 target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort PRIVATE snap7)
+target_compile_definitions(fhmi_comm PUBLIC
+    $<$<BOOL:${FHMI_CAN_DIAGNOSTICS}>:FHMI_CAN_DIAGNOSTICS=1>)
 # SocketCAN needs the Linux kernel's CAN headers. The PCAN and ZLG backends build everywhere (they only load their
 # vendor libraries at connect time); CanBackend::create() offers each where its vendor supports it.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -210,7 +219,7 @@ add_executable(FluentHMIRuntime
     src/player/player_window.h
 )
 target_link_libraries(FluentHMIRuntime PRIVATE fhmi_runtime)
-target_compile_definitions(FluentHMIRuntime PRIVATE FHMI_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(FluentHMIRuntime PRIVATE FHMI_VERSION="${FHMI_APPLICATION_VERSION}")
 set_target_properties(FluentHMIRuntime PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE TRUE
@@ -250,7 +259,7 @@ add_executable(FluentHMIStudio
 )
 target_link_libraries(FluentHMIStudio PRIVATE fhmi_designer)
 target_compile_definitions(FluentHMIStudio PRIVATE
-    FHMI_VERSION="${PROJECT_VERSION}"
+    FHMI_VERSION="${FHMI_APPLICATION_VERSION}"
     FHMI_RUNTIME_BUILD_PATH="$<TARGET_FILE:FluentHMIRuntime>"
 )
 foreach(target IN ITEMS fhmi_core fhmi_comm fhmi_runtime fhmi_designer FluentHMIRuntime FluentHMIStudio)
@@ -343,6 +352,12 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_can PRIVATE fhmi_comm Qt6::Test)
     target_compile_definitions(tst_can PRIVATE FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME can COMMAND tst_can)
+    if(FHMI_CAN_DIAGNOSTICS)
+        add_executable(tst_can_diagnostics tests/tst_can_diagnostics.cpp)
+        target_link_libraries(tst_can_diagnostics PRIVATE fhmi_comm Qt6::Test)
+        add_test(NAME can_diagnostics COMMAND tst_can_diagnostics)
+        set_tests_properties(can_diagnostics PROPERTIES TIMEOUT 30)
+    endif()
 
     add_executable(tst_mqtt tests/tst_mqtt.cpp)
     target_link_libraries(tst_mqtt PRIVATE fhmi_comm Qt6::Test)

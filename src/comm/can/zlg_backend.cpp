@@ -1,10 +1,12 @@
 #include "comm/can/zlg_backend.h"
+#include "comm/can/can_diagnostics.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
+#include <QtCore/QJsonArray>
 #include <QtCore/QLibrary>
 
 #ifdef Q_OS_WIN
@@ -13,6 +15,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <optional>
 
 namespace fhmi {
@@ -24,6 +27,39 @@ namespace {
 constexpr UINT kReadBatch = 100;
 // ZCAN_Receive's wait_time (ms) when frames are already waiting; -1 would block until some arrive.
 constexpr int kReceiveWaitMs = 10;
+
+template <class Function, class Fields>
+auto traced(const char *name, void *handle, Function &&function, Fields &&makeFields) -> decltype(function())
+{
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        QJsonObject fields = makeFields();
+        fields.insert(QStringLiteral("handle"), QString::number(quintptr(handle), 16));
+        return CanDiagnostics::invoke(name, std::forward<Function>(function), std::move(fields));
+    }
+    return function();
+}
+
+template <class Function> auto traced(const char *name, void *handle, Function &&function) -> decltype(function())
+{
+    return traced(name, handle, std::forward<Function>(function), [] { return QJsonObject{}; });
+}
+
+template <class Buffer> void traceHardwareTimes(const char *kind, void *channel, const Buffer &buffer, UINT count)
+{
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        if (!count) {
+            return;
+        }
+        QJsonArray timestamps;
+        for (UINT i = 0; i < count; ++i) {
+            timestamps.append(QString::number(buffer[i].timestamp));
+        }
+        CanDiagnostics::record("driver_frames", {{"kind", QLatin1String(kind)},
+                                                 {"channel", QString::number(quintptr(channel), 16)},
+                                                 {"count", qint64(count)},
+                                                 {"hardware_timestamps_us", timestamps}});
+    }
+}
 
 struct Api
 {
@@ -275,6 +311,10 @@ QString loadKernelDll(const KernelDll &dll, const QString &model, QString *used)
 {
     if (HMODULE module = LoadLibraryA(dll.name.toLocal8Bit().constData())) {
         *used = modulePath(module);
+        if constexpr (CanDiagnostics::BuildEnabled) {
+            CanDiagnostics::record("module_loaded",
+                                   {{"kind", "kernel"}, {"path", *used}, {"model", model}, {"search", "bare_name"}});
+        }
         return {};
     }
     if (dll.path.isEmpty()) {
@@ -288,6 +328,10 @@ QString loadKernelDll(const KernelDll &dll, const QString &model, QString *used)
     }
     if (HMODULE module = LoadLibraryA(QDir::toNativeSeparators(dll.path).toLocal8Bit().constData())) {
         *used = modulePath(module);
+        if constexpr (CanDiagnostics::BuildEnabled) {
+            CanDiagnostics::record("module_loaded",
+                                   {{"kind", "kernel"}, {"path", *used}, {"model", model}, {"search", "kerneldlls"}});
+        }
         return {};
     }
     const QString reason = qt_error_string(int(GetLastError()));
@@ -385,6 +429,20 @@ bool loadApi(QString *error)
         }
         return false;
     }
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        QString path = QFileInfo(a.library.fileName()).absoluteFilePath();
+        bool resolved = false;
+#ifdef Q_OS_WIN
+        HMODULE module = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(a.openDevice), &module)) {
+            path = modulePath(module);
+            resolved = true;
+        }
+#endif
+        CanDiagnostics::record("module_loaded",
+                               {{"kind", "zlgcan"}, {"path", path}, {"actual_module_path_resolved", resolved}});
+    }
     a.loaded = true;
     return true;
 }
@@ -449,6 +507,16 @@ CanAdapterCaps ZlgBackend::caps(const QString &model)
 bool ZlgBackend::open(const CanSettings &settings, QString *error)
 {
     close();
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        CanDiagnostics::record("connect_settings", {{"backend", QString::number(quintptr(this), 16)},
+                                                    {"model", settings.zlgModel},
+                                                    {"device", settings.deviceIndex},
+                                                    {"channel", settings.channelIndex},
+                                                    {"bitrate", qint64(settings.bitrate)},
+                                                    {"data_bitrate", qint64(settings.dataBitrate)},
+                                                    {"fd", settings.fd},
+                                                    {"listen_only", settings.listenOnly}});
+    }
     const auto fail = [error](const QString &message) {
         if (error) {
             *error = message;
@@ -502,7 +570,8 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
             openDevices().remove(key);
             return fail(problem);
         }
-        shared.handle = a.openDevice(model->deviceType, UINT(settings.deviceIndex), 0);
+        shared.handle = CanDiagnostics::invoke(
+            "ZCAN_OpenDevice", [&] { return a.openDevice(model->deviceType, UINT(settings.deviceIndex), 0); });
         if (!shared.handle) {
             openDevices().remove(key);
             // clang-format off
@@ -521,7 +590,13 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
     const auto setValue = [this, &a, &settings](const char *name, const QString &value) {
         const QByteArray path = QByteArray::number(settings.channelIndex) + '/' + name;
         const QByteArray text = value.toLatin1();
-        return a.setValue(m_device, path.constData(), text.constData()) == STATUS_OK;
+        if constexpr (CanDiagnostics::BuildEnabled) {
+            CanDiagnostics::record("property_setting", {{"device", QString::number(quintptr(m_device), 16)},
+                                                        {"path", QString::fromLatin1(path)},
+                                                        {"value", value}});
+        }
+        return traced("ZCAN_SetValue", m_device,
+                      [&] { return a.setValue(m_device, path.constData(), text.constData()); }) == STATUS_OK;
     };
     ZCAN_CHANNEL_INIT_CONFIG config;
     std::memset(&config, 0, sizeof config);
@@ -555,7 +630,8 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
             }
         }
     }
-    m_channel = a.initCan(m_device, UINT(settings.channelIndex), &config);
+    m_channel =
+        traced("ZCAN_InitCAN", m_device, [&] { return a.initCan(m_device, UINT(settings.channelIndex), &config); });
     if (!m_channel) {
         releaseDevice();
         return fail(tr("%1 通道 %2 初始化失败").arg(settings.zlgModel).arg(settings.channelIndex));
@@ -565,8 +641,8 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
                                                                                      : QStringLiteral("0"))) {
         notes << tr("终端电阻设置失败");
     }
-    if (a.startCan(m_channel) != STATUS_OK) {
-        a.resetCan(m_channel);
+    if (traced("ZCAN_StartCAN", m_channel, [&] { return a.startCan(m_channel); }) != STATUS_OK) {
+        traced("ZCAN_ResetCAN", m_channel, [&] { return a.resetCan(m_channel); });
         m_channel = nullptr;
         releaseDevice();
         return fail(tr("%1 通道 %2 启动失败").arg(settings.zlgModel).arg(settings.channelIndex));
@@ -580,6 +656,11 @@ bool ZlgBackend::open(const CanSettings &settings, QString *error)
     if (settings.listenOnly) {
         m_description += tr(" 只听");
     }
+    if constexpr (CanDiagnostics::BuildEnabled) {
+        CanDiagnostics::record("channel_opened", {{"backend", QString::number(quintptr(this), 16)},
+                                                  {"device", QString::number(quintptr(m_device), 16)},
+                                                  {"channel", QString::number(quintptr(m_channel), 16)}});
+    }
     startWorker();
     if (!notes.isEmpty()) {
         emit sendFailed(notes.join(QStringLiteral("; ")));
@@ -591,7 +672,7 @@ void ZlgBackend::close()
 {
     stopWorker();
     if (m_channel) {
-        api().resetCan(m_channel);
+        traced("ZCAN_ResetCAN", m_channel, [&] { return api().resetCan(m_channel); });
         m_channel = nullptr;
     }
     releaseDevice();
@@ -605,18 +686,48 @@ void ZlgBackend::releaseDevice()
     const quint64 key = deviceKey(m_model->deviceType, m_deviceIndex);
     auto it = openDevices().find(key);
     if (it != openDevices().end() && --it->users <= 0) {
-        api().closeDevice(it->handle);
+        traced("ZCAN_CloseDevice", it->handle, [&] { return api().closeDevice(it->handle); });
         openDevices().erase(it);
     }
     m_device = nullptr;
 }
 
-bool ZlgBackend::readFrames(QList<CanFrame> &out, QString *)
+bool ZlgBackend::readFrames(QList<CanFrame> &out, QString *error)
 {
     const Api &a = api();
-    if (UINT count = a.receiveNum(m_channel, BYTE(TYPE_CAN)); count > 0) {
+    const auto invalid = [this, error](const char *function, UINT result) {
+        const QString message =
+            tr("ZLG %1 返回无效接收数量 %2，通道可能已断开；已停止接收").arg(QLatin1String(function)).arg(result);
+        if (error) {
+            *error = message;
+        }
+        if constexpr (CanDiagnostics::BuildEnabled) {
+            CanDiagnostics::record("driver_invalid_receive", {{"api", QLatin1String(function)},
+                                                              {"result", qint64(result)},
+                                                              {"channel", QString::number(quintptr(m_channel), 16)},
+                                                              {"error", message}});
+        }
+        return false;
+    };
+    UINT count = traced(
+        "ZCAN_GetReceiveNum", m_channel, [&] { return a.receiveNum(m_channel, BYTE(TYPE_CAN)); },
+        [] { return QJsonObject{{"type", qint64(TYPE_CAN)}}; });
+    if (count == std::numeric_limits<UINT>::max()) {
+        return invalid("ZCAN_GetReceiveNum", count);
+    }
+    if (count > 0) {
         ZCAN_Receive_Data buffer[kReadBatch];
-        const UINT read = a.receive(m_channel, buffer, std::min(count, kReadBatch), kReceiveWaitMs);
+        const UINT requested = std::min(count, kReadBatch);
+        const UINT read = traced(
+            "ZCAN_Receive", m_channel, [&] { return a.receive(m_channel, buffer, requested, kReceiveWaitMs); },
+            [&] {
+                return QJsonObject{
+                    {"type", qint64(TYPE_CAN)}, {"requested", qint64(requested)}, {"wait_ms", kReceiveWaitMs}};
+            });
+        if (read > requested) {
+            return invalid("ZCAN_Receive", read);
+        }
+        traceHardwareTimes("CAN", m_channel, buffer, read);
         for (UINT i = 0; i < read && i < kReadBatch; ++i) {
             const can_frame &raw = buffer[i].frame;
             if (raw.can_id & CAN_ERR_FLAG) {
@@ -633,9 +744,25 @@ bool ZlgBackend::readFrames(QList<CanFrame> &out, QString *)
     if (m_model->family != Family::CanFd) {
         return true;
     }
-    if (UINT count = a.receiveNum(m_channel, BYTE(TYPE_CANFD)); count > 0) {
+    count = traced(
+        "ZCAN_GetReceiveNum", m_channel, [&] { return a.receiveNum(m_channel, BYTE(TYPE_CANFD)); },
+        [] { return QJsonObject{{"type", qint64(TYPE_CANFD)}}; });
+    if (count == std::numeric_limits<UINT>::max()) {
+        return invalid("ZCAN_GetReceiveNum(FD)", count);
+    }
+    if (count > 0) {
         ZCAN_ReceiveFD_Data buffer[kReadBatch];
-        const UINT read = a.receiveFd(m_channel, buffer, std::min(count, kReadBatch), kReceiveWaitMs);
+        const UINT requested = std::min(count, kReadBatch);
+        const UINT read = traced(
+            "ZCAN_ReceiveFD", m_channel, [&] { return a.receiveFd(m_channel, buffer, requested, kReceiveWaitMs); },
+            [&] {
+                return QJsonObject{
+                    {"type", qint64(TYPE_CANFD)}, {"requested", qint64(requested)}, {"wait_ms", kReceiveWaitMs}};
+            });
+        if (read > requested) {
+            return invalid("ZCAN_ReceiveFD", read);
+        }
+        traceHardwareTimes("CANFD", m_channel, buffer, read);
         for (UINT i = 0; i < read && i < kReadBatch; ++i) {
             const canfd_frame &raw = buffer[i].frame;
             if (raw.can_id & CAN_ERR_FLAG) {
@@ -666,7 +793,7 @@ bool ZlgBackend::writeFrame(const CanFrame &frame, QString *error)
         data.frame.flags = frame.brs ? CANFD_BRS : 0;
         std::memcpy(data.frame.data, frame.data.constData(), data.frame.len);
         data.transmit_type = 0; // normal sending, retried on failure (UM01010101, SendType 0)
-        sent = api().transmitFd(m_channel, &data, 1);
+        sent = traced("ZCAN_TransmitFD", m_channel, [&] { return api().transmitFd(m_channel, &data, 1); });
     } else {
         ZCAN_Transmit_Data data;
         std::memset(&data, 0, sizeof data);
@@ -676,7 +803,7 @@ bool ZlgBackend::writeFrame(const CanFrame &frame, QString *error)
             std::memcpy(data.frame.data, frame.data.constData(), data.frame.can_dlc);
         }
         data.transmit_type = 0;
-        sent = api().transmit(m_channel, &data, 1);
+        sent = traced("ZCAN_Transmit", m_channel, [&] { return api().transmit(m_channel, &data, 1); });
     }
     if (sent != 1) {
         if (error) {
@@ -692,13 +819,14 @@ CanBusState ZlgBackend::readBusState()
     const Api &a = api();
     ZCAN_CHANNEL_ERR_INFO info;
     std::memset(&info, 0, sizeof info);
-    const bool hasInfo = a.readErrInfo(m_channel, &info) == STATUS_OK;
+    const bool hasInfo =
+        traced("ZCAN_ReadChannelErrInfo", m_channel, [&] { return a.readErrInfo(m_channel, &info); }) == STATUS_OK;
     if (hasInfo && (info.error_code & ZCAN_ERROR_CAN_BUSOFF)) {
         return CanBusState::BusOff;
     }
     ZCAN_CHANNEL_STATUS status;
     std::memset(&status, 0, sizeof status);
-    if (a.readStatus(m_channel, &status) == STATUS_OK) {
+    if (traced("ZCAN_ReadChannelStatus", m_channel, [&] { return a.readStatus(m_channel, &status); }) == STATUS_OK) {
         // The error counters, as the CAN standard draws the lines.
         const int counter = std::max(status.regRECounter, status.regTECounter);
         return counter >= 128 ? CanBusState::Passive : counter >= 96 ? CanBusState::Warning : CanBusState::Normal;

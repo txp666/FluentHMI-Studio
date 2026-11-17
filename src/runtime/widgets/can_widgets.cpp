@@ -1,6 +1,7 @@
 #include "runtime/widgets/can_widgets.h"
 
 #include "comm/can/can_link.h"
+#include "comm/can/can_diagnostics.h"
 #include "core/can_timing.h"
 #include "core/hex_utils.h"
 #include "runtime/runtime_context.h"
@@ -604,6 +605,10 @@ class CanMonitorModel : public QAbstractTableModel
 
     void add(CanLink *link, const QList<CanFrame> &frames, bool sent)
     {
+#ifdef FHMI_CAN_DIAGNOSTICS
+        CanDiagnostics::record("monitor_received", {{"monitor", QString::number(quintptr(this), 16)},
+                                                      {"count", frames.size()}, {"sent", sent}});
+#endif
         std::shared_ptr<const CanSignalSet> signalSet = link ? link->signalSet() : nullptr;
         for (const CanFrame &frame : frames) {
             const CanId id{frame.id, frame.extended};
@@ -1038,7 +1043,14 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_refresh = new QTimer(this);
     m_refresh->setInterval(kMonitorRefreshMs);
     connect(m_refresh, &QTimer::timeout, m_model, [this]() {
-        if (m_model->refresh() && m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked()) {
+        const bool changed = m_model->refresh();
+#ifdef FHMI_CAN_DIAGNOSTICS
+        if (changed) {
+            CanDiagnostics::record("monitor_updated", {{"monitor", QString::number(quintptr(m_model), 16)},
+                                                         {"rows", m_model->rowCount()}});
+        }
+#endif
+        if (changed && m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked()) {
             m_view->scrollToBottom();
         }
     });

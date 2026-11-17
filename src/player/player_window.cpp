@@ -62,7 +62,11 @@ class CanvasView : public QGraphicsView
 
 PlayerWindow::PlayerWindow(const Project &project, QWidget *parent) : FluentQt::FluentWidget(parent)
 {
+#ifdef FHMI_CAN_DIAGNOSTICS
+    setWindowTitle(project.appName + QStringLiteral(" [CAN diagnostics]"));
+#else
     setWindowTitle(project.appName);
+#endif
     const QIcon icon = iconFromFile(project.iconPath());
     setWindowIcon(icon.isNull() ? QIcon(QStringLiteral(":/fluenthmi/logo.png")) : icon);
     titleBar()->raise();

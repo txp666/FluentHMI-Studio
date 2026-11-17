@@ -63,7 +63,9 @@ MainWindow::MainWindow(QWidget *parent) : FluentQt::FluentWindow(parent)
         close();
     });
     // Once the window is up, so a notice has somewhere to appear.
+#ifndef FHMI_CAN_DIAGNOSTICS
     QTimer::singleShot(1500, m_updates, &UpdateController::startupCheck);
+#endif
 
     auto *exportAction = new QAction(this);
     exportAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E));
@@ -87,7 +89,11 @@ void MainWindow::openProject(const QString &path)
 
 void MainWindow::updateTitle()
 {
+#ifdef FHMI_CAN_DIAGNOSTICS
+    setWindowTitle(QStringLiteral("%1 — FluentHMI Studio [CAN diagnostics]").arg(m_designer->displayName()));
+#else
     setWindowTitle(QStringLiteral("%1 — FluentHMI Studio").arg(m_designer->displayName()));
+#endif
 }
 
 void MainWindow::exportApplication()
