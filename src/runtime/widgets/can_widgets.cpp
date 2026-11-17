@@ -1165,6 +1165,7 @@ void CanMonitorWidget::updateDisplayMode()
 {
     const bool scrolling = m_displayMode->currentIndex() == 1;
     m_model->setScrolling(scrolling);
+    m_view->setColumnHidden(CanMonitorModel::Count, scrolling);
     m_view->setSortingEnabled(!scrolling);
     m_sorted->sort(scrolling ? -1 : CanMonitorModel::Id, Qt::AscendingOrder);
     m_autoScroll->setEnabled(scrolling);
