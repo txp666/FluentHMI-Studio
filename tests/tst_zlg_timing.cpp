@@ -4,6 +4,7 @@
 #include <QtTest/QtTest>
 
 #include <limits>
+#include <cmath>
 
 using namespace fhmi;
 using namespace fhmi::zlg;
@@ -27,6 +28,68 @@ class TestZlgTiming : public QObject
     Q_OBJECT
 
   private slots:
+    void calculatorFindsGoldenTimings()
+    {
+        const auto rows = sjaTimingCandidates(500000, 0.875, 1, 0);
+        QCOMPARE(rows.size(), 14);
+        QCOMPARE(rows.first().btr, quint16(0x001C));
+        QCOMPARE(rows.first().bitrate, 500000.0);
+        QCOMPARE(rows.first().timing.samplePoint(), 0.875);
+        QCOMPARE(rows.first().bitrateErrorPpm, 0.0);
+        QCOMPARE(sjaTimingCandidates(500000, 0.75, 1, 0).first().btr, quint16(0x003A));
+        QCOMPARE(sjaTimingCandidates(500000, 0.875, 4, 0).first().btr, quint16(0xC03A));
+        QCOMPARE(sjaTimingCandidates(800000, 0.875, 1, 0).first().btr, quint16(0x0007));
+    }
+
+    void calculatorHandlesToleranceAndFractionalRates()
+    {
+        QVERIFY(sjaTimingCandidates(83333, 0.875, 1, 0).isEmpty());
+        QVERIFY(sjaTimingCandidates(83333, 0.875, 1, 4).isEmpty());
+        const auto approximate = sjaTimingCandidates(83333, 0.875, 1, 5);
+        QVERIFY(!approximate.isEmpty());
+        QCOMPARE(approximate.first().btr, quint16(0x051C));
+        QVERIFY(std::abs(approximate.first().bitrate - 8000000.0 / 96) < 1e-9);
+        QVERIFY(approximate.first().bitrateErrorPpm > 4 && approximate.first().bitrateErrorPpm < 5);
+        const auto exact = sjaTimingCandidates(8000000.0 / 96, 0.875, 1, 0);
+        QVERIFY(!exact.isEmpty());
+        QCOMPARE(exact.first().btr, quint16(0x051C));
+        QCOMPARE(exact.first().bitrateErrorPpm, 0.0);
+    }
+
+    void calculatorRespectsControllerLimits()
+    {
+        for (const double rate : {5000.0, 10000.0, 125000.0, 500000.0, 1000000.0}) {
+            for (const int sjw : {1, 4}) {
+                QSet<quint16> seen;
+                for (const auto &row : sjaTimingCandidates(rate, 0.875, sjw)) {
+                    QVERIFY(!seen.contains(row.btr));
+                    seen.insert(row.btr);
+                    QString error;
+                    QVERIFY2(CanBitTiming::check(row.timing, CanBitTiming::Sja1000, &error), qPrintable(error));
+                    QVERIFY(row.timing.tq() >= 8);
+                    QCOMPARE(row.timing.sjw, sjw);
+                    QVERIFY(row.bitrate <= 1000000 && row.bitrateErrorPpm <= 1000 + 1e-9);
+                    QCOMPARE(CanBitTiming::sja1000Btr(row.timing), row.btr);
+                }
+            }
+        }
+    }
+
+    void calculatorRejectsInvalidInputs()
+    {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        for (const double rate : {0.0, -1.0, 1000001.0, nan, std::numeric_limits<double>::infinity()}) {
+            QVERIFY(sjaTimingCandidates(rate, 0.875, 1).isEmpty());
+        }
+        for (const double sample : {0.0, 1.0, nan}) {
+            QVERIFY(sjaTimingCandidates(500000, sample, 1).isEmpty());
+        }
+        QVERIFY(sjaTimingCandidates(500000, 0.875, 0).isEmpty());
+        QVERIFY(sjaTimingCandidates(500000, 0.875, 5).isEmpty());
+        QVERIFY(sjaTimingCandidates(500000, 0.875, 1, -1).isEmpty());
+        QVERIFY(sjaTimingCandidates(500000, 0.875, 1, 10001).isEmpty());
+    }
+
     void classicRegisters_data()
     {
         QTest::addColumn<QString>("custom");

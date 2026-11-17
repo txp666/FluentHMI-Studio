@@ -1,4 +1,5 @@
 #include "runtime/widgets/can_widgets.h"
+#include "runtime/widgets/can_timing_dialog.h"
 
 #include "comm/can/can_diagnostics.h"
 #include "comm/can/can_link.h"
@@ -151,7 +152,10 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_customTiming->setMaxLength(512);
     m_customTiming->setMinimumWidth(0);
     fluentToolTip(m_customTiming);
-    m_customTiming->hide();
+    m_calculate = new FluentQt::PushButton(tr("计算"), this);
+    m_calculate->setObjectName(QStringLiteral("canTimingCalculatorButton"));
+    fluentToolTip(m_calculate);
+    m_customRow = row({{m_customTiming, 1}, {m_calculate, 0}});
 
     m_hint = new FluentQt::CaptionLabel(this);
     m_hint->setObjectName(QStringLiteral("canTimingHint"));
@@ -177,6 +181,7 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     });
     connect(m_zlgModel, &FluentQt::ComboBox::currentIndexChanged, this, &CanConfigCardWidget::updateAdapterUi);
     connect(m_customTiming, &QLineEdit::textChanged, this, &CanConfigCardWidget::updateAdapterUi);
+    connect(m_calculate, &QPushButton::clicked, this, &CanConfigCardWidget::showTimingCalculator);
     connect(m_fd, &QCheckBox::toggled, this, &CanConfigCardWidget::updateAdapterUi);
     for (FluentQt::ComboBox *combo : {m_bitrate, m_samplePoint, m_dataBitrate, m_dataSamplePoint}) {
         connect(combo, &FluentQt::ComboBox::currentIndexChanged, this, &CanConfigCardWidget::updateAdapterUi);
@@ -227,7 +232,7 @@ void CanConfigCardWidget::apply()
     if (text("displayMode") != QStringLiteral("简洁")) { // i18n: value
         addField(tr("数据域"), m_fdRow);
     }
-    addField(tr("自定义"), m_customTiming);
+    addField(tr("自定义"), m_customRow);
     m_customTimingCaption = m_fieldLabels.last();
     // SocketCAN's command: shown only for that adapter (updateAdapterUi()).
     addField(QStringLiteral("ip link"), m_hint, true);
@@ -294,13 +299,14 @@ void CanConfigCardWidget::updateAdapterUi()
                        static_cast<QWidget *>(m_zlgChannel)}) {
         w->setEnabled(editable);
     }
-    m_customTiming->setVisible(zlg);
+    m_customRow->setVisible(zlg);
     m_customTiming->setEnabled(editable && caps.customTiming);
     if (m_customTimingCaption) {
         m_customTimingCaption->setVisible(zlg);
     }
     const bool socketCan = adapter == CanAdapter::SocketCan;
     bool timingHint = false;
+    bool calculator = false;
     if (socketCan) {
         // The card's bitrate and sample points, which the interface must be set to by hand.
         CanSettings s = settings();
@@ -313,6 +319,7 @@ void CanConfigCardWidget::updateAdapterUi()
     if (zlg) {
         const QByteArray name = selectedValue(m_zlgModel).toLatin1();
         if (const zlg::Model *model = zlg::findModel(name.constData(), name.size())) {
+            calculator = model->family == zlg::Family::Sja1000;
             m_customTiming->setToolTip(zlg::customTimingHint(*model));
             m_customTiming->setPlaceholderText(zlg::customTimingPlaceholder(*model));
             QString error;
@@ -322,6 +329,8 @@ void CanConfigCardWidget::updateAdapterUi()
             m_hint->setText(timing ? timing->description : error);
         }
     }
+    m_calculate->setEnabled(editable && calculator);
+    m_calculate->setToolTip(calculator ? tr("计算位时序并回填到卡片") : tr("此型号请在 ZCANPRO 中计算后粘贴结果"));
     m_hint->setVisible(socketCan || timingHint);
     if (m_hintCaption) {
         m_hintCaption->setVisible(socketCan || timingHint);
@@ -369,6 +378,27 @@ void CanConfigCardWidget::refreshChannels(bool announce)
             context()->notify(tr("CAN"), tr("没有找到 %1 通道").arg(adapter), NotifyType::Warning, 4000);
         }
     }
+}
+
+void CanConfigCardWidget::showTimingCalculator()
+{
+    const CanSettings current = settings();
+    const QByteArray name = current.zlgModel.toLatin1();
+    const auto *model = zlg::findModel(name.constData(), name.size());
+    if (current.adapter != CanAdapter::Zlg || !model || model->family != zlg::Family::Sja1000 ||
+        (m_link && m_link->isConnected())) {
+        return;
+    }
+    auto *dialog = new CanTimingDialog(current, window());
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(this, &QObject::destroyed, dialog, &QObject::deleteLater);
+    connect(dialog, &QDialog::accepted, this, [this, dialog, current]() {
+        if (selectedValue(m_adapter) == CanAdapter::Zlg && selectedValue(m_zlgModel) == current.zlgModel &&
+            !(m_link && m_link->isConnected())) {
+            m_customTiming->setText(dialog->selectedTiming());
+        }
+    });
+    dialog->open();
 }
 
 void CanConfigCardWidget::onAttached()

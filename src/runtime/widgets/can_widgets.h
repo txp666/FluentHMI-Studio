@@ -12,6 +12,7 @@ class EditableComboBox;
 class LineEdit;
 class SpinBox;
 class TableView;
+class PushButton;
 } // namespace FluentQt
 
 namespace fhmi {
@@ -46,6 +47,7 @@ class CanConfigCardWidget : public LinkCardBase
     // `announce`: say why there are none (the refresh button), rather than only leave the list empty.
     void refreshChannels(bool announce = false);
     void toggleConnection();
+    void showTimingCalculator();
     void showConnection();
     // The card is not connected because of `reason`: the header says so, the line below the fields says why.
     void showFailure(const QString &reason);
@@ -73,6 +75,8 @@ class CanConfigCardWidget : public LinkCardBase
     FluentQt::ComboBox *m_dataBitrate = nullptr;
     FluentQt::ComboBox *m_dataSamplePoint = nullptr;
     FluentQt::LineEdit *m_customTiming = nullptr;
+    QWidget *m_customRow = nullptr;
+    FluentQt::PushButton *m_calculate = nullptr;
     QPointer<QWidget> m_customTimingCaption;
     FluentQt::CaptionLabel *m_hint = nullptr;   // SocketCAN's ip command, or ZLG's effective bit timing
     FluentQt::CaptionLabel *m_detail = nullptr; // below the fields: the counters, or why the card is not connected

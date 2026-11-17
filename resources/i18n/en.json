@@ -1209,5 +1209,21 @@
  "自定义": "Custom",
  "采样点可在 ZCANPRO 计算后粘贴到自定义位时序；留空使用设备默认值": "Calculate the sample point in ZCANPRO and paste the result into Custom timing. Leave empty for device defaults",
  "留空按波特率和采样点计算；支持 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 和 ZCANPRO 结果": "Leave empty to calculate from bitrate and sample point; supports BTR0,BTR1, BRP,TSEG1,TSEG2,SJW and ZCANPRO results",
- "ZLG 位时序格式无效：请填 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 或 ZCANPRO 结果": "Invalid ZLG timing: enter BTR0,BTR1, BRP,TSEG1,TSEG2,SJW or a ZCANPRO result"
+ "ZLG 位时序格式无效：请填 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 或 ZCANPRO 结果": "Invalid ZLG timing: enter BTR0,BTR1, BRP,TSEG1,TSEG2,SJW or a ZCANPRO result",
+ "CAN 位时序计算器": "CAN bit timing calculator",
+ "USBCAN-I/II · 晶振 16 MHz（位时序时钟 8 MHz）": "USBCAN-I/II · 16 MHz crystal (8 MHz timing clock)",
+ "三次采样": "Triple sampling",
+ "共 %1 个结果，按速率和采样点误差排序；应用后点击连接才会生效": "%1 results, ordered by bitrate and sample-point error. Applied settings take effect when you connect",
+ "复制参数": "Copy parameters",
+ "实际速率(kbps)": "Actual rate (kbps)",
+ "应用到卡片": "Apply to card",
+ "最大速率误差": "Max. bitrate error",
+ "此型号请在 ZCANPRO 中计算后粘贴结果": "For this model, calculate in ZCANPRO and paste the result",
+ "没有满足误差要求的时序，请调整速率或最大速率误差": "No timing meets the error limit. Adjust the rate or maximum bitrate error",
+ "目标波特率": "Target bitrate",
+ "目标采样点": "Target sample point",
+ "计算": "Calculate",
+ "计算位时序并回填到卡片": "Calculate bit timing and fill the card",
+ "请输入 1–1000000 bps 的波特率，例如 500k 或 1M": "Enter a bitrate from 1 to 1000000 bps, e.g. 500k or 1M",
+ "速率误差": "Bitrate error"
 }

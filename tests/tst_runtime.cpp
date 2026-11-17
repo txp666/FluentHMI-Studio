@@ -12,6 +12,7 @@
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
 #include "runtime/widgets/can_widgets.h"
+#include "runtime/widgets/can_timing_dialog.h"
 #include "runtime/widgets/data_widgets.h"
 #include "runtime/widgets/display_widgets.h"
 #include "runtime/widgets/industrial_widget.h"
@@ -48,6 +49,8 @@
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QDoubleSpinBox>
+#include <QtWidgets/QTableWidget>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
@@ -695,6 +698,72 @@ class TestRuntime : public QObject
             QApplication::processEvents();
             QVERIFY(card->grab().save(QDir(screenshots).filePath(QStringLiteral("zlg-custom-timing.png"))));
         }
+    }
+
+    void zlgCalculatorAppliesSelectedTimingWithoutConnecting()
+    {
+        std::unique_ptr<HmiWidget> widget(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"defaultSamplePoint", "87.5%"}}));
+        auto *card = dynamic_cast<CanConfigCardWidget *>(widget.get());
+        QVERIFY(card);
+        card->resize(380, 340);
+        card->show();
+        auto *calculate = card->findChild<QPushButton *>("canTimingCalculatorButton");
+        auto *custom = card->findChild<QLineEdit *>("canCustomTiming");
+        auto *model = card->findChild<FluentQt::ComboBox *>("canZlgModel");
+        QVERIFY(calculate && custom && model);
+        QVERIFY(calculate->isEnabled());
+        const auto openCalculator = [&]() -> CanTimingDialog * {
+            calculate->click();
+            for (auto *dialog : card->findChildren<CanTimingDialog *>()) {
+                if (dialog->isVisible()) {
+                    return dialog;
+                }
+            }
+            return nullptr;
+        };
+        auto *dialog = openCalculator();
+        QVERIFY(dialog);
+        auto *table = dialog->findChild<QTableWidget *>("timingCalculatorResults");
+        auto *sample = dialog->findChild<QDoubleSpinBox *>("timingCalculatorSample");
+        auto *apply = dialog->findChild<QPushButton *>("timingCalculatorApply");
+        QVERIFY(table && sample && apply);
+        QCOMPARE(table->rowCount(), 14);
+        QCOMPARE(table->item(0, 7)->text(), QStringLiteral("00,1C"));
+        QCOMPARE(dialog->selectedTiming(), QStringLiteral("00,1C"));
+        const QString screenshots = qEnvironmentVariable("FHMI_CAN_TEST_SCREENSHOT_DIR");
+        if (!screenshots.isEmpty()) {
+            QVERIFY(QDir().mkpath(screenshots));
+            QApplication::processEvents();
+            QVERIFY(dialog->grab().save(QDir(screenshots).filePath(QStringLiteral("zlg-timing-calculator.png"))));
+        }
+        sample->setValue(75);
+        QCOMPARE(dialog->selectedTiming(), QStringLiteral("00,3A"));
+        apply->click();
+        QCOMPARE(custom->text(), QStringLiteral("00,3A"));
+        QVERIFY(labelShown(card, QStringLiteral("未连接")));
+
+        dialog = openCalculator();
+        QVERIFY(dialog);
+        auto *rate = dialog->findChild<QLineEdit *>("timingCalculatorRate");
+        apply = dialog->findChild<QPushButton *>("timingCalculatorApply");
+        QVERIFY(rate && apply);
+        rate->setText(QStringLiteral("nan"));
+        QVERIFY(dialog->selectedTiming().isEmpty());
+        QVERIFY(!apply->isEnabled());
+        dialog->reject();
+        QCOMPARE(custom->text(), QStringLiteral("00,3A"));
+
+        custom->setText(QStringLiteral("00,9C"));
+        dialog = openCalculator();
+        QVERIFY(dialog);
+        auto *triple = dialog->findChild<QCheckBox *>("timingCalculatorTriple");
+        QVERIFY(triple && triple->isChecked());
+        QCOMPARE(dialog->selectedTiming(), QStringLiteral("00,9C"));
+        dialog->accept();
+        QCOMPARE(custom->text(), QStringLiteral("00,9C"));
+        model->setCurrentText(QStringLiteral("USBCANFD-200U"));
+        QVERIFY(!calculate->isEnabled());
     }
 
     void copiedS7GroupRetargetsConnections()

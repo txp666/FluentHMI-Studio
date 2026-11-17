@@ -189,6 +189,8 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/basic_widgets.h
     src/runtime/widgets/can_widgets.cpp
     src/runtime/widgets/can_widgets.h
+    src/runtime/widgets/can_timing_dialog.cpp
+    src/runtime/widgets/can_timing_dialog.h
     src/runtime/widgets/container_widgets.cpp
     src/runtime/widgets/container_widgets.h
     src/runtime/widgets/data_widgets.cpp

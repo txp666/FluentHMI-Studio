@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace fhmi::zlg {
 namespace {
@@ -44,6 +45,39 @@ bool calculatorString(const QString &text, bool fd, int parameters)
 }
 
 } // namespace
+
+QList<SjaTimingCandidate> sjaTimingCandidates(double bitrate, double samplePoint, int sjw, int maxErrorPpm)
+{
+    QList<SjaTimingCandidate> results;
+    if (!std::isfinite(bitrate) || bitrate < 1 || bitrate > 1000000 || !std::isfinite(samplePoint) ||
+        samplePoint <= 0 || samplePoint >= 1 || sjw < 1 || sjw > 4 || maxErrorPpm < 0 || maxErrorPpm > 10000) {
+        return results;
+    }
+    const auto &limits = CanBitTiming::Sja1000;
+    for (int brp = limits.brpMin; brp <= limits.brpMax; ++brp) {
+        for (int tseg1 = limits.tseg1Min; tseg1 <= limits.tseg1Max; ++tseg1) {
+            for (int tseg2 = std::max(sjw, limits.tseg2Min); tseg2 <= limits.tseg2Max; ++tseg2) {
+                const CanTiming timing{brp, tseg1, tseg2, sjw};
+                if (timing.tq() < limits.minTq) {
+                    continue;
+                }
+                const double actual = double(kSjaClock) / (brp * timing.tq());
+                const double errorPpm = std::abs(actual - bitrate) / bitrate * 1000000;
+                if (actual <= 1000000 && errorPpm <= maxErrorPpm + 1e-9) {
+                    results.append({timing, CanBitTiming::sja1000Btr(timing), actual, errorPpm});
+                }
+            }
+        }
+    }
+    const auto rank = [samplePoint](const SjaTimingCandidate &candidate) {
+        return std::make_tuple(qint64(std::llround(candidate.bitrateErrorPpm * 1000000)),
+                               qint64(std::llround(std::abs(candidate.timing.samplePoint() - samplePoint) * 1e9)),
+                               std::abs(candidate.timing.tq() - CanBitTiming::PreferredNominalTq), candidate.timing.brp,
+                               -candidate.timing.samplePoint());
+    };
+    std::sort(results.begin(), results.end(), [&](const auto &a, const auto &b) { return rank(a) < rank(b); });
+    return results;
+}
 
 QString customTimingHint(const Model &model)
 {
