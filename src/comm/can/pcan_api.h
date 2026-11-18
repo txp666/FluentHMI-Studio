@@ -72,6 +72,7 @@ constexpr quint32 PCAN_PARAMETER_ON = 0x01;
 constexpr quint32 PCAN_CHANNEL_AVAILABLE = 0x01;
 constexpr quint32 PCAN_CHANNEL_OCCUPIED = 0x02;
 constexpr quint32 FEATURE_FD_CAPABLE = 0x01;
+constexpr TPCANParameter PCAN_BUSOFF_AUTORESET = 0x07;
 constexpr int MAX_LENGTH_HARDWARE_NAME = 33;
 
 struct TPCANMsg

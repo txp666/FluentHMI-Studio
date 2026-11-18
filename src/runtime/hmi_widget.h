@@ -24,6 +24,8 @@ class HmiWidget : public QWidget
     const WidgetMeta &meta() const { return *m_meta; }
     QString typeName() const { return m_meta->typeName; }
     const QJsonObject &properties() const { return m_props; }
+    DataRoute receiveRoute() const { return {text("sourceCardId"), text("sourceEndpoint")}; }
+    DataRoute commandRoute() const { return {text("commandTargetId"), text("commandEndpoint")}; }
 
     // Stores the properties and refreshes the widget from them.
     void setProperties(const QJsonObject &props);
@@ -47,10 +49,17 @@ class HmiWidget : public QWidget
     // Height of a container's header above its child area, for design-time layout.
     virtual int contentTop() const { return 0; }
 
+    // Connection cards fit their visible rows. Designer and runtime measure at the requested width
+    // before applying geometry, so an old narrow-layout minimum cannot enlarge a wide card.
+    virtual bool fitsContentHeight() const { return false; }
+    QSize sizeForGeometry(const QSize &requested);
+
   protected:
     virtual void apply() = 0;
     virtual void onAttached() {}
     virtual void onDetached() {}
+    virtual void arrangeForWidth(int) {}
+    void updateMinimumHeight();
     // A connection that only exists while attached; detach() disconnects it.
     void live(const QMetaObject::Connection &connection) { m_liveConnections.append(connection); }
 
@@ -62,6 +71,7 @@ class HmiWidget : public QWidget
     bool flag(const char *name) const;
 
   private:
+    int contentMinimumHeight(int width);
     const WidgetMeta *m_meta;
     QJsonObject m_props;
     QString m_assetBaseDir;

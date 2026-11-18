@@ -20,6 +20,9 @@ struct CanFrame
     bool error = false; // an error frame the adapter reported; never decoded
     QByteArray data;
     qint64 timestampMs = 0; // ms since the epoch, when it arrived or was sent
+    qint64 receivedAtMs = -1; // monotonic receive time, stamped by the backend before queueing; -1 for TX/unread frames
+    quint64 submissionId = 0; // local TX correlation; zero for sends outside the command table
+    bool requireAdapterReply = false; // feedback-initialized writes cannot use a silent serial transport
 };
 
 // An identifier with its format: 0x123 standard and 0x123 extended are different frames.
@@ -38,6 +41,12 @@ namespace Can {
 
 constexpr quint32 MaxStandardId = 0x7FF;
 constexpr quint32 MaxExtendedId = 0x1FFFFFFF;
+
+// Shared monotonic clock for receive timestamps and feedback age checks; independent of wall-clock changes.
+qint64 monotonicMs();
+// Wire-time estimate from successfully observed frames, with worst-case dynamic stuffing.
+// Error frames/retries that the adapter did not report are not represented.
+double estimatedFrameSeconds(const CanFrame &frame, double nominalBitrate, double dataBitrate);
 
 // An ID as users write it everywhere (canId, canSignals, canFilter, DataSendCard): hexadecimal, optional 0x,
 // any case. It is extended when its value is above 0x7FF or it is written with exactly 8 hex digits, as cansend

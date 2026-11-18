@@ -1,0 +1,158 @@
+{
+  "version": "1.3",
+  "appName": "工程数据与报警示例",
+  "canvas": {
+    "width": 1020,
+    "height": 650,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line",
+    "parserConfig": {
+      "separator": ","
+    }
+  },
+  "widgets": [
+    {
+      "type": "TcpConfigCard",
+      "id": "PLC_A",
+      "geometry": {
+        "x": 20,
+        "y": 20,
+        "w": 340,
+        "h": 230
+      },
+      "properties": {
+        "title": "设备 A · TCP 服务端",
+        "defaultMode": "服务端",
+        "defaultPort": 9201
+      }
+    },
+    {
+      "type": "TcpConfigCard",
+      "id": "PLC_B",
+      "geometry": {
+        "x": 380,
+        "y": 20,
+        "w": 340,
+        "h": 230
+      },
+      "properties": {
+        "title": "设备 B · TCP 服务端",
+        "defaultMode": "服务端",
+        "defaultPort": 9202
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "status",
+      "geometry": {
+        "x": 750,
+        "y": 25,
+        "w": 250,
+        "h": 95
+      },
+      "properties": {
+        "title": "总故障",
+        "unit": "",
+        "displayFormat": "枚举",
+        "textList": "0=正常|#107c10\n1=故障|#d13438"
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "总故障"
+      }
+    },
+    {
+      "type": "TractionBattery",
+      "id": "battery",
+      "geometry": {
+        "x": 755,
+        "y": 133,
+        "w": 240,
+        "h": 120
+      },
+      "properties": {
+        "title": "动力电池",
+        "showTitle": false,
+        "textLayout": "中心偏移",
+        "textPositionLocked": true,
+        "chargeColors": true
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "电量"
+      }
+    },
+    {
+      "type": "AlarmBanner",
+      "id": "banner",
+      "geometry": {
+        "x": 20,
+        "y": 275,
+        "w": 980,
+        "h": 65
+      }
+    },
+    {
+      "type": "AlarmList",
+      "id": "alarms",
+      "geometry": {
+        "x": 20,
+        "y": 360,
+        "w": 980,
+        "h": 270
+      }
+    }
+  ],
+  "logic": {
+    "id": "project-data-alarms-example-v1",
+    "soundEnabled": false,
+    "points": [
+      {
+        "name": "L1",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "PLC_A",
+          "key": "fault"
+        }
+      },
+      {
+        "name": "L2",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "PLC_B",
+          "key": "fault"
+        }
+      },
+      {
+        "name": "电量",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "PLC_A",
+          "key": "soc"
+        }
+      },
+      {
+        "name": "总故障",
+        "expression": "T[\"L1\"] or T[\"L2\"]"
+      }
+    ],
+    "alarms": [
+      {
+        "id": "系统故障",
+        "condition": "T[\"总故障\"] != 0",
+        "level": 3,
+        "ackRequired": true,
+        "text": "至少一个设备报告故障"
+      },
+      {
+        "id": "电量低",
+        "condition": "T[\"电量\"] <= 20",
+        "level": 2,
+        "ackRequired": true,
+        "text": "动力电池电量低于或等于 20%"
+      }
+    ]
+  }
+}

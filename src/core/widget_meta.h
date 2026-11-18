@@ -37,6 +37,14 @@ struct PropDef
     std::optional<double> maximum;
     bool bindable = false;
     QString description; // for the widget reference, where a label alone does not explain it
+    QString helpKey = {}; // UI-independent topic key, resolved by the shared field-help renderer
+
+    PropDef withHelp(const char *key) const
+    {
+        auto result = *this;
+        result.helpKey = QLatin1String(key);
+        return result;
+    }
 };
 
 enum class WidgetCategory
@@ -96,9 +104,9 @@ class WidgetRegistry
     QList<WidgetMeta> m_widgets;
 };
 
-// Keep the range endpoints and the initial value of Slider/SpinBox/GaugeMeter consistent.
+// Shared designer/runtime normalization: migrate omitted legacy settings and keep numeric ranges consistent.
 // `changed` names the property the user just edited, so that endpoint wins.
-QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject properties,
+QJsonObject normalizedWidgetProperties(const QString &typeName, QJsonObject properties,
                                       const QString &changed = QString());
 
 // Registered in builtin_widgets.cpp.

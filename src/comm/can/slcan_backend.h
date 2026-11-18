@@ -2,6 +2,7 @@
 
 #include "comm/can/can_backend.h"
 
+#include <QtCore/QQueue>
 #include <QtSerialPort/QSerialPort>
 
 class QTimer;
@@ -10,7 +11,7 @@ namespace fhmi {
 
 // Lawicel / CANable-style adapters that speak slcan over a (virtual) serial port: S0–S8 sets the bitrate, O opens
 // (L listen-only), t/T/r/R carry frames, F reads the status flags once a second for the bus state. Classic CAN only.
-// Everything runs on the GUI thread through QSerialPort's signals.
+// Uses QSerialPort on the backend's owning event loop.
 class SlcanBackend : public CanBackend
 {
     Q_OBJECT
@@ -28,15 +29,29 @@ class SlcanBackend : public CanBackend
     QString description() const override { return m_description; }
 
   private:
-    // A command during open(): true for its CR (or for silence, which some firmware answers with), false for BELL.
-    bool command(const QByteArray &text, int timeoutMs);
+    enum class SetupReply { Accepted, Rejected, Silent, WriteFailed };
+    struct Request
+    {
+        QByteArray text;
+        std::optional<CanFrame> frame; // absent for a status query
+    };
+
+    SetupReply setupCommand(const QByteArray &text);
+    void sendNext();
+    void finishReply();
     void onReadyRead();
+    void failChannel(const QString &error);
 
     QSerialPort m_port;
     QTimer *m_statusTimer = nullptr;
+    QTimer *m_replyTimer = nullptr;
     QByteArray m_line;
-    int m_statusPending = 0; // F commands not answered yet: a BELL may be their answer
+    QQueue<Request> m_outgoing;
+    std::optional<Request> m_inFlight;
+    bool m_waitForReplies = false;
+    bool m_statusDue = false;
     bool m_open = false;
+    quint64 m_generation = 0;
     QString m_description;
     CanBusState m_state = CanBusState::Normal;
 };

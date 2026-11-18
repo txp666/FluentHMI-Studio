@@ -7,6 +7,7 @@
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 
+#include <atomic>
 #include <memory>
 
 namespace fhmi {
@@ -18,6 +19,23 @@ enum class CanBusState
     Warning, // an error counter reached 96
     Passive, // error passive: a counter above 127
     BusOff,
+};
+
+// Shared by the session and the physical backend. A bus-off transition invalidates work
+// already queued above the adapter even if the controller recovers before that work runs.
+struct CanTransmitState
+{
+    std::atomic<bool> stopping{false};
+    std::atomic<bool> busOff{false};
+    std::atomic<quint64> generation{0};
+
+    void observe(CanBusState state)
+    {
+        const bool off = state == CanBusState::BusOff;
+        const bool wasOff = busOff.exchange(off);
+        if (off && !wasOff)
+            ++generation;
+    }
 };
 
 // What a CAN card connects with: the card's fields at the moment 连接 is clicked.
@@ -34,9 +52,13 @@ struct CanSettings
     quint32 dataBitrate = 2000000;
     double dataSamplePoint = 0.75;
     bool brs = true;
-    QString customTiming; // "BRP,TSEG1,TSEG2,SJW[;BRP,TSEG1,TSEG2,SJW]" in the adapter's clock, or empty
+    QString customTiming; // PCAN: BRP,TSEG1,TSEG2,SJW[;...]; ZLG: SJA BTR/BRP, or model-specific ZCANPRO result
+    bool autoRecover = false; // Opt-in; old projects retain manual recovery.
     bool listenOnly = false;
     bool termination = false;
+    QString txInitialState; // explicit target=feedback mappings for first signal-based transmission only
+    int txInitialMaxAgeMs = 2000;
+    bool standardZlgTiming = false; // classic ZLG vendor presets instead of computed sample point
 };
 
 // A channel the card offers for an adapter: the value stored in CanSettings::channel, and what the user sees.
@@ -46,10 +68,10 @@ struct CanChannel
     QString label;
 };
 
-// Which of the card's fields an adapter (and ZLG model) can set. A field it cannot set is disabled, with
-// `reason` as its tooltip.
+// Capabilities used by the designer, connection card and effective connection settings.
 struct CanAdapterCaps
 {
+    bool autoRecover = false;
     bool supported = true; // built into this program on this OS
     bool channelList = true;
     bool bitrate = true;
@@ -59,7 +81,7 @@ struct CanAdapterCaps
     bool listenOnly = true;
     bool termination = false;
     bool customTiming = true;
-    QString fixedTimingReason; // why bitrate/sample point fields are disabled
+    bool fdEnabled(bool requested) const { return fd && requested; }
 };
 
 namespace CanAdapter {
@@ -69,6 +91,12 @@ inline const QString SocketCan = QStringLiteral("SocketCAN");
 inline const QString Slcan = QStringLiteral("slcan");
 
 CanAdapterCaps caps(const QString &adapter, const QString &zlgModel = QString());
+struct TimingOverrides
+{
+    bool nominal = false;
+    bool data = false;
+};
+TimingOverrides timingOverrides(const QString &adapter, const QString &customTiming);
 // The channels to choose from now; *error says why there are none (a library that is not installed).
 QList<CanChannel> channels(const QString &adapter, QString *error = nullptr);
 // "500k", "1M": a bitrate as the card writes it.
@@ -77,8 +105,9 @@ QString bitrateText(quint32 bitrate);
 QString socketCanCommand(const QString &interfaceName, const CanSettings &settings);
 } // namespace CanAdapter
 
-// One adapter channel. Received frames arrive on the GUI thread in batches (one delivery per event-loop pass at
-// most), in order; the GUI thread never waits on the adapter except in open() and close().
+// One adapter channel. Received frames arrive on the owning thread in batches (one delivery per event-loop pass at
+// most), in order; receivedAtMs is stamped when read, before any queued delivery or status query.
+// CanSession owns production backends on a worker thread, including blocking native open() and close().
 class CanBackend : public QObject
 {
     Q_OBJECT
@@ -93,20 +122,28 @@ class CanBackend : public QObject
     virtual bool open(const CanSettings &settings, QString *error) = 0;
     virtual void close() = 0;
     virtual bool isOpen() const = 0;
-    // Queues a frame for sending; false (with *error) when it cannot go out at all. framesSent() reports it once
-    // the adapter took it.
+    // False reports an immediate rejection. After a queue accepts a frame, framesSent() or
+    // frameSendFailed() reports the adapter result. A disconnect discards pending work.
     virtual bool send(const CanFrame &frame, QString *error) = 0;
     // "PCAN-USB FD 0x51 @ 500k/2M"
     virtual QString description() const = 0;
+
+    const std::shared_ptr<CanTransmitState> &transmitState() const { return m_transmitState; }
+    void setTransmitState(std::shared_ptr<CanTransmitState> state) { m_transmitState = std::move(state); }
+    static QString busOffSendError();
 
   signals:
     void framesReceived(const QList<fhmi::CanFrame> &frames);
     void framesSent(const QList<fhmi::CanFrame> &frames);
     void busStateChanged(fhmi::CanBusState state);
-    // A frame the adapter would not take; the channel stays open.
+    void frameSendFailed(const fhmi::CanFrame &frame, const QString &message);
+    // An adapter warning or failure without an associated submission.
     void sendFailed(const QString &message);
     // The adapter stopped working (unplugged); the link closes.
     void failed(const QString &message);
+
+  private:
+    std::shared_ptr<CanTransmitState> m_transmitState = std::make_shared<CanTransmitState>();
 };
 
 } // namespace fhmi

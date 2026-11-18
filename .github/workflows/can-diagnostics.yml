@@ -1,0 +1,69 @@
+name: CAN diagnostics
+
+on:
+  push:
+    branches: ["diagnostics/can-latency-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: can-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: "6.12.0"
+  AQT_SOURCE: "git+https://github.com/miurahr/aqtinstall.git"
+
+jobs:
+  windows:
+    name: Windows x64 diagnostic package
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - name: Check out sources and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          aqtsource: ${{ env.AQT_SOURCE }}
+          modules: qtserialport
+          cache: true
+
+      - name: Configure diagnostic build
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DFHMI_BUILD_TESTS=ON -DFHMI_CAN_DIAGNOSTICS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -C Release --output-on-failure --no-tests=error
+
+      - name: Package and verify export
+        run: python tools/package_can_diagnostics.py --build-dir build --output-dir dist --commit ${{ github.sha }}
+
+      - name: Upload diagnostic package
+        uses: actions/upload-artifact@v4
+        with:
+          name: FluentHMI-CAN-diagnostics-windows-x64
+          path: |
+            dist/*-can-diagnostics-windows-x64.zip
+            dist/*-can-diagnostics-windows-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CAN-diagnostics-test-log
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14

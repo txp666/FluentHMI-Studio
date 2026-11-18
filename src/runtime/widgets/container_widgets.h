@@ -2,7 +2,15 @@
 
 #include "runtime/hmi_widget.h"
 
+#include <QtCore/QStringList>
+
 class QTabWidget;
+
+namespace FluentQt {
+class Pivot;
+class SingleDirectionScrollArea;
+class TabBar;
+} // namespace FluentQt
 
 namespace fhmi {
 
@@ -61,14 +69,23 @@ class TabContainerWidget : public HmiWidget
     int currentPage() const override;
     int contentTop() const override;
     int pageCount() const;
+    int navigationPageAt(const QPoint &position) const;
 
   protected:
     void apply() override;
 
   private:
     void restyle();
+    void updateNavigation(const QStringList &names);
+    void syncNavigation(int index);
 
     QTabWidget *m_tabs = nullptr;
+    QWidget *m_navigation = nullptr;
+    FluentQt::Pivot *m_pivot = nullptr;
+    FluentQt::SingleDirectionScrollArea *m_navigationScroll = nullptr;
+    FluentQt::TabBar *m_documentTabs = nullptr;
+    QString m_navigationStyle;
+    QStringList m_pageNames;
 };
 
 class SeparatorWidget : public HmiWidget

@@ -14,7 +14,7 @@ class PlayerWindow : public FluentQt::FluentWidget
     Q_OBJECT
 
   public:
-    explicit PlayerWindow(const Project &project, QWidget *parent = nullptr);
+    explicit PlayerWindow(const Project &project, QWidget *parent = nullptr, bool startRuntime = true);
 
     RuntimeSurface *surface() const { return m_surface; }
 

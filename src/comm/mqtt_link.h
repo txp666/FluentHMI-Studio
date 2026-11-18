@@ -52,12 +52,17 @@ class MqttLink : public Link
     bool isActive() const { return m_wanted; }
     // The connection worked, dropped, and is being re-established.
     bool isReconnecting() const { return m_wanted && !m_up && m_everUp; }
+    bool addressedModbusReplies() const override { return false; }
+    QStringList sendEndpoints() const override { return {m_settings.publishTopic}; }
+    bool canSendTo(const QString &endpoint) const override;
     const MqttSettings &settings() const { return m_settings; }
 
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
+    qint64 writeTo(const QByteArray &bytes, const QString &endpoint) override;
 
   private:
+    void dropParsers();
     void openSocket();
     void sendConnect();
     void onReadyRead();

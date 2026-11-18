@@ -1,3 +1,5 @@
+#include "comm/can/can_discovery.h"
+#include "comm/can/zlg_api.h"
 // CAN: the DBC parser and the signal codec against the golden vectors cantools produced, the bit timing against
 // the reference rule's vectors, and the small text formats users type (IDs, inline signals, cansend lines, slcan).
 #include "comm/can/slcan_protocol.h"
@@ -64,6 +66,29 @@ class TestCan : public QObject
     Q_OBJECT
 
   private slots:
+
+    void deviceDetectionDoesNotGuessAndLoadAccountsForFrameFormat()
+    {
+        QCOMPARE(CanAdapter::zlgModelsFromDescriptions({"ZLG USBCAN-II+ USB", "USB CAN Device", "USBCAN-E-mini"}),
+                 QStringList({"USBCAN-II+", "USBCAN-E-mini"}));
+        QVERIFY(CanAdapter::zlgModelsFromDescriptions({"USBCAN-II-unknown", "USB VID_0483&PID_5740"}).isEmpty());
+        const auto *mini = zlg::findModel("USBCAN-E-mini", 13);
+        QVERIFY(mini);
+        QCOMPARE(mini->deviceType, zlg::ZCAN_USBCAN_E_U);
+        CanFrame frame;
+        frame.data = QByteArray(8, 0);
+        const double standard = Can::estimatedFrameSeconds(frame, 500000, 2000000);
+        QVERIFY(standard > 0.0002 && standard < 0.0003);
+        frame.extended = true;
+        QVERIFY(Can::estimatedFrameSeconds(frame, 500000, 2000000) > standard);
+        frame.fd = true;
+        frame.data = QByteArray(64, 0);
+        const double slow = Can::estimatedFrameSeconds(frame, 500000, 2000000);
+        frame.brs = true;
+        QVERIFY(Can::estimatedFrameSeconds(frame, 500000, 2000000) < slow);
+        frame.error = true;
+        QCOMPARE(Can::estimatedFrameSeconds(frame, 500000, 2000000), 0.0);
+    }
     void dbcMessages()
     {
         const auto db = database();

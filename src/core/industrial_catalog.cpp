@@ -166,6 +166,54 @@ QList<WidgetMeta> industrialWidgets()
         } else if (meta.typeName == QLatin1String("BmsCellMatrix") || meta.typeName == QLatin1String("DcPowerSupply")) {
             meta.properties = {meta.properties.first()};
         }
+        const auto toggle = [&](const QString &name, const QString &label, bool value) {
+            auto prop = stringProp(name, label, value);
+            prop.type = PropType::Bool;
+            return prop;
+        };
+        const auto offset = [&](const QString &name, const QString &label, int value) {
+            auto prop = number(name, label, value);
+            prop.type = PropType::Int;
+            prop.minimum = -2000;
+            prop.maximum = 2000;
+            return prop;
+        };
+        meta.properties +=
+            {toggle(QStringLiteral("showTitle"), QString::fromUtf8(QT_TR_NOOP("显示标题")), true),
+             toggle(QStringLiteral("showValue"), QString::fromUtf8(QT_TR_NOOP("显示读值")), true),
+             choice(QStringLiteral("textLayout"), QString::fromUtf8(QT_TR_NOOP("文字定位")),
+                    {QString::fromUtf8(QT_TR_NOOP("图形周围")), QString::fromUtf8(QT_TR_NOOP("中心偏移"))})
+                 .withHelp("industrial.text-layout"),
+             offset(QStringLiteral("titleOffsetX"), QString::fromUtf8(QT_TR_NOOP("标题水平偏移")), 0),
+             offset(QStringLiteral("titleOffsetY"), QString::fromUtf8(QT_TR_NOOP("标题垂直偏移")), -50),
+             offset(QStringLiteral("valueOffsetX"), QString::fromUtf8(QT_TR_NOOP("读值水平偏移")), 0),
+             offset(QStringLiteral("valueOffsetY"), QString::fromUtf8(QT_TR_NOOP("读值垂直偏移")), 0),
+             toggle(QStringLiteral("textPositionLocked"), QString::fromUtf8(QT_TR_NOOP("锁定文字位置")), false),
+             toggle(QStringLiteral("showToolTip"), QString::fromUtf8(QT_TR_NOOP("悬浮读值")), false)};
+        if (meta.typeName == QLatin1String("TractionBattery")) {
+            const auto percent = [&](const QString &name, const QString &label, double value) {
+                auto prop = number(name, label, value);
+                prop.minimum = 0;
+                prop.maximum = 100;
+                return prop;
+            };
+            const auto color = [&](const QString &name, const QString &label, const QString &value) {
+                auto prop = stringProp(name, label, value);
+                prop.type = PropType::Color;
+                return prop;
+            };
+            meta.properties +=
+                {toggle(QStringLiteral("chargeColors"), QString::fromUtf8(QT_TR_NOOP("电量分段变色")), false)
+                     .withHelp("display.threshold"),
+                 percent(QStringLiteral("chargeLow"), QString::fromUtf8(QT_TR_NOOP("低电量上限(%)")), 20),
+                 percent(QStringLiteral("chargeWarning"), QString::fromUtf8(QT_TR_NOOP("预警电量上限(%)")), 40),
+                 color(QStringLiteral("chargeLowColor"), QString::fromUtf8(QT_TR_NOOP("低电量颜色")),
+                            QStringLiteral("#e55252")),
+                 color(QStringLiteral("chargeWarningColor"), QString::fromUtf8(QT_TR_NOOP("预警颜色")),
+                            QStringLiteral("#e8b643")),
+                 color(QStringLiteral("chargeNormalColor"), QString::fromUtf8(QT_TR_NOOP("正常颜色")),
+                            QStringLiteral("#3dbd84"))};
+        }
         result.append(meta);
     }
     std::stable_sort(result.begin(), result.end(),

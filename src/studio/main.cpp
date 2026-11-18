@@ -2,6 +2,7 @@
 #include "studio/export_service.h"
 #include "studio/main_window.h"
 #include "studio/update_controller.h"
+#include "comm/can/can_diagnostics.h"
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Theme.h>
@@ -22,6 +23,10 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("FluentHMI"));
     QCoreApplication::setApplicationName(QStringLiteral("FluentHMI Studio"));
     QCoreApplication::setApplicationVersion(QStringLiteral(FHMI_VERSION));
+#ifdef FHMI_CAN_DIAGNOSTICS
+    fhmi::CanDiagnostics::logFilePath();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, []() { fhmi::CanDiagnostics::flush(); });
+#endif
 #ifdef Q_OS_LINUX
     // The id of the package's desktop entry (and the macOS bundle): Wayland docks find the entry, and with it the
     // icon and name, by this id.

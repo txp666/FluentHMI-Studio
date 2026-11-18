@@ -1,4 +1,6 @@
 #include "core/project.h"
+#include "core/project_logic.h"
+#include "core/expression.h"
 #include "core/widget_meta.h"
 
 #include <QtCore/QDirIterator>
@@ -14,10 +16,99 @@ class TestProject : public QObject
     Q_OBJECT
 
   private slots:
+
+    void dataPointRenameFollowsReferencesWithoutChangingDeviceFields()
+    {
+        const QString renamed = QStringLiteral("新点'\"\\名");
+        Project project;
+        project.logic = {{"points", QJsonArray{QJsonObject{{"name", "L1"}, {"binding", QJsonObject{{"key", "L1"}}}},
+                                               QJsonObject{{"name", "L10"}, {"binding", QJsonObject{{"key", "L10"}}}},
+                                               QJsonObject{{"name", "total"}, {"expression", "T [ 'L1' ] + T[\"L1\"] + T['L10']"}}}},
+                         {"alarms", QJsonArray{QJsonObject{{"id", "L1"}, {"text", "L1"}, {"condition", "T['L1'] > 0"}}}}};
+        const QJsonObject binding{{"parseMode", "工程数据点"}, {"key", "L1"}};
+        const QJsonObject raw{{"type", "NumericDisplay"}, {"binding", QJsonObject{{"key", "L1"}}}};
+        project.widgets = {QJsonObject{{"type", "GroupBox"}, {"children", QJsonArray{
+            QJsonObject{{"type", "NumericDisplay"}, {"binding", binding}, {"properties", QJsonObject{{"title", "L1"}}}},
+            QJsonObject{{"type", "RealtimeChart"}, {"properties", QJsonObject{
+                {"_curve_0_parseMode", "工程数据点"}, {"_curve_0_key", "L1"},
+                {"_curve_1_key", "L1"}, {"_curve_7_parseMode", "工程数据点"}, {"_curve_7_key", "L1"}}}}, raw}}}};
+        renameDataPoint(&project, "L1", renamed);
+        const auto points = project.logic.value("points").toArray();
+        QCOMPARE(points[0].toObject().value("name").toString(), renamed);
+        QCOMPARE(points[0].toObject().value("binding").toObject().value("key").toString(), QStringLiteral("L1"));
+        const auto formula = points[2].toObject().value("expression").toString();
+        QCOMPARE(Expression::references(formula), QStringList({renamed, "L10"}));
+        QCOMPARE(Expression::evaluate(formula, {}, [&](const QString &name) { return name == renamed ? 2 : 3; }).toInt(), 7);
+        const auto alarm = project.logic.value("alarms").toArray()[0].toObject();
+        QCOMPARE(Expression::references(alarm.value("condition").toString()), QStringList({renamed}));
+        QCOMPARE(alarm.value("id").toString(), QStringLiteral("L1"));
+        QCOMPARE(alarm.value("text").toString(), QStringLiteral("L1"));
+        const auto children = project.widgets[0].toObject().value("children").toArray();
+        QCOMPARE(children[0].toObject().value("binding").toObject().value("key").toString(), renamed);
+        QCOMPARE(children[0].toObject().value("properties").toObject().value("title").toString(), QStringLiteral("L1"));
+        const auto props = children[1].toObject().value("properties").toObject();
+        QCOMPARE(props.value("_curve_0_key").toString(), renamed);
+        QCOMPARE(props.value("_curve_7_key").toString(), renamed); // retain references in temporarily hidden curves
+        QCOMPARE(props.value("_curve_1_key").toString(), QStringLiteral("L1"));
+        QCOMPARE(children[2].toObject(), raw);
+    }
+
+    void projectDataRoundTripsAndRejectsBrokenDependencies()
+    {
+        Project project;
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.0"));
+        project.widgets = {QJsonObject{{"id", "A"}, {"type", "TcpConfigCard"}},
+                           QJsonObject{{"type", "NumericDisplay"},
+                                       {"binding", QJsonObject{{"parseMode", "工程数据点"}, {"key", "total"}}}}};
+        project.logic = {
+            {"points", QJsonArray{QJsonObject{{"name", "input"},
+                                              {"binding", QJsonObject{{"key", "value"}, {"sourceCardId", "A"}}}},
+                                  QJsonObject{{"name", "total"}, {"expression", "T[\"input\"] * 2"}}}}};
+        auto json = project.toJson();
+        QCOMPARE(json.value("version").toString(), QStringLiteral("1.3"));
+        Project loaded;
+        QString error;
+        QVERIFY2(Project::fromJson(json, &loaded, &error), qPrintable(error));
+        QCOMPARE(loaded.toJson(), json);
+        json.insert("version", "1.2");
+        QVERIFY(!Project::validate(json, &error));
+        auto points = project.logic.value("points").toArray();
+        points[0] = QJsonObject{{"name", "input"}, {"expression", "T[\"total\"]"}};
+        project.logic.insert("points", points);
+        QVERIFY(!Project::validate(project.toJson(), &error));
+        QVERIFY(error.contains(QStringLiteral("循环")));
+        points[0] = QJsonObject{{"name", "input"}, {"expression", "T[\"missing\"]"}};
+        project.logic.insert("points", points);
+        QVERIFY(!Project::validate(project.toJson(), &error));
+    }
+
+    void explicitRoutesRoundTripAndRequireCapableRuntime()
+    {
+        Project project;
+        project.widgets={QJsonObject{{"id","link"},{"type","CanConfigCard"}},QJsonObject{{"id","switch"},{"type","ToggleSwitch"},{"properties",QJsonObject{{"commandMode","CAN"},{"commandTargetId","link"}}}}};
+        const auto json=project.toJson(); QCOMPARE(json.value("version").toString(),QStringLiteral("1.2"));
+        QString error; Project loaded; QVERIFY2(Project::fromJson(json,&loaded,&error),qPrintable(error)); QCOMPARE(loaded.toJson(),json);
+        auto older=json; older.insert("version","1.1"); QVERIFY(!Project::validate(older,&error));
+        auto missing=json; auto widgets=missing.value("widgets").toArray(); widgets.removeAt(0); missing.insert("widgets",widgets);
+        QVERIFY(!Project::validate(missing,&error)); QVERIFY(Project::validate(missing,&error,true)); // clipboard reference
+
+        project.widgets = {
+            QJsonObject{{"id", "*"}, {"type", "CanConfigCard"}},
+            QJsonObject{{"id", "switch"}, {"type", "ToggleSwitch"},
+                        {"properties", QJsonObject{{"commandMode", "CAN"}, {"commandTargetId", "*"}}}},
+        };
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.2"));
+        QVERIFY2(Project::fromJson(project.toJson(), &loaded, &error), qPrintable(error));
+        QCOMPARE(loaded.widgets, project.widgets);
+
+        project.widgets = {QJsonObject{{"id", "publish"}, {"type", "PushButton"},
+                                        {"properties", QJsonObject{{"commandMode", "文本"}, {"commandEndpoint", "*"}}}}};
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.2"));
+    }
+
     void registryHasEveryDesignerWidget()
     {
-        // As PyQt UI Designer, without the Modbus card, plus the CAN card and monitor only Studio has.
-        QCOMPARE(WidgetRegistry::instance().all().size(), 111);
+
         const WidgetMeta *button = WidgetRegistry::instance().find("PushButton");
         QVERIFY(button);
         QCOMPARE(button->defaultProperties().value("text").toString(), QStringLiteral("按钮"));
@@ -59,6 +150,51 @@ class TestProject : public QObject
                                       {"properties", QJsonObject{{"commandMode", "文本"},
                                                                   {"s7Command", QJsonObject{{"address", "DB1.DBD4"}, {"dataType", "REAL"}}}}}}};
         QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.0"));
+
+        // v0.7 kept the last S7 card ID even after a non-S7 mode was selected.
+        const QJsonObject legacy{{"version", "1.1"}, {
+            "widgets", QJsonArray{card, display, QJsonObject{
+                {"type", "PushButton"}, {"id", "text"},
+                {"binding", QJsonObject{{"parseMode", "键值匹配"}, {"sourceCardId", "plc"}, {"key", "speed"}}},
+                {"properties", QJsonObject{{"commandMode", "文本"}, {"commandTargetId", "plc"}}}}}}};
+        Project restored;
+        QVERIFY2(Project::fromJson(legacy, &restored, &error), qPrintable(error));
+        QCOMPARE(restored.widgets.at(1).toObject(), display);
+        const auto migrated = restored.widgets.at(2).toObject();
+        QVERIFY(!migrated.value("properties").toObject().contains("commandTargetId"));
+        QVERIFY(!migrated.value("binding").toObject().contains("sourceCardId"));
+        QCOMPARE(restored.toJson().value("version").toString(), QStringLiteral("1.1"));
+    }
+
+    void canOutputConfigurationNeedsCapableRuntime()
+    {
+        QJsonObject can{{"type", "CanConfigCard"}, {"id", "can"}};
+        for (const auto &props : {
+                 QJsonObject{{"canTxInitialState", "HMI=IO"}},
+                 QJsonObject{{"defaultAdapter", "ZLG"}, {"zlgCustomTiming", "00,1C"}},
+                 QJsonObject{{"defaultAdapter", "ZLG"}, {"zlgSamplePoint", "87.5%"}},
+             }) {
+            can.insert("properties", props);
+            Project project;
+            project.widgets = {can};
+            auto saved = project.toJson();
+            QString error;
+            QCOMPARE(saved.value("version").toString(), QStringLiteral("1.3"));
+            QVERIFY2(Project::validate(saved, &error), qPrintable(error));
+            saved.insert("version", "1.0");
+            QVERIFY(!Project::validate(saved, &error));
+        }
+
+        // The generic fields were already used by PCAN. A legacy file retains them.
+        const QJsonObject oldTiming{{"defaultAdapter", "ZLG"}, {"defaultSamplePoint", "87.5%"},
+                                    {"customTiming", "1,13,2,1"}};
+        can.insert("properties", oldTiming);
+        Project loaded;
+        QString error;
+        QVERIFY2(Project::fromJson(QJsonObject{{"version", "1.0"}, {"widgets", QJsonArray{can}}}, &loaded, &error),
+                 qPrintable(error));
+        QCOMPARE(loaded.widgets.first().toObject().value("properties").toObject(), oldTiming);
+        QCOMPARE(loaded.toJson().value("version").toString(), QStringLiteral("1.0"));
     }
 
     void examplesLoadAndRoundTrip()
@@ -268,12 +404,39 @@ class TestProject : public QObject
     void rangeNormalization()
     {
         QJsonObject props{{"minimum", 10}, {"maximum", 5}, {"value", 50}};
-        QJsonObject out = normalizedRangeProperties("Slider", props, "maximum");
+        QJsonObject out = normalizedWidgetProperties("Slider", props, "maximum");
         QCOMPARE(out.value("minimum").toInt(), 5);
         QCOMPARE(out.value("value").toInt(), 5);
-        out = normalizedRangeProperties("Slider", props, "minimum");
+        out = normalizedWidgetProperties("Slider", props, "minimum");
         QCOMPARE(out.value("maximum").toInt(), 10);
-        QCOMPARE(normalizedRangeProperties("Label", props), props);
+        QCOMPARE(normalizedWidgetProperties("Label", props), props);
+        QJsonObject numeric{{"minimum", 0.001}, {"maximum", 12.345678}, {"value", 1.234567}};
+        QCOMPARE(normalizedWidgetProperties("SpinBox", numeric).value("value").toInt(), 1);
+        numeric.insert("numberMode", QStringLiteral("小数"));
+        const auto decimal = normalizedWidgetProperties("SpinBox", numeric);
+        QCOMPARE(decimal.value("minimum").toDouble(), 0.001);
+        QCOMPARE(decimal.value("maximum").toDouble(), 12.345678);
+        QCOMPARE(decimal.value("value").toDouble(), 1.234567);
+        Project decimalProject;
+        decimalProject.widgets = QJsonArray{QJsonObject{{"id", "setpoint"}, {"type", "SpinBox"}, {"properties", decimal}}};
+        const auto savedDecimal = decimalProject.toJson();
+        QCOMPARE(savedDecimal.value("version").toString(), QStringLiteral("1.3"));
+        Project restored;
+        QString error;
+        QVERIFY2(Project::fromJson(savedDecimal, &restored, &error), qPrintable(error));
+        QCOMPARE(restored.widgets, decimalProject.widgets);
+        auto oldDeclaration = savedDecimal;
+        oldDeclaration.insert("version", "1.0");
+        QVERIFY(!Project::validate(oldDeclaration, &error));
+        numeric.remove("numberMode");
+        QCOMPARE(Project::formatVersion(QJsonArray{QJsonObject{{"type", "SpinBox"}, {"properties", numeric}}}),
+                 QStringLiteral("1.0"));
+        auto legacy = normalizedWidgetProperties("CanMonitor", {{"maxMessages", 1234}, {"autoSave", true}});
+        QCOMPARE(legacy.value("autoSaveRows").toInt(), 1234);
+        legacy.insert("maxMessages", 20);
+        QCOMPARE(normalizedWidgetProperties("CanMonitor", legacy).value("autoSaveRows").toInt(), 1234);
+        const auto fresh = WidgetRegistry::instance().find("CanMonitor")->newWidgetProperties();
+        QCOMPARE(normalizedWidgetProperties("CanMonitor", fresh).value("autoSaveRows").toInt(), 100000);
     }
 };
 

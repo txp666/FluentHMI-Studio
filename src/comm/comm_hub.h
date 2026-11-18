@@ -15,19 +15,8 @@ class CanLink;
 class ModbusSlave;
 struct CanFrame;
 
-// How sendModbus() queues a request on the links that parse Modbus.
-struct ModbusSend
-{
-    int timeoutMs = 1000;
-    ModbusMaster::Priority priority = ModbusMaster::Priority::Write;
-    ModbusMaster::Done done; // once per link that queued the request
-    const void *owner = nullptr; // for ModbusMaster::cancelQueued()
-    bool modbusLinksOnly = false; // leave out the links that do not parse Modbus
-    QList<QPointer<ModbusMaster>> *queuedOn = nullptr; // collects the masters that queued it
-};
-
 // Every link of a running surface reports here. Bindings, charts, tables and logs
-// listen to the hub, and commands go out over every connected link.
+// listen to the hub, and commands go out over the selected connections.
 class CommHub : public QObject
 {
     Q_OBJECT
@@ -42,57 +31,51 @@ class CommHub : public QObject
     QJsonObject projectSerial() const { return m_projectSerial; }
 
     // The hub does not own links; their cards do.
-    void addLink(Link *link);
+    void addLink(Link *link, const QString &connectionId = {});
     void removeLink(Link *link);
-    QList<Link *> connectedLinks() const;
+    QList<Link *> connectedLinks(const DataRoute &route = {}) const;
     bool isConnected() const;
     // The connected links of each kind: CAN links take CAN commands and frames, the others bytes and Modbus.
-    QList<CanLink *> connectedCanLinks() const;
-    bool hasConnectedByteLink() const;
+    QList<CanLink *> connectedCanLinks(const DataRoute &route = {}) const;
 
     // Returns how many links accepted the bytes; `sent` collects the frames they accepted. CAN links are left out.
-    int send(const QByteArray &bytes, QList<QByteArray> *sent = nullptr);
+    int send(const QByteArray &bytes, QList<QByteArray> *sent = nullptr, const DataRoute &route = {});
     // A link that parses Modbus queues the request in its master (a write by default, with a 1000 ms
     // timeout), which frames it as MBAP, ASCII or RTU; a link that answers as a Modbus slave is left out; any
     // other link is sent the RTU frame right away. A queued request counts as accepted. CAN links are left out.
-    int sendModbus(const ModbusRequest &request, QList<QByteArray> *sent = nullptr, const ModbusSend &how = {});
+    int sendModbus(const ModbusRequest &request, QList<QByteArray> *sent = nullptr, const DataRoute &route = {});
     // A CAN command goes to every connected CAN link, each resolving it with its own signals; when one cannot
     // (an unknown signal, a value out of range), *error says why and no link sends anything.
-    int sendCan(const CanCommand &command, QList<QByteArray> *sent = nullptr, QString *error = nullptr);
+    int sendCan(const CanCommand &command, QList<QByteArray> *sent = nullptr, QString *error = nullptr, const DataRoute &route = {});
     // A frame typed in a DataSendCard, to every connected CAN link.
-    int sendCanFrame(const CanFrame &frame, QString *error = nullptr);
+    int sendCanFrame(const CanFrame &frame, QString *error = nullptr, const DataRoute &route = {});
     int send(const EncodedCommand &command, QList<QByteArray> *sent = nullptr, QString *error = nullptr);
 
     void disconnectAll();
 
     // The slaves of the link cards whose role is 从站, in the order of the document; the hub does not own them.
-    // A slave's change is emitted as messageReceived(), as if a link had received it, with isSlaveData() true
+    // A slave's change is emitted as messageReceived(), with source.slaveData true
     // meanwhile so the log leaves it out; its log lines come as slaveLog().
-    void addModbusSlave(ModbusSlave *slave);
-    QList<ModbusSlave *> modbusSlaves() const;
-    bool isSlaveData() const { return m_slaveData; }
+    void addModbusSlave(ModbusSlave *slave, const QString &connectionId = {});
+    QList<ModbusSlave *> modbusSlaves(const DataRoute &route = {}) const;
     // Emits each slave's start messages: every address of every area it has.
     void deliverSlaveStart();
 
-    // The encoding of the bytes rawReceived() is carrying right now, and those bytes as text:
-    // raw bytes carry no link, so the encoding of the link they came from rides alongside.
-    QString rawEncoding() const { return m_rawEncoding; }
-    QString decodeRaw(const QByteArray &bytes) const;
-    // Whether the bytes rawReceived() or bytesSent() carries right now are a CAN link's frame line (text, never
-    // device bytes: shown as it is, and no HEX binding reads it).
-    bool carriesCanText() const { return m_canText; }
+    QString decodeRaw(const QByteArray &bytes, const DataSource &source) const;
 
   signals:
-    void messageReceived(const fhmi::Message &message);
-    void rawReceived(const QByteArray &bytes);
-    void bytesSent(const QByteArray &bytes);
+    void messageReceived(const fhmi::Message &message, const fhmi::DataSource &source = {});
+    void rawReceived(const QByteArray &bytes, const fhmi::DataSource &source = {});
+    void bytesSent(const QByteArray &bytes, const fhmi::DataSource &source = {});
+    void streamClosed(const fhmi::DataSource &source);
     void linkConnected(const QString &description);
     void linkDisconnected(const QString &description);
     void linkError(const QString &message);
     void linkWarning(const QString &message);
     void linkInfo(const QString &message);
     // A CAN link's frames, received or sent, in batches: the monitor's feed.
-    void canFrames(fhmi::CanLink *link, const QList<fhmi::CanFrame> &frames, bool sent);
+    void canFrames(fhmi::CanLink *link, const QList<fhmi::CanFrame> &frames, bool sent, const fhmi::DataSource &source = {});
+    void canFrameDecoded(const fhmi::CanFrame &frame, const fhmi::Message &message, const fhmi::DataSource &source);
     // A CAN link connected; the monitor starts afresh when it is the only one connected. Raised here so that a
     // monitor attached before or after the card that creates the link hears it alike.
     void canLinkConnected(fhmi::CanLink *link);
@@ -105,16 +88,14 @@ class CommHub : public QObject
     void linksChanged();
 
   private:
-    void deliverSlaveData(const Message &message);
+    void deliverSlaveData(const Message &message, ModbusSlave *slave);
 
     QList<QPointer<Link>> m_links;
     QList<QPointer<ModbusSlave>> m_slaves;
-    bool m_slaveData = false;
+    QHash<ModbusSlave *, DataSource> m_slaveSources;
     QJsonObject m_projectSerial;
     QString m_parserType = QStringLiteral("line");
     QJsonObject m_parserConfig;
-    QString m_rawEncoding = QStringLiteral("utf-8");
-    bool m_canText = false;
 };
 
 } // namespace fhmi

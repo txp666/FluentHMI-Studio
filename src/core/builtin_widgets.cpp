@@ -6,6 +6,8 @@
 #include "core/binding.h"
 #include "core/command_encoder.h"
 
+#include <algorithm>
+
 namespace fhmi {
 
 namespace {
@@ -19,6 +21,11 @@ PropDef str(const QString &name, const QString &label, const QString &def, bool 
 PropDef text(const QString &name, const QString &label, const QString &def)
 {
     return PropDef{name, label, PropType::Text, def, {}, std::nullopt, std::nullopt, false, {}};
+}
+
+PropDef color(const QString &name, const QString &label, const QString &def)
+{
+    return PropDef{name, label, PropType::Color, def, {}, std::nullopt, std::nullopt, false, {}};
 }
 
 PropDef command(const QString &name, const QString &label)
@@ -99,21 +106,21 @@ const QStringList kDisplayFormats = {QStringLiteral("自动"), QStringLiteral("�
 const QStringList kDecimals = {QStringLiteral("自动"), QStringLiteral("0"), QStringLiteral("1"),          // i18n: value
                                QStringLiteral("2"),    QStringLiteral("3"), QStringLiteral("4")};
 const QStringList kLinkParsers = {
-    QStringLiteral("项目设置"), QStringLiteral("line"),       QStringLiteral("hex"), // i18n: value
+    LinkParser::Inherit,       QStringLiteral("line"),        QStringLiteral("hex"),
     QStringLiteral("modbus"),   QStringLiteral("modbus_tcp"), QStringLiteral("modbus_ascii")};
 
 // A link card's parser: its mode; what it hands the Modbus poller while its link is connected and parses
-// Modbus (the property editor shows these only for a Modbus mode of the card's own); its frame format. A serial,
+// Modbus (including a mode inherited from the project); its frame format. A serial,
 // TCP or UDP card can also be a Modbus slave (`slave`): its role, how it answers and its data table.
 QList<PropDef> linkParsing(bool slave)
 {
     QList<PropDef> props{choice(QStringLiteral("defaultParser"), QT_TR_NOOP("默认解析模式"),
-                                QStringLiteral("项目设置"), // i18n: value
-                                kLinkParsers)};
+                                LinkParser::Inherit,
+                                kLinkParsers).withHelp("receive.framing")};
     if (slave) {
         props.append(described(choice(QStringLiteral("modbusRole"), QT_TR_NOOP("Modbus 角色"),
                                       QStringLiteral("主站"),                                            // i18n: value
-                                      {QStringLiteral("主站"), QStringLiteral("从站")}),                 // i18n: value
+                                      {QStringLiteral("主站"), QStringLiteral("从站")}).withHelp("modbus.addressing"),                 // i18n: value
                                QStringLiteral("从站：解析模式为 modbus 或 modbus_tcp 时应答外部主站"))); // i18n: ignore
     }
     props += {integer(QStringLiteral("modbusPeriod"), QT_TR_NOOP("默认轮询(ms)"), 500, 10, 60000),
@@ -170,18 +177,18 @@ QList<PropDef> hexFraming(const QStringList &dataTypes, const QString &dataTypeD
 // sends CAN.
 QList<PropDef> canCommand()
 {
-    return {described(str(QStringLiteral("canId"), QT_TR_NOOP("CAN 报文"), QString()),
+    return {described(str(QStringLiteral("canId"), QT_TR_NOOP("CAN 报文"), QString()).withHelp("can.signal-command"),
                       QStringLiteral("DBC 报文名，或十六进制 ID（如 `102`、`18FF50E5`）；有信号的报文发送模板写 " // i18n: ignore
                                      "`信号=值`（十进制物理值，`0x` 开头为原始值），原始 ID 按 HEX 模式组字节")),                                // i18n: ignore
             described(boolean(QStringLiteral("canFd"), QT_TR_NOOP("CAN FD 帧"), false),
                       QStringLiteral("只用于原始 ID；DBC 报文是否 FD 由 DBC 决定")), // i18n: ignore
-            described(integer(QStringLiteral("canCycle"), QT_TR_NOOP("循环周期(ms)"), 0, 0, 60000),
+            described(integer(QStringLiteral("canCycle"), QT_TR_NOOP("循环周期(ms)"), 0, 0, 60000).withHelp("can.signal-command"),
                       QStringLiteral("大于 0 时连接期间按此周期重发；0 时用 DBC 的 GenMsgCycleTime，没有则只发一次"))}; // i18n: ignore
 }
 
 QList<PropDef> s7Command()
 {
-    return {str(QStringLiteral("commandTargetId"), QT_TR_NOOP("S7 目标连接"), QString()),
+    return {str(QStringLiteral("commandTargetId"), QT_TR_NOOP("发送连接"), QString()),
             PropDef{QStringLiteral("s7Command"), QT_TR_NOOP("S7 写入"), PropType::Object,
                     QJsonObject{{QStringLiteral("address"),QStringLiteral("DB1.DBD4")},
                                 {QStringLiteral("dataType"),QStringLiteral("REAL")},
@@ -220,14 +227,14 @@ QList<WidgetMeta> basicWidgets()
 {
     const PropDef mode =
         choice(QStringLiteral("commandMode"), QT_TR_NOOP("发送模式"), QStringLiteral("文本"), // i18n: value
-               kCommandModes);
-    const PropDef tpl = str(QStringLiteral("commandTemplate"), QT_TR_NOOP("发送模板"), QStringLiteral("{value}"));
+               kCommandModes).withHelp("command.templates");
+    const PropDef tpl = str(QStringLiteral("commandTemplate"), QT_TR_NOOP("发送模板"), QStringLiteral("{value}")).withHelp("can.signal-command");
     // JSON mode's own line ending, so that it defaults to none while 文本 keeps CR LF.
     const PropDef jsonNewline = choice(QStringLiteral("commandJsonNewline"), QT_TR_NOOP("换行符"),
                                        QStringLiteral("无"), // i18n: value
                                        kNewlines);
     const PropDef slave = integer(QStringLiteral("mbSlave"), QT_TR_NOOP("从站地址"), 1, 1, 247);
-    const PropDef address = integer(QStringLiteral("mbAddress"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535);
+    const PropDef address = integer(QStringLiteral("mbAddress"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535).withHelp("modbus.addressing");
     // A count for reads, a whole number to write (negative for int16 / int32) otherwise.
     const PropDef mbValue = integer(QStringLiteral("mbValue"), QT_TR_NOOP("值/数量"), 1, -2147483648.0, 2147483647.0);
     // How a written value fills registers: FC 06 takes a 16-bit type, FC 16 any of them.
@@ -237,6 +244,10 @@ QList<WidgetMeta> basicWidgets()
                                     CommandEncoder::registerOrders().first(), CommandEncoder::registerOrders());
 
     QList<PropDef> button{str(QStringLiteral("text"), QT_TR_NOOP("文本"), QT_TR_NOOP("按钮")),
+                          choice(QStringLiteral("buttonStyle"), QT_TR_NOOP("按钮风格"),
+                                 QStringLiteral("标准"), // i18n: value
+                                 {QStringLiteral("标准"), QStringLiteral("强调"), // i18n: value
+                                  QStringLiteral("轻量"), QStringLiteral("描边")}).withHelp("widget.appearance"), // i18n: value
                           boolean(QStringLiteral("enabled"), QT_TR_NOOP("启用"), true), mode,
                           command(QStringLiteral("command"), QT_TR_NOOP("发送内容")), tpl, jsonNewline};
     button += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
@@ -277,7 +288,10 @@ QList<WidgetMeta> basicWidgets()
     lineEdit += canCommand();
     lineEdit += s7Command();
 
-    QList<PropDef> combo{text(QStringLiteral("items"), QT_TR_NOOP("选项"), QT_TR_NOOP("选项1\n选项2\n选项3")),
+    QList<PropDef> combo{choice(QStringLiteral("selectionStyle"), QT_TR_NOOP("选择样式"),
+                                QStringLiteral("下拉框"), // i18n: value
+                                {QStringLiteral("下拉框"), QStringLiteral("分段"), QStringLiteral("单选组")}).withHelp("widget.selection"), // i18n: value
+                         text(QStringLiteral("items"), QT_TR_NOOP("选项"), QT_TR_NOOP("选项1\n选项2\n选项3")),
                          integer(QStringLiteral("currentIndex"), QT_TR_NOOP("默认选项"), 0, 0, 99),
                          boolean(QStringLiteral("sendOnSelect"), QT_TR_NOOP("选中发送"), false),
                          text(QStringLiteral("commands"), QT_TR_NOOP("发送命令表"), QString()),
@@ -295,7 +309,10 @@ QList<WidgetMeta> basicWidgets()
     combo += canCommand();
     combo += s7Command();
 
-    QList<PropDef> toggle{str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("开关")),
+    QList<PropDef> toggle{choice(QStringLiteral("switchStyle"), QT_TR_NOOP("开关样式"),
+                                 QStringLiteral("开关"), // i18n: value
+                                 {QStringLiteral("开关"), QStringLiteral("复选框")}).withHelp("widget.selection"), // i18n: value
+                          str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("开关")),
                           boolean(QStringLiteral("checked"), QT_TR_NOOP("默认开启"), false),
                           choice(QStringLiteral("onCondition"), QT_TR_NOOP("开启判定"),
                                  QStringLiteral("非零为开"),                                  // i18n: value
@@ -310,7 +327,7 @@ QList<WidgetMeta> basicWidgets()
     toggle += {slave,
                choice(QStringLiteral("mbArea"), QT_TR_NOOP("地址类型"), QStringLiteral("线圈"), // i18n: value
                       {QStringLiteral("线圈"), ModbusArea::HoldingRegisters}),                  // i18n: value
-               integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈/寄存器地址"), 0, 0, 65535)};
+               integer(QStringLiteral("mbAddress"), QT_TR_NOOP("线圈/寄存器地址"), 0, 0, 65535).withHelp("modbus.addressing")};
     toggle += canCommand();
     toggle += s7Command();
     toggle += notification(QT_TR_NOOP("切换通知"), QT_TR_NOOP("开关已切换"), QStringLiteral("信息")); // i18n: value
@@ -338,6 +355,15 @@ QList<WidgetMeta> basicWidgets()
     sliderProps.insert(3, described(boolean(QStringLiteral("showRange"), QT_TR_NOOP("显示上下限"), false),
                                     QStringLiteral("在滑块两端显示最小值和最大值"))); // i18n: ignore
 
+    QList<PropDef> spinProps = ranged(0, true);
+    for (int i = 0; i < 3; ++i)
+        spinProps[i].type = PropType::Float;
+    spinProps.prepend(integer(QStringLiteral("decimals"), QT_TR_NOOP("小数位数"), 2, 0, 6));
+    spinProps.prepend(choice(QStringLiteral("numberMode"), QT_TR_NOOP("数值模式"),
+                             QStringLiteral("整数"), // i18n: value
+                             {QStringLiteral("整数"), QStringLiteral("小数")}).withHelp("input.number")); // i18n: value
+    spinProps.insert(5, real(QStringLiteral("singleStep"), QT_TR_NOOP("步长"), 1, 0.000001, 99999));
+
     return {meta(QStringLiteral("PushButton"), QT_TR_NOOP("按钮"), WidgetCategory::Basic, QStringLiteral("button"), 120,
                  36, button),
             meta(QStringLiteral("Label"), QT_TR_NOOP("标签"), WidgetCategory::Basic, QStringLiteral("font"), 120, 30,
@@ -351,7 +377,7 @@ QList<WidgetMeta> basicWidgets()
             meta(QStringLiteral("Slider"), QT_TR_NOOP("滑块"), WidgetCategory::Basic, QStringLiteral("slider"), 200, 30,
                  sliderProps),
             meta(QStringLiteral("SpinBox"), QT_TR_NOOP("数值框"), WidgetCategory::Basic, QStringLiteral("spin_box"),
-                 140, 36, ranged(0, true))};
+                 140, 36, spinProps)};
 }
 
 QList<WidgetMeta> layoutWidgets()
@@ -372,10 +398,14 @@ QList<WidgetMeta> layoutWidgets()
              100, 60, true),
         meta(QStringLiteral("GroupBox"), QT_TR_NOOP("分组框"), WidgetCategory::Layout, QStringLiteral("group_box"), 280,
              180, {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("分组"))}, 80, 60, true),
-        meta(QStringLiteral("TabWidget"), QT_TR_NOOP("选项卡"), WidgetCategory::Layout, QStringLiteral("tabs"), 350,
+        meta(QStringLiteral("TabWidget"), QT_TR_NOOP("分页容器"), WidgetCategory::Layout, QStringLiteral("tabs"), 350,
              250,
-             {text(QStringLiteral("tabNames"), QT_TR_NOOP("标签名称"), QT_TR_NOOP("标签1\n标签2\n标签3")),
-              integer(QStringLiteral("currentTab"), QT_TR_NOOP("当前标签页"), 0, 0, 9999),
+             {choice(QStringLiteral("navigationStyle"), QT_TR_NOOP("导航风格"),
+                     QStringLiteral("经典选项卡"), // i18n: value
+                     {QStringLiteral("经典选项卡"), QStringLiteral("下划线导航"), // i18n: value
+                      QStringLiteral("分段导航"), QStringLiteral("文档页签")}).withHelp("layout.pages"), // i18n: value
+              text(QStringLiteral("tabNames"), QT_TR_NOOP("标签名称"), QT_TR_NOOP("标签1\n标签2\n标签3")),
+              integer(QStringLiteral("currentTab"), QT_TR_NOOP("运行时启动页"), 0, 0, 9999),
               choice(QStringLiteral("tabLayout"), QT_TR_NOOP("当前页布局"), QStringLiteral("自由"), // i18n: value
                      {QStringLiteral("自由"), QStringLiteral("垂直"), QStringLiteral("水平"),       // i18n: value
                       QStringLiteral("弹性(Flex)")})},                                              // i18n: value
@@ -388,6 +418,8 @@ QList<WidgetMeta> layoutWidgets()
         meta(QStringLiteral("CardContainer"), QT_TR_NOOP("卡片容器"), WidgetCategory::Layout, QStringLiteral("card"),
              300, 200,
              {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QString()),
+              choice(QStringLiteral("cardStyle"), QT_TR_NOOP("卡片风格"), QStringLiteral("标准"), // i18n: value
+                     {QStringLiteral("标准"), QStringLiteral("透明"), QStringLiteral("描边")}).withHelp("widget.appearance"), // i18n: value
               choice(QStringLiteral("layout"), QT_TR_NOOP("布局"), QStringLiteral("自由"),      // i18n: value
                      {QStringLiteral("自由"), QStringLiteral("垂直"), QStringLiteral("水平")}), // i18n: value
               spacing},
@@ -407,14 +439,25 @@ QList<WidgetMeta> displayWidgets()
               boolean(QStringLiteral("on"), QT_TR_NOOP("点亮"), true, true),
               str(QStringLiteral("onValue"), QT_TR_NOOP("亮值"), QStringLiteral("1")),
               str(QStringLiteral("offValue"), QT_TR_NOOP("灭值"), QStringLiteral("0"))}),
+        meta(QStringLiteral("AlarmBanner"), QT_TR_NOOP("报警栏"), WidgetCategory::Display, QStringLiteral("info"), 650,
+             65, {}, 320, 50),
+        meta(QStringLiteral("AlarmList"), QT_TR_NOOP("报警列表"), WidgetCategory::Display, QStringLiteral("info"), 800,
+             320, {}, 480, 160),
         meta(QStringLiteral("NumericDisplay"), QT_TR_NOOP("数值显示"), WidgetCategory::Display,
              QStringLiteral("seven_segment"), 160, 90,
              {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("温度")),
+              choice(QStringLiteral("displayStyle"), QT_TR_NOOP("显示样式"), QStringLiteral("数值"), // i18n: value
+                     {QStringLiteral("数值"), QStringLiteral("状态徽标")}).withHelp("display.enum"), // i18n: value
+              choice(QStringLiteral("cardStyle"), QT_TR_NOOP("卡片风格"), QStringLiteral("标准"), // i18n: value
+                     {QStringLiteral("标准"), QStringLiteral("透明"), QStringLiteral("描边")}).withHelp("widget.appearance"), // i18n: value
               str(QStringLiteral("value"), QT_TR_NOOP("数值"), QStringLiteral("0.00"), true),
               str(QStringLiteral("unit"), QT_TR_NOOP("单位"), QStringLiteral("°C")),
               integer(QStringLiteral("fontSize"), QT_TR_NOOP("字号"), 28, 12, 72),
               choice(QStringLiteral("displayFormat"), QT_TR_NOOP("显示格式"), QStringLiteral("自动"), // i18n: value
-                     kDisplayFormats),
+                     kDisplayFormats + QStringList{QStringLiteral("枚举")}),                          // i18n: value
+              text(QStringLiteral("textList"), QT_TR_NOOP("枚举映射"), QString()).withHelp("display.enum"),
+              str(QStringLiteral("unknownText"), QT_TR_NOOP("未匹配文字"), QString()),
+              color(QStringLiteral("unknownColor"), QT_TR_NOOP("未匹配颜色"), QStringLiteral("#d13438")),
               choice(QStringLiteral("decimals"), QT_TR_NOOP("小数位数"),
                      QStringLiteral("自动"), // i18n: value
                      kDecimals)}),
@@ -449,9 +492,10 @@ QList<WidgetMeta> displayWidgets()
 
 QList<WidgetMeta> chartWidgets()
 {
-    const QStringList parseModes = {QStringLiteral("键值匹配"), QStringLiteral("JSON路径"),  // i18n: value
+    const QStringList parseModes = {ParseMode::DataPoint,          QStringLiteral("键值匹配"), // i18n: value
+                                    QStringLiteral("JSON路径"),                              // i18n: value
                                     QStringLiteral("HEX字节提取"), QStringLiteral("Modbus"), // i18n: value
-                                    ParseMode::CanSignal, ParseMode::S7};
+                                    ParseMode::CanSignal,          ParseMode::S7};
     const QStringList mbTypes = {QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"),
                                  QStringLiteral("int32"), QStringLiteral("float32")};
     return {
@@ -465,8 +509,9 @@ QList<WidgetMeta> chartWidgets()
              // Per-curve virtual properties, stored as _curve_{i}_{field}.
              str(QStringLiteral("curveName"), QT_TR_NOOP("曲线名称"), QT_TR_NOOP("曲线1")),
              choice(QStringLiteral("curveParseMode"), QT_TR_NOOP("解析模式"), QStringLiteral("键值匹配"), // i18n: value
-                    parseModes),
-             str(QStringLiteral("curveSourceCardId"), QT_TR_NOOP("S7 来源连接"), QString()),
+                    parseModes).withHelp("data.binding"),
+             str(QStringLiteral("curveSourceCardId"), QT_TR_NOOP("来源连接"), QString()).withHelp("data.routing"),
+             str(QStringLiteral("curveSourceEndpoint"), QT_TR_NOOP("来源子通道"), QString()),
              PropDef{QStringLiteral("curveS7"), QT_TR_NOOP("S7 采集"), PropType::Object,
                      QJsonObject{{QStringLiteral("address"),QStringLiteral("DB1.DBD4")},{QStringLiteral("dataType"),QStringLiteral("REAL")},{QStringLiteral("period"),0}}, {}, std::nullopt, std::nullopt, false, {}},
              str(QStringLiteral("curveKey"), QT_TR_NOOP("匹配键"), QString()),
@@ -481,7 +526,7 @@ QList<WidgetMeta> chartWidgets()
              str(QStringLiteral("curveFrameTail"), QT_TR_NOOP("帧尾(HEX)"), QString()),
              choice(QStringLiteral("curveMbArea"), QT_TR_NOOP("寄存器区"), ModbusArea::HoldingRegisters,
                     ModbusArea::options()),
-             integer(QStringLiteral("curveRegIndex"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535),
+             integer(QStringLiteral("curveRegIndex"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535).withHelp("modbus.addressing"),
              choice(QStringLiteral("curveMbDataType"), QT_TR_NOOP("数据类型(MB)"), QStringLiteral("uint16"), mbTypes),
              choice(QStringLiteral("curveMbRegOrder"), QT_TR_NOOP("寄存器序(MB)"),
                     QStringLiteral("大端(AB CD)"),                                   // i18n: value
@@ -498,7 +543,7 @@ QList<WidgetMeta> chartWidgets()
              boolean(QStringLiteral("curveCanSigned"), QT_TR_NOOP("有符号"), false),
              unranged(QStringLiteral("curveCanFactor"), QT_TR_NOOP("因子"), 1),
              unranged(QStringLiteral("curveCanOffset"), QT_TR_NOOP("偏移"), 0),
-             str(QStringLiteral("curveExpression"), QT_TR_NOOP("转换表达式"), QString())},
+             str(QStringLiteral("curveExpression"), QT_TR_NOOP("转换表达式"), QString()).withHelp("data.expression")},
             200, 150),
         meta(QStringLiteral("GaugeMeter"), QT_TR_NOOP("仪表盘"), WidgetCategory::Chart, QStringLiteral("speed_high"),
              180, 180,
@@ -522,18 +567,21 @@ QList<WidgetMeta> chartWidgets()
 QList<WidgetMeta> commWidgets()
 {
     return {
-        meta(QStringLiteral("S7ConfigCard"), QT_TR_NOOP("S7 连接卡片"), WidgetCategory::Comm, QStringLiteral("globe"), 420, 240,
-             {str(QStringLiteral("title"),QT_TR_NOOP("标题"),QStringLiteral("S7 PLC")),
-              str(QStringLiteral("host"),QT_TR_NOOP("地址"),QStringLiteral("127.0.0.1")),
-              integer(QStringLiteral("port"),QT_TR_NOOP("端口"),102,1,65535),
-              integer(QStringLiteral("rack"),QT_TR_NOOP("机架"),0,0,7),
-              integer(QStringLiteral("slot"),QT_TR_NOOP("插槽"),1,0,31),
-              integer(QStringLiteral("connectionType"),QT_TR_NOOP("连接类型（1 PG / 2 OP / 3 Basic）"),1,1,3),
-              integer(QStringLiteral("period"),QT_TR_NOOP("默认轮询(ms)"),500,1,60000),
-              integer(QStringLiteral("timeout"),QT_TR_NOOP("响应超时(ms)"),1000,1,60000),
-              boolean(QStringLiteral("autoConnect"),QT_TR_NOOP("自动连接"),false),
-              boolean(QStringLiteral("autoReconnect"),QT_TR_NOOP("自动重连"),true),
-              integer(QStringLiteral("reconnectInterval"),QT_TR_NOOP("重连间隔(ms)"),1000,1,60000)},300,230),
+        meta(QStringLiteral("S7ConfigCard"), QT_TR_NOOP("S7 连接卡片"), WidgetCategory::Comm, QStringLiteral("globe"),
+             420, 240,
+             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QStringLiteral("S7 PLC")),
+              str(QStringLiteral("host"), QT_TR_NOOP("地址"), QStringLiteral("127.0.0.1")),
+              integer(QStringLiteral("port"), QT_TR_NOOP("端口"), 102, 1, 65535),
+              integer(QStringLiteral("rack"), QT_TR_NOOP("机架"), 0, 0, 7),
+              integer(QStringLiteral("slot"), QT_TR_NOOP("插槽"), 1, 0, 31),
+              integer(QStringLiteral("connectionType"), QT_TR_NOOP("连接类型（1 PG / 2 OP / 3 Basic）"), 1, 1, 3)
+                  .withHelp("s7.addressing"),
+              integer(QStringLiteral("period"), QT_TR_NOOP("默认轮询(ms)"), 500, 1, 60000),
+              integer(QStringLiteral("timeout"), QT_TR_NOOP("响应超时(ms)"), 1000, 1, 60000),
+              boolean(QStringLiteral("autoConnect"), QT_TR_NOOP("自动连接"), false),
+              boolean(QStringLiteral("autoReconnect"), QT_TR_NOOP("自动重连"), true),
+              integer(QStringLiteral("reconnectInterval"), QT_TR_NOOP("重连间隔(ms)"), 1000, 1, 60000)},
+             380, 50),
         meta(
             QStringLiteral("SerialConfigCard"), QT_TR_NOOP("串口配置卡片"), WidgetCategory::Comm,
             QStringLiteral("serial_port"), 360, 320,
@@ -602,55 +650,88 @@ QList<WidgetMeta> commWidgets()
                  linkParsing(false),
              260, 50),
         // A CAN channel of a PCAN, ZLG, SocketCAN or slcan adapter, decoding with a DBC file and inline signals.
-        meta(QStringLiteral("CanConfigCard"), QT_TR_NOOP("CAN 配置卡片"), WidgetCategory::Comm, QStringLiteral("car"),
-             380, 270,
-             {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("CAN 连接")),
-              choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"), // i18n: value
-                     {QStringLiteral("完整"), QStringLiteral("简洁")}),                             // i18n: value
-              described(choice(QStringLiteral("defaultAdapter"), QT_TR_NOOP("默认适配器"), QStringLiteral("PCAN"),
-                               {QStringLiteral("PCAN"), QStringLiteral("ZLG"), QStringLiteral("SocketCAN"),
-                                QStringLiteral("slcan")}),
-                        QStringLiteral("PCAN：Windows、macOS；ZLG：Windows；SocketCAN：Linux；slcan：所有系统")), // i18n: ignore
-              choice(QStringLiteral("zlgModel"), QT_TR_NOOP("ZLG 型号"), QStringLiteral("USBCANFD-200U"),
-                     {QStringLiteral("USBCAN-I"), QStringLiteral("USBCAN-I+"), QStringLiteral("USBCAN-I-mini"),
-                      QStringLiteral("USBCAN-II"), QStringLiteral("USBCAN-II+"), QStringLiteral("USBCAN-E-U"),
-                      QStringLiteral("USBCAN-2E-U"), QStringLiteral("USBCAN-4E-U"), QStringLiteral("USBCAN-8E-U"),
-                      QStringLiteral("USBCANFD-100U-mini"), QStringLiteral("USBCANFD-100U"),
-                      QStringLiteral("USBCANFD-200U"), QStringLiteral("USBCANFD-400U"),
-                      QStringLiteral("USBCANFD-800U")}),
-              described(integer(QStringLiteral("defaultDeviceIndex"), QT_TR_NOOP("ZLG 设备索引"), 0, 0, 15),
-                        QStringLiteral("同型号插了多个时的序号，从 0 开始")), // i18n: ignore
-              described(integer(QStringLiteral("defaultChannel"), QT_TR_NOOP("ZLG 通道"), 0, 0, 7),
-                        QStringLiteral("设备上的第几路 CAN，从 0 开始")), // i18n: ignore
-              choice(QStringLiteral("defaultBitrate"), QT_TR_NOOP("默认波特率"), QStringLiteral("500k"),
-                     {QStringLiteral("10k"), QStringLiteral("20k"), QStringLiteral("50k"), QStringLiteral("100k"),
-                      QStringLiteral("125k"), QStringLiteral("250k"), QStringLiteral("500k"), QStringLiteral("800k"),
-                      QStringLiteral("1M")}),
-              choice(QStringLiteral("defaultSamplePoint"), QT_TR_NOOP("默认采样点"), QStringLiteral("87.5%"),
-                     {QStringLiteral("87.5%"), QStringLiteral("81.25%"), QStringLiteral("80%"), QStringLiteral("75%")}),
-              boolean(QStringLiteral("canFd"), QT_TR_NOOP("CAN FD"), false),
-              choice(QStringLiteral("defaultDataBitrate"), QT_TR_NOOP("数据域波特率"), QStringLiteral("2M"),
-                     {QStringLiteral("1M"), QStringLiteral("2M"), QStringLiteral("4M"), QStringLiteral("5M"),
-                      QStringLiteral("8M")}),
-              choice(QStringLiteral("defaultDataSamplePoint"), QT_TR_NOOP("数据域采样点"), QStringLiteral("75%"),
-                     {QStringLiteral("75%"), QStringLiteral("80%")}),
-              described(boolean(QStringLiteral("canBrs"), QT_TR_NOOP("加速 (BRS)"), true),
-                        QStringLiteral("CAN FD 报文的数据段用数据域波特率发送")), // i18n: ignore
-              described(str(QStringLiteral("customTiming"), QT_TR_NOOP("自定义位时序"), QString()),
-                        QStringLiteral("`BRP,TSEG1,TSEG2,SJW`，CAN FD 再加 `;BRP,TSEG1,TSEG2,SJW`（数据域），按适配器" // i18n: ignore
-                                       "时钟（PCAN 经典 CAN 8 MHz、CAN FD 80 MHz）；留空则按波特率和采样点计算")),  // i18n: ignore
-              boolean(QStringLiteral("listenOnly"), QT_TR_NOOP("只听模式"), false),
-              described(boolean(QStringLiteral("termination"), QT_TR_NOOP("终端电阻"), false),
-                        QStringLiteral("ZLG USBCANFD 系列可由软件开关，其他适配器忽略")), // i18n: ignore
-              described(str(QStringLiteral("dbcFile"), QT_TR_NOOP("DBC 文件"), QString()),
-                        QStringLiteral("相对 .uidp 所在文件夹的路径；导出时复制进应用")), // i18n: ignore
-              described(text(QStringLiteral("canSignals"), QT_TR_NOOP("CAN 信号"), QString()),
-                        QStringLiteral("DBC 之外的信号，每行一个：`ID 名字 : 起始位|长度@1+ (因子,偏移) [最小|最大] " // i18n: ignore
-                                       "\"单位\"`，ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号")), // i18n: ignore
-              described(str(QStringLiteral("canFilter"), QT_TR_NOOP("接收过滤"), QString()),
-                        QStringLiteral("留空收全部；否则只收这些 ID，如 `100-1FF, 18FF50E5`")) // i18n: ignore
-             },
-             240, 50),
+        meta(
+            QStringLiteral("CanConfigCard"), QT_TR_NOOP("CAN 配置卡片"), WidgetCategory::Comm, QStringLiteral("car"),
+            380, 270,
+            {
+                str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("CAN 连接")),
+                choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("完整"), // i18n: value
+                       {QStringLiteral("完整"), QStringLiteral("简洁")}),                             // i18n: value
+                described(choice(QStringLiteral("defaultAdapter"), QT_TR_NOOP("默认适配器"), QStringLiteral("PCAN"),
+                                 {QStringLiteral("PCAN"), QStringLiteral("ZLG"), QStringLiteral("SocketCAN"),
+                                  QStringLiteral("slcan")}),
+                          QStringLiteral(
+                              "PCAN：Windows、macOS；ZLG：Windows；SocketCAN：Linux；slcan：所有系统")), // i18n: ignore
+                choice(QStringLiteral("zlgModel"), QT_TR_NOOP("ZLG 型号"), QStringLiteral("USBCANFD-200U"),
+                       {QStringLiteral("USBCAN-I"), QStringLiteral("USBCAN-I+"), QStringLiteral("USBCAN-I-mini"),
+                        QStringLiteral("USBCAN-II"), QStringLiteral("USBCAN-II+"), QStringLiteral("USBCAN-E-U"),
+                        QStringLiteral("USBCAN-E-mini"), QStringLiteral("USBCAN-2E-U"), QStringLiteral("USBCAN-4E-U"),
+                        QStringLiteral("USBCAN-8E-U"), QStringLiteral("USBCANFD-100U-mini"),
+                        QStringLiteral("USBCANFD-100U"), QStringLiteral("USBCANFD-200U"),
+                        QStringLiteral("USBCANFD-400U"), QStringLiteral("USBCANFD-800U")}),
+                described(integer(QStringLiteral("defaultDeviceIndex"), QT_TR_NOOP("ZLG 设备索引"), 0, 0, 15),
+                          QStringLiteral("同型号插了多个时的序号，从 0 开始")), // i18n: ignore
+                described(integer(QStringLiteral("defaultChannel"), QT_TR_NOOP("ZLG 通道"), 0, 0, 7),
+                          QStringLiteral("设备上的第几路 CAN，从 0 开始")), // i18n: ignore
+                choice(QStringLiteral("defaultBitrate"), QT_TR_NOOP("默认波特率"), QStringLiteral("500k"),
+                       {QStringLiteral("10k"), QStringLiteral("20k"), QStringLiteral("50k"), QStringLiteral("100k"),
+                        QStringLiteral("125k"), QStringLiteral("250k"), QStringLiteral("500k"), QStringLiteral("800k"),
+                        QStringLiteral("1M")}),
+                choice(
+                    QStringLiteral("defaultSamplePoint"), QT_TR_NOOP("默认采样点"), QStringLiteral("87.5%"),
+                    {QStringLiteral("87.5%"), QStringLiteral("81.25%"), QStringLiteral("80%"), QStringLiteral("75%")})
+                    .withHelp("can.timing"),
+                choice(
+                    QStringLiteral("zlgSamplePoint"), QT_TR_NOOP("ZLG 采样点"), QStringLiteral("设备标准"), // i18n: value
+                    {QStringLiteral("设备标准"), QStringLiteral("87.5%"), QStringLiteral("81.25%"), // i18n: value
+                     QStringLiteral("80%"), QStringLiteral("75%")})
+                    .withHelp("can.timing"),
+                boolean(QStringLiteral("canFd"), QT_TR_NOOP("CAN FD"), false),
+                choice(QStringLiteral("defaultDataBitrate"), QT_TR_NOOP("数据域波特率"), QStringLiteral("2M"),
+                       {QStringLiteral("1M"), QStringLiteral("2M"), QStringLiteral("4M"), QStringLiteral("5M"),
+                        QStringLiteral("8M")}),
+                choice(QStringLiteral("defaultDataSamplePoint"), QT_TR_NOOP("数据域采样点"), QStringLiteral("75%"),
+                       {QStringLiteral("75%"), QStringLiteral("80%")})
+                    .withHelp("can.timing"),
+                described(boolean(QStringLiteral("canBrs"), QT_TR_NOOP("加速 (BRS)"), true),
+                          QStringLiteral("CAN FD 报文的数据段用数据域波特率发送")), // i18n: ignore
+                described(
+                    str(QStringLiteral("customTiming"), QT_TR_NOOP("自定义位时序"), QString()).withHelp("can.timing"),
+                    QStringLiteral("PCAN：`BRP,TSEG1,TSEG2,SJW`，FD 加 `;BRP,TSEG1,TSEG2,SJW`。"    // i18n: ignore
+                                   "时钟为经典 CAN 8 MHz、FD 80 MHz")),                             // i18n: ignore
+                described(str(QStringLiteral("zlgCustomTiming"), QT_TR_NOOP("ZLG 自定义位时序"), QString())
+                              .withHelp("can.timing"),
+                          QStringLiteral("USBCAN-I/II 填 `00,1C` 或 `1,13,2,1`。留空使用设备标准或所选采样点。" // i18n: ignore
+                                         "其他型号粘贴对应的 ZCANPRO 完整结果。4E-U 填十进制 bps")),             // i18n: ignore
+                boolean(QStringLiteral("listenOnly"), QT_TR_NOOP("只听模式"), false),
+                boolean(QStringLiteral("autoRecover"), QT_TR_NOOP("总线关闭自动恢复"), false).withHelp("can.recovery"),
+                described(boolean(QStringLiteral("termination"), QT_TR_NOOP("终端电阻"), false),
+                          QStringLiteral("ZLG USBCANFD 系列可由软件开关，其他适配器忽略")), // i18n: ignore
+                described(str(QStringLiteral("dbcFile"), QT_TR_NOOP("DBC 文件"), QString())
+                              .withHelp("can.signal-definitions"),
+                          QStringLiteral("相对 .uidp 所在文件夹的路径；导出时复制进应用")), // i18n: ignore
+                described(
+                    text(QStringLiteral("canSignals"), QT_TR_NOOP("CAN 信号"), QString())
+                        .withHelp("can.signal-definitions"),
+                    QStringLiteral(
+                        "DBC 之外的信号，每行一个：`ID 名字 : 起始位|长度@1+ (因子,偏移) [最小|最大] "   // i18n: ignore
+                        "\"单位\"`，ID 是十六进制，`@1` Intel、`@0` Motorola，`+` 无符号、`-` 有符号")), // i18n: ignore
+                described(
+                    str(QStringLiteral("canFilter"), QT_TR_NOOP("接收过滤"), QString()).withHelp("can.receive-filter"),
+                    QStringLiteral("留空收全部；否则只收这些 ID，如 `100-1FF, 18FF50E5`")), // i18n: ignore
+                described(
+                    text(QStringLiteral("canTxInitialState"), QT_TR_NOOP("发送初值映射"), QString())
+                        .withHelp("can.initial-state"),
+                    QStringLiteral(
+                        "每行 `目标报文=反馈报文` 按同名信号匹配，或 `控制报文.信号=状态报文.信号`。" // i18n: ignore
+                        "未收到新鲜完整反馈则拒发；留空使用原有 DBC 初值。重连清空缓存")),            // i18n: ignore
+                described(
+                    integer(QStringLiteral("canTxInitialMaxAge"), QT_TR_NOOP("初值反馈最大间隔(ms)"), 2000, 1, 60000)
+                        .withHelp("can.initial-state"),
+                    QStringLiteral(
+                        "只在目标报文首次发送前检查反馈新鲜度；后续保留本连接已发送的控制状态")) // i18n: ignore
+            },
+            240, 50),
         meta(QStringLiteral("DataSendCard"), QT_TR_NOOP("数据发送卡片"), WidgetCategory::Comm, QStringLiteral("send"),
              350, 140,
              {str(QStringLiteral("title"), QT_TR_NOOP("标题"), QT_TR_NOOP("数据发送")),
@@ -667,8 +748,9 @@ QList<WidgetMeta> commWidgets()
         meta(QStringLiteral("CanMonitor"), QT_TR_NOOP("报文监视"), WidgetCategory::Comm, QStringLiteral("view"), 560,
              280,
              {choice(QStringLiteral("displayMode"), QT_TR_NOOP("显示模式"), QStringLiteral("按 ID 汇总"), // i18n: value
-                     {QStringLiteral("按 ID 汇总"), QStringLiteral("滚动日志")}),                         // i18n: value
-              described(integer(QStringLiteral("maxMessages"), QT_TR_NOOP("最大报文数量"), 1000, 1, 50000),
+                     {QStringLiteral("按 ID 汇总"), QStringLiteral("滚动日志")}) // i18n: value
+                  .withHelp("can.monitor-modes"), // i18n: value
+              described(integer(QStringLiteral("maxMessages"), QT_TR_NOOP("显示行数"), 1000, 1, 50000),
                         QStringLiteral("超出上限时移除最早记录；汇总模式按最近更新的 ID 保留")), // i18n: ignore
               boolean(QStringLiteral("autoScroll"), QT_TR_NOOP("自动滚动"), true),
               described(boolean(QStringLiteral("showSignals"), QT_TR_NOOP("显示信号"), false),
@@ -700,6 +782,32 @@ QList<WidgetMeta> builtinWidgets()
     all += chartWidgets();
     all += commWidgets();
     all += industrialWidgets();
+    for (auto &widget : all) {
+        if (widget.prop(QStringLiteral("commandMode")) || widget.typeName == QLatin1String("DataSendCard")) {
+            auto target = std::find_if(widget.properties.begin(), widget.properties.end(), [](const PropDef &p) {
+                return p.name == QLatin1String("commandTargetId");
+            });
+            const auto endpoint = str(QStringLiteral("commandEndpoint"), QT_TR_NOOP("发送子通道"), QString());
+            if (target == widget.properties.end()) {
+                widget.properties.append(str(QStringLiteral("commandTargetId"), QT_TR_NOOP("发送连接"), QString())
+                                             .withHelp("data.routing"));
+                widget.properties.append(endpoint);
+            } else {
+                target->helpKey = QStringLiteral("data.routing");
+                widget.properties.insert(target + 1, endpoint);
+            }
+        }
+        if (QStringList{QStringLiteral("DataTable"), QStringLiteral("DataRecvCard"), QStringLiteral("LogBox"), QStringLiteral("CanMonitor"), QStringLiteral("ModbusSlaveTable")}.contains(widget.typeName)) {
+            if (widget.typeName != QLatin1String("CanMonitor") && widget.typeName != QLatin1String("ModbusSlaveTable"))
+                widget.properties.prepend(str(QStringLiteral("sourceEndpoint"), QT_TR_NOOP("来源子通道"), QString()));
+            widget.properties.prepend(str(QStringLiteral("sourceCardId"), QT_TR_NOOP("来源连接"), QString()).withHelp("data.routing"));
+        }
+        if (widget.typeName == QLatin1String("CanMonitor")) {
+            widget.properties.append(boolean(QStringLiteral("autoSave"), QT_TR_NOOP("自动保存"), false).withHelp("can.monitor-modes"));
+            widget.properties.append(integer(QStringLiteral("autoSaveRows"), QT_TR_NOOP("每文件行数"), 100000, 1, 1000000).withHelp("can.monitor-modes"));
+            widget.properties.append(str(QStringLiteral("autoSaveDirectory"), QT_TR_NOOP("自动保存目录"), QString()).withHelp("can.monitor-modes"));
+        }
+    }
     return all;
 }
 

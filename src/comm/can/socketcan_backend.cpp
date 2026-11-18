@@ -104,6 +104,7 @@ bool SocketCanBackend::open(const CanSettings &settings, QString *error)
         return fail(tr("无法打开 %1: %2").arg(settings.channel, systemError()));
     }
     m_state = CanBusState::Normal;
+    transmitState()->observe(m_state);
     m_description = QStringLiteral("SocketCAN %1").arg(settings.channel);
     m_notifier = new QSocketNotifier(m_socket, QSocketNotifier::Read, this);
     connect(m_notifier, &QSocketNotifier::activated, this, &SocketCanBackend::readAll);
@@ -122,10 +123,15 @@ void SocketCanBackend::close()
 
 bool SocketCanBackend::send(const CanFrame &frame, QString *error)
 {
-    if (m_socket < 0) {
+    if (m_socket < 0 || transmitState()->stopping) {
         if (error) {
             *error = tr("CAN 通道未打开");
         }
+        return false;
+    }
+    if (transmitState()->busOff) {
+        if (error)
+            *error = busOffSendError();
         return false;
     }
     canfd_frame raw{};
@@ -194,6 +200,7 @@ void SocketCanBackend::readAll()
                     state = CanBusState::Normal;
                 }
             }
+            transmitState()->observe(state);
             continue;
         }
         CanFrame frame;
@@ -204,6 +211,7 @@ void SocketCanBackend::readAll()
         frame.brs = frame.fd && (raw.flags & CANFD_BRS);
         frame.data = QByteArray(reinterpret_cast<const char *>(raw.data), raw.len);
         frame.timestampMs = now;
+        frame.receivedAtMs = Can::monotonicMs();
         frames.append(frame);
     }
     if (!frames.isEmpty()) {

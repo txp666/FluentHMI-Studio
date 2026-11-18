@@ -107,7 +107,7 @@ class DataTableWidget : public HmiWidget
     void onAttached() override;
 
   private:
-    void onMessage(const Message &message);
+    void onMessage(const Message &message, const DataSource &source);
     bool logging() const;
 
     FluentQt::TableWidget *m_table = nullptr;
@@ -179,7 +179,7 @@ class DataRecvCardWidget : public HmiWidget
   private:
     void append(const QString &html);
     // Bytes as HEX or text: received text the way its link spells it, what was sent as UTF-8.
-    QString render(const QByteArray &bytes, bool received) const;
+    QString render(const QByteArray &bytes, bool received, const DataSource &source) const;
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_counter = nullptr;

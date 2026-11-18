@@ -3,6 +3,7 @@
 #include "comm/can/pcan_backend.h"
 #include "comm/can/slcan_backend.h"
 #include "comm/can/zlg_backend.h"
+#include "core/can_timing.h"
 #ifdef Q_OS_LINUX
 #include "comm/can/socketcan_backend.h"
 #endif
@@ -17,6 +18,7 @@ CanAdapterCaps caps(const QString &adapter, const QString &zlgModel)
 {
     CanAdapterCaps caps;
     if (adapter == Pcan) {
+        caps.autoRecover = true;
 #if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
         caps.supported = false;
 #endif
@@ -26,6 +28,7 @@ CanAdapterCaps caps(const QString &adapter, const QString &zlgModel)
         return ZlgBackend::caps(zlgModel);
     }
     if (adapter == SocketCan) {
+        caps.autoRecover = true;
 #ifndef Q_OS_LINUX
         caps.supported = false;
 #endif
@@ -34,7 +37,6 @@ CanAdapterCaps caps(const QString &adapter, const QString &zlgModel)
         caps.dataSamplePoint = false;
         caps.listenOnly = false;
         caps.customTiming = false;
-        caps.fixedTimingReason = QCoreApplication::translate("fhmi", "SocketCAN 的波特率由系统设置（ip link）");
         return caps;
     }
     // slcan: S0–S8 only.
@@ -42,8 +44,20 @@ CanAdapterCaps caps(const QString &adapter, const QString &zlgModel)
     caps.fd = false;
     caps.dataSamplePoint = false;
     caps.customTiming = false;
-    caps.fixedTimingReason = QCoreApplication::translate("fhmi", "采样点由适配器决定");
     return caps;
+}
+
+TimingOverrides timingOverrides(const QString &adapter, const QString &customTiming)
+{
+    if (customTiming.trimmed().isEmpty())
+        return {};
+    if (adapter == Zlg)
+        return {true, true};
+    if (adapter == Pcan) {
+        const auto parsed = CanBitTiming::parseCustom(customTiming);
+        return {true, parsed && parsed->data.has_value()};
+    }
+    return {};
 }
 
 QList<CanChannel> channels(const QString &adapter, QString *error)
@@ -84,10 +98,17 @@ QString socketCanCommand(const QString &interfaceName, const CanSettings &settin
                        .arg(settings.dataBitrate)
                        .arg(settings.dataSamplePoint);
     }
+    if (settings.autoRecover)
+        command += QStringLiteral(" restart-ms 1000");
     return command;
 }
 
 } // namespace CanAdapter
+
+QString CanBackend::busOffSendError()
+{
+    return tr("CAN 总线关闭，未发送报文");
+}
 
 std::unique_ptr<CanBackend> CanBackend::create(const QString &adapter, QString *error)
 {

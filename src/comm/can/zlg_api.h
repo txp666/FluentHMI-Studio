@@ -205,13 +205,14 @@ struct Model
     bool termination; // has n/initenal_resistance in its property file
 };
 
-// USBCAN-E-mini is not here: no ZLG document found says which device type it uses.
+// USBCAN-E-mini manual UM01010101 V1.04 §1.1: fully compatible with USBCAN-E-U.
 inline constexpr Model kModels[] = {
     {"USBCAN-I", ZCAN_USBCAN1, 1, Family::Sja1000, false},
     {"USBCAN-I+", ZCAN_USBCAN1, 1, Family::Sja1000, false},
     {"USBCAN-I-mini", ZCAN_USBCAN1, 1, Family::Sja1000, false},
     {"USBCAN-II", ZCAN_USBCAN2, 2, Family::Sja1000, false},
     {"USBCAN-II+", ZCAN_USBCAN2, 2, Family::Sja1000, false},
+    {"USBCAN-E-mini", ZCAN_USBCAN_E_U, 1, Family::EU, false},
     {"USBCAN-E-U", ZCAN_USBCAN_E_U, 1, Family::EU, false},
     {"USBCAN-2E-U", ZCAN_USBCAN_2E_U, 2, Family::EU, false},
     {"USBCAN-4E-U", ZCAN_USBCAN_4E_U, 4, Family::EU, false},
@@ -229,18 +230,6 @@ inline constexpr Model kModels[] = {
 inline constexpr quint32 kClassicRates[] = {1000000, 800000, 500000, 250000, 125000, 100000, 50000, 20000, 10000};
 inline constexpr quint32 kFdArbitrationRates[] = {1000000, 800000, 500000, 250000, 125000, 100000, 50000};
 inline constexpr quint32 kFdDataRates[] = {5000000, 4000000, 2000000, 1000000, 800000, 500000, 250000, 125000, 100000};
-
-// Timing0/Timing1 (BTR0/BTR1) of the common bitrates, sample point 87.5 % (80 % at 800k): UM01010101 V3.15,
-// 2.5.5 VCI_INIT_CONFIG.
-struct Btr
-{
-    quint32 bitrate;
-    BYTE timing0;
-    BYTE timing1;
-};
-inline constexpr Btr kBtrTable[] = {{10000, 0x31, 0x1C},  {20000, 0x18, 0x1C},  {50000, 0x09, 0x1C},
-                                    {100000, 0x04, 0x1C}, {125000, 0x03, 0x1C}, {250000, 0x01, 0x1C},
-                                    {500000, 0x00, 0x1C}, {800000, 0x00, 0x16}, {1000000, 0x00, 0x14}};
 
 inline const Model *findModel(const char *name, qsizetype length)
 {

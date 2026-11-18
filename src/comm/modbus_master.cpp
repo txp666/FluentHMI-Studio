@@ -42,6 +42,7 @@ std::optional<ModbusNeed> modbusNeed(const BindingEntry &binding)
                       binding.mbDataType == QLatin1String("float32");
     ModbusNeed need;
     need.widgetId = binding.widgetId;
+    need.route = binding.route();
     need.slave = binding.mbSlaveFilter;
     need.table = table;
     need.address = binding.mbRegIndex;
@@ -50,14 +51,19 @@ std::optional<ModbusNeed> modbusNeed(const BindingEntry &binding)
     return need;
 }
 
-QList<ModbusBlock> planBlocks(const QList<ModbusNeed> &needs, int defaultPeriod)
+int modbusReadFunction(const QString &table)
 {
     static const QHash<QString, int> codes = {
         {QStringLiteral("hr"), 3}, {QStringLiteral("ir"), 4}, {QStringLiteral("co"), 1}, {QStringLiteral("di"), 2}};
+    return codes.value(table);
+}
+
+QList<ModbusBlock> planBlocks(const QList<ModbusNeed> &needs, int defaultPeriod)
+{
     using Item = std::tuple<int, int, int>;                  // address, count, period
     std::map<std::pair<int, int>, std::vector<Item>> groups; // (slave, fc), in that order
     for (const ModbusNeed &need : needs) {
-        const int fc = codes.value(need.table, 0);
+        const int fc = modbusReadFunction(need.table);
         if (fc == 0) {
             continue;
         }
@@ -116,7 +122,7 @@ QString modbusException(const Message &message)
 // ModbusMaster
 // ---------------------------------------------------------------------------
 
-ModbusMaster::ModbusMaster(Link *link) : QObject(link), m_link(link), m_timer(new QTimer(this))
+ModbusMaster::ModbusMaster(Link *link, const QString &endpoint) : QObject(link), m_link(link), m_endpoint(endpoint), m_timer(new QTimer(this))
 {
     m_timer->setSingleShot(true);
     connect(m_timer, &QTimer::timeout, this, [this]() {
@@ -125,6 +131,9 @@ ModbusMaster::ModbusMaster(Link *link) : QObject(link), m_link(link), m_timer(ne
         }
     });
     connect(link, &Link::messageReceived, this, &ModbusMaster::onMessage);
+    connect(link, &Link::streamClosed, this, [this](const DataSource &source) {
+        if (source.endpoint == m_endpoint) cancelAll();
+    });
     connect(link, &Link::connectedChanged, this, [this](bool connected) {
         if (!connected) {
             cancelAll();
@@ -144,19 +153,20 @@ QByteArray ModbusMaster::frame(const ModbusRequest &request, const QString &pars
 }
 
 QByteArray ModbusMaster::enqueue(const ModbusRequest &request, int timeoutMs, Priority priority, Done done,
-                                 const void *owner)
+                                 const QString &destination)
 {
-    if (!m_link->canSend()) {
+    const QString target = destination.isEmpty() ? m_endpoint : destination;
+    if (!m_link->canSendTo(target)) {
         return {};
     }
     const QString type = m_link->parserType();
-    Entry entry{request, frame(request, type), type, std::max(1, timeoutMs), priority, std::move(done), owner};
+    Entry entry{request, frame(request, type), type, std::max(1, timeoutMs), priority, std::move(done), target};
     const QByteArray bytes = entry.frame;
     if (!m_onLine && m_queue.isEmpty() && !m_pumping) {
         // Straight onto the line: a request the link refuses to write is not accepted.
         m_onLine = std::move(entry);
         m_timer->start(m_onLine->timeoutMs);
-        if (!m_link->send(bytes)) {
+        if (!m_link->send(bytes, m_onLine->destination)) {
             m_timer->stop();
             m_onLine.reset();
             return {};
@@ -191,8 +201,8 @@ void ModbusMaster::pump()
         const QByteArray bytes = entry.frame;
         m_onLine = std::move(entry);
         m_timer->start(m_onLine->timeoutMs);
-        if (m_link->send(bytes)) {
-            break;
+        if (m_link->send(bytes, m_onLine->destination)) {
+            continue;
         }
         m_timer->stop();
         const Entry failed = std::move(*m_onLine);
@@ -205,11 +215,13 @@ void ModbusMaster::pump()
         }
     }
     m_pumping = false;
+    if (!m_onLine)
+        emit queueIdle();
 }
 
-void ModbusMaster::onMessage(const Message &message)
+void ModbusMaster::onMessage(const Message &message, const DataSource &source)
 {
-    if (!m_onLine) {
+    if (!m_onLine || (!m_endpoint.isEmpty() && source.endpoint != m_endpoint)) {
         return;
     }
     const ModbusRequest &request = m_onLine->request;
@@ -244,6 +256,8 @@ void ModbusMaster::finish(ModbusResult result)
     const Entry entry = std::move(*m_onLine);
     m_onLine.reset();
     m_timer->stop();
+    if (result.timedOut && entry.framedFor == QLatin1String("modbus_tcp"))
+        m_link->requestsFor(entry.destination)->expireTcpRequest(entry.frame);
     result.master = this;
     const QPointer<ModbusMaster> self(this);
     if (entry.done) {
@@ -285,13 +299,6 @@ void ModbusMaster::cancelAll()
             return;
         }
     }
-}
-
-void ModbusMaster::cancelQueued(const void *owner)
-{
-    m_queue.erase(
-        std::remove_if(m_queue.begin(), m_queue.end(), [owner](const Entry &entry) { return entry.owner == owner; }),
-        m_queue.end());
 }
 
 } // namespace fhmi

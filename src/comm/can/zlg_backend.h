@@ -29,6 +29,7 @@ class ZlgBackend : public CanPollingBackend
     bool readFrames(QList<CanFrame> &out, QString *error) override;
     bool writeFrame(const CanFrame &frame, QString *error) override;
     CanBusState readBusState() override;
+    bool recoverBus(QString *error) override;
 
   private:
     void releaseDevice();
@@ -37,6 +38,7 @@ class ZlgBackend : public CanPollingBackend
     zlg::DEVICE_HANDLE m_device = nullptr;
     zlg::CHANNEL_HANDLE m_channel = nullptr;
     int m_deviceIndex = 0;
+    int m_channelIndex = 0;
     QString m_description;
 };
 

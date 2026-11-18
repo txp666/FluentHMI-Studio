@@ -1,5 +1,6 @@
 #pragma once
 #include "core/s7.h"
+#include "core/data_source.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QJsonObject>
@@ -49,6 +50,7 @@ struct EncodedCommand
     QByteArray bytes;
     ModbusRequest modbus;
     CanCommand can;
+    DataRoute route;
 };
 
 struct CommandResult

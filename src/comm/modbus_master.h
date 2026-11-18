@@ -29,6 +29,7 @@ struct ModbusNeed
     int count = 1;       // registers, or bits for coils and discrete inputs
     int period = 0;      // ms; 0 uses the poller's default period
     bool visible = true; // on screen now; a chart curve always is
+    DataRoute route;
 };
 
 // What a Modbus binding reads from its register table; nullopt for the other parse modes.
@@ -50,6 +51,8 @@ struct ModbusBlock
     }
     bool operator!=(const ModbusBlock &other) const { return !(*this == other); }
 };
+
+int modbusReadFunction(const QString &table);
 
 // Merges needs into read blocks, the same way as PyQt UI Designer (tests/data/poll_plan_vectors.json):
 // hr reads with FC 3, ir 4, co 1, di 2; per (slave, fc), in (address, count) order, a need joins the open
@@ -91,22 +94,23 @@ class ModbusMaster : public QObject
     using Done = std::function<void(const ModbusResult &)>;
 
     // Owned by `link`, which frames the requests as it parses replies: MBAP, ASCII or RTU.
-    explicit ModbusMaster(Link *link);
+    explicit ModbusMaster(Link *link, const QString &endpoint = {});
 
     // Queues `request`; `done` runs once, on the reply, the device's exception or the timeout. Returns the
-    // frame the request goes out as, empty when the link cannot take it now. `owner` tags the request for
-    // cancelQueued().
+    // frame the request goes out as, empty when the link cannot take it now.
     QByteArray enqueue(const ModbusRequest &request, int timeoutMs, Priority priority, Done done = {},
-                       const void *owner = nullptr);
+                       const QString &destination = {});
     bool busy() const { return m_onLine.has_value(); }
     int pending() const { return int(m_queue.size()); }
     // Ends every request, the one on the line included, as timed out: the link went down.
     void cancelAll();
-    // Drops the requests of `owner` that have not gone out yet, without calling them back.
-    void cancelQueued(const void *owner);
 
     // The frame `request` goes out as on a link parsing `parserType`.
     static QByteArray frame(const ModbusRequest &request, const QString &parserType);
+
+  signals:
+    // A pending request finished and the line is free for the next poll.
+    void queueIdle();
 
   private:
     struct Entry
@@ -117,15 +121,16 @@ class ModbusMaster : public QObject
         int timeoutMs = 1000;
         Priority priority = Priority::Write;
         Done done;
-        const void *owner = nullptr;
+        QString destination;
     };
 
     void pump();
-    void onMessage(const Message &message);
+    void onMessage(const Message &message, const DataSource &source);
     void finish(ModbusResult result);
     ModbusResult failure(bool timedOut, const QString &problem);
 
     Link *m_link;
+    QString m_endpoint;
     QTimer *m_timer;
     QList<Entry> m_queue;
     std::optional<Entry> m_onLine;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/protocol_parser.h"
+#include "core/data_source.h"
 
 #include <QtCore/QHash>
 #include <QtCore/QJsonObject>
@@ -38,7 +39,11 @@ class Link : public QObject
     virtual bool isCan() const { return false; }
 
     // Writes to the device; false when nothing could be written.
-    bool send(const QByteArray &bytes);
+    bool send(const QByteArray &bytes, const QString &endpoint = {});
+    void setConnectionId(const QString &id) { m_connectionId = id; }
+    QString connectionId() const { return m_connectionId; }
+    DataSource dataSource(Parser *parser = nullptr);
+    bool ownsStream(quint64 streamId, const QString &endpoint = {}) const;
 
     bool setParser(const QString &type, const QJsonObject &config, QString *error = nullptr);
     QString parserType() const { return m_parserType; }
@@ -55,15 +60,21 @@ class Link : public QObject
     ModbusSlave *modbusSlave() const;
     bool answersModbus() const;
     // The queue every Modbus request on this link goes through, one on the line at a time.
-    ModbusMaster *modbusMaster() const { return m_modbusMaster; }
+    ModbusMaster *modbusMaster(const QString &endpoint = {});
+    virtual QStringList sendEndpoints() const { return {QString()}; }
+    // A named TCP peer must already be connected. UDP and MQTT can address a new destination.
+    virtual bool canSendTo(const QString &endpoint) const;
+    // MQTT request/reply topics may differ; their Modbus transactions belong to the connection.
+    virtual bool addressedModbusReplies() const { return true; }
 
   signals:
     void connectedChanged(bool connected);
-    // canSend() changed while the link stayed connected: a listening server got its first device or lost its last.
+    // Available destinations changed while the link stayed connected.
     void canSendChanged();
-    void messageReceived(const fhmi::Message &message);
-    void rawReceived(const QByteArray &bytes);
-    void bytesSent(const QByteArray &bytes);
+    void messageReceived(const fhmi::Message &message, const fhmi::DataSource &source = {});
+    void rawReceived(const QByteArray &bytes, const fhmi::DataSource &source = {});
+    void bytesSent(const QByteArray &bytes, const fhmi::DataSource &source = {});
+    void streamClosed(const fhmi::DataSource &source);
     void errorOccurred(const QString &message);
     // Something the log shows at warning level (a DBC line skipped, a CAN bus in error passive).
     void warningMessage(const QString &message);
@@ -73,8 +84,10 @@ class Link : public QObject
     // writeBytes() result for a failure the link already explained through errorOccurred().
     static constexpr qint64 WriteFailureReported = -2;
     virtual qint64 writeBytes(const QByteArray &bytes) = 0;
+    virtual qint64 writeTo(const QByteArray &bytes, const QString &endpoint);
+    void registerStream(Parser *parser, const QString &endpoint);
     // A fresh parser for one incoming stream (a TCP server keeps one per client).
-    std::unique_ptr<Parser> createStreamParser() const;
+    std::unique_ptr<Parser> createStreamParser(const QString &endpoint = {});
     // Frames bytes read from one stream and reports each complete unit: rawReceived() with
     // the unit, then messageReceived() for each of its messages. A parser that frames on
     // silence gets an idle timer, restarted by every read, that reports what flush() returns.
@@ -88,6 +101,8 @@ class Link : public QObject
     void resetDefaultParser();
 
   private:
+    friend class ModbusMaster;
+
     struct PendingReply
     {
         Parser *stream = nullptr;
@@ -96,7 +111,7 @@ class Link : public QObject
         qint64 due = 0; // ms since the epoch: the request's arrival plus modbusDelay
     };
 
-    std::unique_ptr<Parser> makeParser(const QString &type, const QJsonObject &config, QString *error) const;
+    std::unique_ptr<Parser> makeParser(const QString &type, const QJsonObject &config, QString *error, const std::shared_ptr<ModbusRequests> &requests) const;
     void answer(Parser *parser, const QByteArray &frame);
     void sendNextReply();
     void dropReplies(Parser *parser);
@@ -107,9 +122,15 @@ class Link : public QObject
     std::unique_ptr<Parser> m_parser;
     QHash<Parser *, QTimer *> m_idleTimers;
     ModbusMaster *m_modbusMaster = nullptr;
+    QHash<QString, QPointer<ModbusMaster>> m_endpointMasters;
+    QHash<QString, std::shared_ptr<ModbusRequests>> m_endpointRequests;
+    std::shared_ptr<ModbusRequests> requestsFor(const QString &endpoint);
     QPointer<ModbusSlave> m_slave;
     QList<PendingReply> m_replies; // oldest first; the first goes out when m_replyTimer fires
     QTimer *m_replyTimer = nullptr;
+    struct Stream { quint64 id = nextDataStream(); QString endpoint; };
+    QString m_connectionId;
+    QHash<Parser *, Stream> m_streams;
 };
 
 } // namespace fhmi

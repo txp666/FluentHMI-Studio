@@ -145,6 +145,22 @@ qint64 TcpServerLink::writeBytes(const QByteArray &bytes)
     return accepted;
 }
 
+QStringList TcpServerLink::sendEndpoints() const
+{
+    QStringList endpoints;
+    for (auto *socket : m_clients.keys()) endpoints.append(networkEndpoint(socket->peerAddress().toString(), socket->peerPort()));
+    return endpoints;
+}
+
+qint64 TcpServerLink::writeTo(const QByteArray &bytes, const QString &endpoint)
+{
+    if (endpoint.isEmpty()) return writeBytes(bytes);
+    for (auto *socket : m_clients.keys()) {
+        if (networkEndpoint(socket->peerAddress().toString(), socket->peerPort()) == endpoint) return socket->write(bytes);
+    }
+    return -1;
+}
+
 qint64 TcpServerLink::writeReply(Parser *parser, const QByteArray &bytes)
 {
     for (auto it = m_clients.constBegin(); it != m_clients.constEnd(); ++it) {
@@ -158,8 +174,10 @@ qint64 TcpServerLink::writeReply(Parser *parser, const QByteArray &bytes)
 void TcpServerLink::onNewConnection()
 {
     while (QTcpSocket *socket = m_server.nextPendingConnection()) {
-        m_clients.insert(socket, std::shared_ptr<Parser>(createStreamParser()));
-        const QString peer = QStringLiteral("%1:%2").arg(socket->peerAddress().toString()).arg(socket->peerPort());
+        const QString peer = networkEndpoint(socket->peerAddress().toString(), socket->peerPort());
+        auto parser = std::shared_ptr<Parser>(createStreamParser(peer));
+        m_clients.insert(socket, parser);
+        registerStream(parser.get(), peer);
         connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
             const auto it = m_clients.constFind(socket);
             if (it != m_clients.constEnd()) {
@@ -172,9 +190,7 @@ void TcpServerLink::onNewConnection()
         });
         emit infoMessage(tr("设备已连入: %1").arg(peer));
         emit clientCountChanged(clientCount());
-        if (clientCount() == 1) {
-            emit canSendChanged();
-        }
+        emit canSendChanged();
     }
 }
 
@@ -190,9 +206,7 @@ void TcpServerLink::dropClient(QTcpSocket *socket)
     socket->abort();
     socket->deleteLater();
     emit clientCountChanged(clientCount());
-    if (clientCount() == 0) {
-        emit canSendChanged();
-    }
+    emit canSendChanged();
 }
 
 } // namespace fhmi

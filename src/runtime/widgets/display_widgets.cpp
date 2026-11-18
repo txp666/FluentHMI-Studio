@@ -1,7 +1,9 @@
 #include "runtime/widgets/display_widgets.h"
 
 #include <FluentQtWidgets/Color.h>
+#include <FluentQtWidgets/StyleSheet.h>
 #include <FluentQtWidgets/Theme.h>
+#include <FluentQtWidgets/Widgets/InfoBadge.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/ProgressBar.h>
 
@@ -27,6 +29,23 @@ bool isDarkTheme()
 QColor accentColor()
 {
     return FluentQt::themeColor();
+}
+
+void paintCardSurface(QWidget *widget, const QString &style)
+{
+    if (style == QStringLiteral("透明")) { // i18n: value
+        return;
+    }
+    QPainter painter(widget);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const bool dark = isDarkTheme();
+    painter.setPen(dark ? QColor(255, 255, 255, 20) : QColor(0, 0, 0, 18));
+    if (style == QStringLiteral("描边")) { // i18n: value
+        painter.setBrush(Qt::NoBrush);
+    } else {
+        painter.setBrush(dark ? QColor(255, 255, 255, 13) : QColor(255, 255, 255, 200));
+    }
+    painter.drawRoundedRect(QRectF(widget->rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
 }
 
 namespace {
@@ -56,16 +75,6 @@ QColor ledColor(const QString &name)
     return QColor(0x3C, 0xC0, 0x6A);
 }
 
-void paintCard(QWidget *widget)
-{
-    QPainter painter(widget);
-    painter.setRenderHint(QPainter::Antialiasing);
-    const bool dark = isDarkTheme();
-    painter.setPen(dark ? QColor(255, 255, 255, 20) : QColor(0, 0, 0, 18));
-    painter.setBrush(dark ? QColor(255, 255, 255, 13) : QColor(255, 255, 255, 200));
-    painter.drawRoundedRect(QRectF(widget->rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
-}
-
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -92,6 +101,12 @@ void LedWidget::applyBoundValue(const QVariant &value, const BindingEntry &bindi
 {
     if (const auto on = bindingLed(value, binding.ledOnValue, binding.ledOffValue)) {
         m_on = *on;
+        m_known = true;
+        setAccessibleDescription({});
+        update();
+    } else if (binding.parseMode == ParseMode::DataPoint) {
+        m_known = false;
+        setAccessibleDescription(tr("数据未知"));
         update();
     }
 }
@@ -105,7 +120,7 @@ void LedWidget::paintEvent(QPaintEvent *)
     const qreal glowRadius = std::min<qreal>(d * 0.8, height() / 2.0);
     const QRectF dot(glowRadius + 1 - d / 2, (height() - d) / 2, d, d);
     const QColor color = ledColor(text("color"));
-    if (m_on) {
+    if (m_known && m_on) {
         QRadialGradient glow(dot.center(), glowRadius);
         QColor halo = color;
         halo.setAlpha(90);
@@ -134,6 +149,11 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
     layout->setSpacing(0);
     m_title = new FluentQt::CaptionLabel(this);
     m_value = new FluentQt::BodyLabel(this);
+    m_badge = new FluentQt::InfoBadge(this);
+    m_badge->setObjectName(QStringLiteral("numericDisplayBadge"));
+    m_badge->setMargin(3);
+    m_badge->setMinimumHeight(22);
+    m_badge->hide();
     m_unit = new FluentQt::CaptionLabel(this);
     for (FluentQt::FluentLabelBase *label :
          {static_cast<FluentQt::FluentLabelBase *>(m_title), static_cast<FluentQt::FluentLabelBase *>(m_value),
@@ -146,6 +166,7 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
     layout->addStretch();
     layout->addWidget(m_title);
     layout->addWidget(m_value);
+    layout->addWidget(m_badge);
     layout->addWidget(m_unit);
     layout->addStretch();
     repaintOnThemeChange(this);
@@ -156,26 +177,76 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
 
 void NumericDisplayWidget::apply()
 {
+    const bool badge = text("displayStyle") == QStringLiteral("状态徽标"); // i18n: value
+    auto *box = static_cast<QBoxLayout *>(layout());
+    box->setDirection(badge ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
+    box->setSpacing(badge ? 6 : 0);
     m_title->setText(text("title"));
+    m_title->setVisible(!badge || !m_title->text().isEmpty());
+    m_value->setVisible(!badge);
+    m_badge->setVisible(badge);
     // An empty unit keeps its line, so the titles of cards with and without one line up.
     m_unit->setText(text("unit"));
+    const bool enumeration = text("displayFormat") == QStringLiteral("枚举"); // i18n: value
+    m_unit->setVisible(!enumeration && (!badge || !m_unit->text().isEmpty()));
     m_unit->setMinimumHeight(m_unit->fontMetrics().height());
-    m_value->setText(text("value"));
+    if (!isLive())
+        m_reading = prop("value").toVariant();
+    m_enumEntries = enumeration ? parseValueText(text("textList")) : QHash<QString, ValueText>();
     m_value->setPixelFontSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
     QFont font = m_value->font();
     font.setBold(true);
     m_value->setFont(font);
-    m_value->setTextColor(accentColor(), accentColor());
+    showValue(m_reading);
+    update();
 }
 
 void NumericDisplayWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    m_value->setText(displayString(value));
+    m_reading = value;
+    showValue(value);
+}
+
+void NumericDisplayWidget::showValue(const QVariant &value)
+{
+    QString label = value.isValid() ? displayString(value) : QString::fromUtf8("—");
+    QColor color = accentColor();
+    if (text("displayFormat") == QStringLiteral("枚举") && value.isValid()) { // i18n: value
+        const auto it = m_enumEntries.constFind(valueTextKey(value));
+        if (it != m_enumEntries.cend()) {
+            label = it->text;
+            if (QColor(it->color).isValid())
+                color = QColor(it->color);
+        } else {
+            if (!text("unknownText").isEmpty())
+                label = text("unknownText");
+            if (QColor(text("unknownColor")).isValid())
+                color = QColor(text("unknownColor"));
+        }
+    }
+    m_value->setText(label);
+    m_value->setTextColor(color, color);
+    m_badge->setText(label);
+    if (text("displayStyle") == QStringLiteral("状态徽标")) { // i18n: value
+        // Enum colors mean foreground colors in both display styles. The badge gets
+        // a separate, softly tinted surface rather than using that text color as fill.
+        const auto tint = [&color](const QColor &surface, double amount) {
+            return QColor(qRound(surface.red() * (1 - amount) + color.red() * amount),
+                          qRound(surface.green() * (1 - amount) + color.green() * amount),
+                          qRound(surface.blue() * (1 - amount) + color.blue() * amount));
+        };
+        m_badge->setCustomBackgroundColor(tint(QColor(Qt::white), 0.12), tint(QColor(43, 43, 43), 0.20));
+        // InfoBadge's stylesheet sets its text color, so match that selector as Fluent
+        // labels do; a palette change alone would be overwritten by the component.
+        const QString foreground = QStringLiteral("QLabel[fqw=\"InfoBadge\"] { color: %1; }");
+        FluentQt::FluentStyleSheet::setCustomStyleSheet(m_badge, foreground.arg(color.name()),
+                                                      foreground.arg(color.lighter(160).name()));
+    }
 }
 
 void NumericDisplayWidget::paintEvent(QPaintEvent *)
 {
-    paintCard(this);
+    paintCardSurface(this, text("cardStyle"));
 }
 
 // ---------------------------------------------------------------------------

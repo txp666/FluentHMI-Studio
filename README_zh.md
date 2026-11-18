@@ -9,6 +9,12 @@ FluentHMI Studio 是 [modusignal](https://github.com/txp666/modusignal) 工具�
 
 ## 界面预览
 
+### v0.8 新功能
+
+v0.8 增加按连接区分收发、CAN 位时序计算和 CSV 自动保存、共享数据点和报警历史，以及四种分页导航风格。打开随包示例工程即可在预览中体验。[操作图解](docs/tutorials/v0.8-guide.zh.md) · [更新说明](docs/release-notes/v0.8.md)
+
+![历史报警支持独立日期和时间选择，以及筛选结果导出](docs/images/v0.8/zh/alarm-history-filter.png)
+
 ### 界面设计
 
 拖拽控件到画布，在右侧编辑属性和数据绑定：
@@ -21,13 +27,19 @@ FluentHMI Studio 是 [modusignal](https://github.com/txp666/modusignal) 工具�
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/preview-zh-dark.jpg"><img src="docs/images/preview-zh-light.jpg" alt="预览运行"></picture>
 
-### 全部控件
+### 控件一览
 
-部分基础控件在浅色和深色主题下的样子：
+浅色和深色主题下的常用输入控件、状态和仪表、分页、通信卡片与报警控件。曲线和报警使用示例数据。[控件一览工程](docs/images/widgets.uidp)
 
 ![控件一览（浅色）](docs/images/widgets-zh-light.jpg)
 
 ![控件一览（深色）](docs/images/widgets-zh-dark.jpg)
+
+### 动态控件
+
+用回放数据演示离心水泵状态、压力与液位变化、输送机正反转、电池分段变色和数字时序。[动态控件全景工程](examples/industrial/动态控件全景.uidp)
+
+![六种动态控件随回放数据变化](docs/images/widgets-dynamic-zh.gif)
 
 ## 让 AI 写工程
 
@@ -45,9 +57,9 @@ https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.
 
 ## 与 Python 版相比
 
-两者使用同一种工程格式，控件和协议规则一致：
+两者的共用功能遵循 UIDP 1.0／1.1，控件属性和协议规则一致。
 
-- **工程格式兼容**：读取 `.uidp` 1.0 和 1.1；含 S7 功能的工程保存为 1.1，其他工程保持 1.0。控件类型、属性名、默认值和枚举选项与 PyQt UI Designer 对齐。`examples/` 里的示例工程可以打开、预览并保存。[工业泵站与回放示例](examples/industrial)
+- **工程格式兼容**。Studio v0.8 可读取 UIDP 1.0～1.3。共用功能继续使用 1.0，含 S7 功能的工程使用 1.1。显式多通道路由和新增工程逻辑使用 1.2 或 1.3，需要 Studio v0.8 或更高版本。[工程格式说明](docs/uidp-format.md) · [工业泵站与回放示例](examples/industrial)
 - **解析与绑定规则一致**：行文本（键值 / JSON / CSV）、HEX 二进制帧（帧头帧尾、长度字段、校验、定长、空闲分帧）、Modbus RTU、Modbus TCP、Modbus ASCII 五种解析器，键值匹配 / JSON 路径 / HEX 字节提取 / Modbus 四种绑定，以及文本 / HEX / JSON / Modbus 四种命令编码，均按 Python 版逐条移植并有单元测试覆盖。
 - **接 PLC 的 Modbus 功能一致**：本程序发出的读请求会被记下，响应里的寄存器同时按地址命名（如保持寄存器 `hr100`），绑定选寄存器区和地址；链路卡片选 Modbus 解析、控件绑定寄存器地址即可自动读取：相近的地址合并成块按周期读，一次一条，只读界面上看得见的控件，写命令排在读请求前面；16 号功能码按数据类型写入 int16、32 位整数和 float32。
 - **Modbus RTU / TCP 从站**：串口、TCP、UDP 卡片可以当从站，用自己的数据表应答外部主站，绑定、控件和写命令直接读写这张表，从站寄存器表控件可以查看和修改。
@@ -157,25 +169,41 @@ sudo usermod -aG dialout $USER
 | 适配器 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | PEAK（PCAN-USB、PCAN-USB FD） | PEAK 的设备驱动（会装好 `PCANBasic.dll`） | [mac-can.com](https://mac-can.github.io/drivers/libPCBUSB.html) 的 PCBUSB 库（`libPCBUSB.dylib` 装在 `/usr/local/lib`） | 选 SocketCAN：内核自带 `peak_usb` 驱动 |
-| ZLG（USBCAN-I/II、USBCAN-E-U 系列、USBCANFD） | 致远的设备驱动，以及致远“CAN(FD) 接口卡二次开发接口函数库” `zlgcan_x64` 文件夹里的 `zlgcan.dll` 和 `kerneldlls` 文件夹，放在程序旁边或旁边的 `zlgcan` 文件夹里。函数库需要 Visual C++ 2013 x64 运行库（USBCAN-I/II 还要 2008 x64 含 MFC 的运行库）。zlgcan.dll 先在系统路径里找各设备的内核 DLL，再找 `kerneldlls`；USBCAN-E-U 系列的（`USBCAN_E_64.dll` 等）函数库里没有。连接时卡片会指出缺哪个文件 | – | – |
+| ZLG（USBCAN-I/II、USBCAN-E-mini、USBCAN-E-U 系列、USBCANFD） | 致远的设备驱动，以及致远“CAN(FD) 接口卡二次开发接口函数库” `zlgcan_x64` 文件夹里的 `zlgcan.dll` 和 `kerneldlls` 文件夹，放在程序旁边或旁边的 `zlgcan` 文件夹里。函数库需要 Visual C++ 2013 x64 运行库（USBCAN-I/II 还要 2008 x64 含 MFC 的运行库）。zlgcan.dll 先在系统路径里找各设备的内核 DLL，再找 `kerneldlls`；USBCAN-E-U 系列的（`USBCAN_E_64.dll` 等）函数库里没有。连接时卡片会指出缺哪个文件 | – | – |
 | SocketCAN | – | – | 系统自带；接口的波特率用 `ip link` 设置（卡片上会给出命令，如 `sudo ip link set can0 up type can bitrate 500000 sample-point 0.875`） |
 | slcan（CANable、CANUSB 等 Lawicel 协议的适配器） | 适配器的串口 | 适配器的串口 | 适配器的串口；只支持经典 CAN，10k–1M |
 
-CAN 专题给出了卡片配置、DBC 键、信号定义和发命令的写法。[CAN 工程说明](docs/uidp/can.md)
+图解演示 ZLG 位时序、用反馈初始化首条控制报文，以及 CSV 自动保存。CAN 专题说明卡片配置、DBC 键、信号定义和命令写法。[CAN 操作图解](docs/tutorials/v0.8-guide.zh.md#can-位时序单点控制与记录) · [CAN 工程参考](docs/uidp/can.md)
 
 ## 架构
 
+设计画布复用运行控件类，由设计器处理选择、布局和页面编辑。预览在 Studio 内运行。导出时将工程、资源与 FluentHMIRuntime 一起打包。预览和导出的应用都通过 `RuntimeSurface` 构建运行界面。
+
+```mermaid
+flowchart TB
+    Design["Studio 设计器"] --> Project["工程模型（.uidp）"]
+    Project --> Preview["Studio 内预览"]
+    Project --> Export["导出的独立应用"]
+    Preview --> Surface["RuntimeSurface"]
+    Export --> Surface
+    Surface <-->|"数据绑定与命令"| Context["RuntimeContext"]
+    Context <-->|"数据点与报警状态"| Data["ProjectData"]
+    Context <-->|"连接和子通道"| Hub["CommHub"]
+    Hub <-->|"消息与报文"| Links["串口、TCP、UDP、MQTT、CAN"]
+    Context <-->|"PLC 读写"| S7["经典 S7 客户端"]
 ```
-src/core      fhmi_core     工程模型、控件元数据、协议解析、数据绑定、命令编码、CAN 信号 / DBC / 位时序（只依赖 Qt Core）
-src/comm      fhmi_comm     Link 接口 + 串口 / TCP 客户端 / TCP 服务端 / MQTT / UDP / CAN（src/comm/can：PCAN、ZLG、SocketCAN、slcan），CommHub 汇总所有链路
-src/runtime   fhmi_runtime  基于 FluentQtWidgets 的运行时控件、RuntimeSurface、绑定引擎
+
+接收数据携带连接 ID，适用时还带 TCP 对端地址或 MQTT Topic 等子通道。绑定选择接收来源，命令独立选择发送目标。`ProjectData` 计算共享数据点、表达式和报警规则。CAN 卡片通过各通道的后台会话访问适配器，`CanRecorder` 按所选连接分段写入 CSV。
+
+```
+src/core      fhmi_core     工程模型、控件注册、协议解析、数据来源与路由类型、命令编码、CAN 信号与位时序
+src/comm      fhmi_comm     CommHub 与各协议链路、CAN 会话与适配器后端、经典 S7 客户端
+src/runtime   fhmi_runtime  FluentQtWidgets 运行控件、RuntimeSurface、RuntimeContext、绑定、工程数据、报警与 CAN 记录
 src/designer  fhmi_designer 画布（QGraphicsScene）、控件面板、属性编辑器、对齐与容器嵌套
 src/studio    FluentHMIStudio   设计器应用：界面设计 / 预览运行 / 设置，导出服务
 src/player    FluentHMIRuntime  导出应用的运行器：读取自身旁边（或 .app 内）的 project.uidp 和 appearance.json
 tools         uidp_reference    从控件注册表重新生成 docs/uidp-widgets.md 和 docs/uidp-format.md 末尾的控件一览
 ```
-
-设计画布上显示的就是真实的运行时控件，套在 QGraphicsProxyWidget 里且不响应鼠标。预览和导出应用把同一批控件挂到 RuntimeContext 上，由它接收链路数据、执行绑定、发送命令。
 
 ## 构建
 
@@ -203,10 +231,10 @@ FluentHMIStudio --export <输出目录> <工程.uidp>
 
 设置页的“语言”可选跟随系统、简体中文或 English，重启 Studio 后生效。跟随系统时，中文系统显示简体中文，其他系统显示英文；导出的应用设为跟随系统时，跟随它所在电脑的系统语言。
 
-运行器可以把整个工程画面渲染成图片，`docs/images` 里的控件一览就是这样生成的：
+运行器可以把控件一览工程渲染为图片。设置界面语言后，在源码目录运行以下命令。
 
 ```bash
-FluentHMIRuntime <工程.uidp> --theme dark --screenshot widgets-dark.png
+FluentHMIRuntime docs/images/widgets.uidp --theme dark --screenshot widgets-dark.png
 ```
 
 ## 在线更新
@@ -234,9 +262,11 @@ python3 scripts/package.py --build-dir build/release --output-dir dist
 
 macOS 生成 `FluentHMI Studio.app`，运行器位于 `Contents/Helpers/FluentHMIRuntime.app`；Windows 生成 `FluentHMI-Studio/`，Studio 和运行器两个 exe 在同一目录；Linux 生成一个 .deb，把同样的平铺目录装成 `/opt/FluentHMIStudio`，Qt 的库在 `lib/`，插件在 `plugins/`，另有启动脚本 `/usr/bin/fluenthmi-studio`、桌面项和图标。包里只有一份 Qt：macOS 上 Qt 放在运行器里，Studio 通过 rpath 和 `qt.conf` 使用它；Windows 和 Linux 上两者共用目录里的 Qt 库和插件，`runtime-files.txt` 记录运行器需要的文件。Linux 上两个程序通过 RUNPATH（`$ORIGIN/lib`，用 patchelf 设置）找到 `lib/`，精简系统常缺的 X11 辅助库和 Qt 的库放在一起，所以导出的应用在什么都没装的系统上也能运行。导出应用时只复制运行器及其 Qt，导出的应用因此可以直接拷到别的电脑上运行。脚本最后会用打包好的 Studio 导出 `examples/demo.uidp`，再以 `--check` 启动导出的应用，任何一步失败都不会产出压缩包。在 macOS 上它还会检查没有任何库仍从构建机的 Qt 目录加载，并用 `DYLD_PRINT_LIBRARIES` 确认 Studio 和导出的应用运行时只加载系统库和包内的库。Linux 上用 RUNPATH 和 `ldd` 做同样的检查（不能缺任何库），运行时用 `LD_DEBUG=libs`，检查的是从做好的 .deb 解出的 Studio，以及从 tar.gz 解出、用 `start.sh --check` 启动的导出应用；它启动的程序需要显示环境，所以要在 `xvfb-run -a` 下或桌面会话里运行。产物为 zip 加 `.sha256`（Linux 上是 .deb 加 `.sha256`）；macOS 只做了 ad hoc 签名，没有 Developer ID 签名和公证。
 
-发布新版本：修改 `CMakeLists.txt` 中 `project(... VERSION ...)`，可选地添加 `docs/release-notes/vX.Y.Z.md`，然后推送 `vX.Y.Z` 标签。`Release` 工作流会在 Windows、macOS（universal）和 Linux（x64 和 arm64，在 Ubuntu 24.04 上）上构建、测试、打包。对每个 .deb，它检查包名、版本、架构和依赖，让 apt 解析依赖，安装后用它导出示例工程，再在只装了上面所列系统库的干净 Ubuntu 24.04 容器里运行这个导出的应用。全部通过后才发布 GitHub Release。手动运行，或者由修改了打包的 pull request 触发时，只打包和检查，不发布。
+发布新版本时，修改 `CMakeLists.txt` 中的 `project(... VERSION ...)`，按需在 `docs/release-notes/` 添加对应说明，再推送与版本一致的标签，例如 `v0.8` 或 `v0.7.0`。`Release` 工作流会在 Windows、macOS（universal）和 Linux（x64 和 arm64，在 Ubuntu 24.04 上）上构建、测试、打包。对每个 .deb，它检查包名、版本、架构和依赖，让 apt 解析依赖，安装后用它导出示例工程，再在只装了上面所列系统库的干净 Ubuntu 24.04 容器里运行这个导出的应用。全部通过后才发布 GitHub Release。手动运行，或者由修改了打包的 pull request 触发时，只打包和检查，不发布。
 
-## 当前状态（0.7.0）
+## 当前状态（0.8）
+
+0.8 之前版本保存的工程在 0.8 中打开时保持原有默认行为。显式多通道路由、工程数据与报警等功能使用 UIDP 1.2 或 1.3，需要 FluentHMI Studio 0.8 或更高版本；仅使用原有 UIDP 1.0／1.1 功能时仍保存为对应格式。各功能的格式要求见[工程格式说明](docs/uidp-format.md)。
 
 已完成：111 种控件，含 25 种工业设备、12 种仪表、13 种汽车电子、14 种电子 DIY 和14 种嵌入式控件、拖拽设计、网格吸附、缩放、对齐与分布、撤销 / 重做、复制 / 粘贴（剪贴板格式与 Python 版互通）、容器嵌套（水平 / 垂直 / 弹性 / 卡片 / 选项卡）、属性与数据绑定编辑、保存 / 打开 / 另存为（相对图片路径随工程目录迁移）、串口 / TCP / MQTT / UDP / CAN / 经典 S7 预览、导出独立应用（可用工程自己的图标）、实时曲线的完整历史记录、游标和 CSV/JSON 保存 / 加载对比、CAN 报文汇总与滚动日志、最大保留数量和 CSV 导出、Windows、macOS 与 Linux（x64、arm64 .deb）打包、浅色 / 深色主题、全部 Fluent 风格滚动条、在线更新（检查、下载校验、替换并重启）、按地址命名的 Modbus 绑定与自动轮询、带长度字段和校验的二进制帧、可配结束符和编码的文本解析、Modbus ASCII。
 

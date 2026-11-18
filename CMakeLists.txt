@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     FluentHMIStudio
-    VERSION 0.7.0
+    VERSION 0.8
     DESCRIPTION "Visual HMI designer for hardware engineers, built on FluentQtWidgets"
     HOMEPAGE_URL "https://github.com/txp666/FluentHMI-Studio"
     LANGUAGES CXX
@@ -17,6 +17,14 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 option(FHMI_BUILD_TESTS "Build unit tests" ON)
+option(FHMI_CAN_DIAGNOSTICS "Trace CAN driver calls and disable periodic bus-state queries by default" OFF)
+set(FHMI_BUILD_LABEL "" CACHE STRING "Optional label for a local build")
+set(FHMI_APPLICATION_VERSION "${PROJECT_VERSION}")
+if(FHMI_CAN_DIAGNOSTICS)
+    string(APPEND FHMI_APPLICATION_VERSION "-can-diagnostics")
+elseif(FHMI_BUILD_LABEL)
+    string(APPEND FHMI_APPLICATION_VERSION "-${FHMI_BUILD_LABEL}")
+endif()
 
 set(FLUENTQTWIDGETS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/FluentQtWidgets" CACHE PATH
     "Path to a FluentQtWidgets checkout")
@@ -80,6 +88,10 @@ add_library(fhmi_core STATIC
     src/core/command_encoder.h
     src/core/dbc.cpp
     src/core/dbc.h
+    src/core/value_text.cpp
+    src/core/value_text.h
+    src/core/project_logic.cpp
+    src/core/project_logic.h
     src/core/expression.cpp
     src/core/expression.h
     src/core/gbk_table.cpp
@@ -110,8 +122,16 @@ target_link_libraries(fhmi_core PUBLIC Qt6::Core)
 # ---------------------------------------------------------------------------
 add_library(fhmi_comm STATIC
     src/comm/s7/s7_client.h src/comm/s7/s7_client.cpp
+    src/comm/can/can_discovery.cpp
+    src/comm/can/can_discovery.h
     src/comm/can/can_backend.cpp
     src/comm/can/can_backend.h
+    src/comm/can/can_session.cpp
+    src/comm/can/can_session.h
+    src/comm/can/can_diagnostics.cpp
+    src/comm/can/can_diagnostics.h
+    src/comm/can/can_initial_state.cpp
+    src/comm/can/can_initial_state.h
     src/comm/can/can_link.cpp
     src/comm/can/can_link.h
     src/comm/can/can_polling_backend.cpp
@@ -126,6 +146,9 @@ add_library(fhmi_comm STATIC
     src/comm/can/zlg_api.h
     src/comm/can/zlg_backend.cpp
     src/comm/can/zlg_backend.h
+    src/comm/can/zlg_status_internal.h
+    src/comm/can/zlg_timing.cpp
+    src/comm/can/zlg_timing.h
     src/comm/comm_hub.cpp
     src/comm/comm_hub.h
     src/comm/link.cpp
@@ -144,6 +167,11 @@ add_library(fhmi_comm STATIC
     src/comm/udp_link.h
 )
 target_link_libraries(fhmi_comm PUBLIC fhmi_core Qt6::Network Qt6::SerialPort PRIVATE snap7)
+target_compile_definitions(fhmi_comm PUBLIC
+    $<$<BOOL:${FHMI_CAN_DIAGNOSTICS}>:FHMI_CAN_DIAGNOSTICS=1>)
+if(WIN32)
+    target_link_libraries(fhmi_comm PRIVATE setupapi)
+endif()
 # SocketCAN needs the Linux kernel's CAN headers. The PCAN and ZLG backends build everywhere (they only load their
 # vendor libraries at connect time); CanBackend::create() offers each where its vendor supports it.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -160,10 +188,20 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/industrial_widget.h
     src/runtime/appearance.cpp
     src/runtime/appearance.h
+    src/runtime/app_dialog.cpp
+    src/runtime/app_dialog.h
+    src/runtime/date_time_input.cpp
+    src/runtime/date_time_input.h
+    src/runtime/field_help.cpp
+    src/runtime/field_help.h
     src/runtime/hmi_widget.cpp
     src/runtime/hmi_widget.h
     src/runtime/modbus_poller.cpp
     src/runtime/modbus_poller.h
+    src/runtime/can_recorder.cpp
+    src/runtime/can_recorder.h
+    src/runtime/project_data.cpp
+    src/runtime/project_data.h
     src/runtime/runtime_context.cpp
     src/runtime/runtime_context.h
     src/runtime/runtime_surface.cpp
@@ -174,10 +212,14 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/basic_widgets.h
     src/runtime/widgets/can_widgets.cpp
     src/runtime/widgets/can_widgets.h
+    src/runtime/widgets/can_timing_dialog.cpp
+    src/runtime/widgets/can_timing_dialog.h
     src/runtime/widgets/container_widgets.cpp
     src/runtime/widgets/container_widgets.h
     src/runtime/widgets/data_widgets.cpp
     src/runtime/widgets/data_widgets.h
+    src/runtime/widgets/alarm_widgets.cpp
+    src/runtime/widgets/alarm_widgets.h
     src/runtime/widgets/display_widgets.cpp
     src/runtime/widgets/display_widgets.h
     src/runtime/widgets/link_cards.cpp
@@ -193,6 +235,8 @@ add_library(fhmi_designer STATIC
     src/designer/canvas_item.h
     src/designer/design_scene.cpp
     src/designer/design_scene.h
+    src/designer/project_logic_dialog.cpp
+    src/designer/project_logic_dialog.h
     src/designer/property_editor.cpp
     src/designer/property_editor.h
     src/designer/widget_palette.cpp
@@ -210,7 +254,7 @@ add_executable(FluentHMIRuntime
     src/player/player_window.h
 )
 target_link_libraries(FluentHMIRuntime PRIVATE fhmi_runtime)
-target_compile_definitions(FluentHMIRuntime PRIVATE FHMI_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(FluentHMIRuntime PRIVATE FHMI_VERSION="${FHMI_APPLICATION_VERSION}")
 set_target_properties(FluentHMIRuntime PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE TRUE
@@ -250,7 +294,7 @@ add_executable(FluentHMIStudio
 )
 target_link_libraries(FluentHMIStudio PRIVATE fhmi_designer)
 target_compile_definitions(FluentHMIStudio PRIVATE
-    FHMI_VERSION="${PROJECT_VERSION}"
+    FHMI_VERSION="${FHMI_APPLICATION_VERSION}"
     FHMI_RUNTIME_BUILD_PATH="$<TARGET_FILE:FluentHMIRuntime>"
 )
 foreach(target IN ITEMS fhmi_core fhmi_comm fhmi_runtime fhmi_designer FluentHMIRuntime FluentHMIStudio)
@@ -307,6 +351,11 @@ foreach(target IN ITEMS FluentHMIStudio FluentHMIRuntime)
     elseif(WIN32)
         set(FHMI_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/resources/logo.ico")
         set(FHMI_TARGET ${target})
+        # Windows numeric version resources need a patch component even for X.Y versions.
+        set(FHMI_WINDOWS_PATCH "${PROJECT_VERSION_PATCH}")
+        if(FHMI_WINDOWS_PATCH STREQUAL "")
+            set(FHMI_WINDOWS_PATCH 0)
+        endif()
         if(target STREQUAL "FluentHMIStudio")
             set(FHMI_DESCRIPTION "FluentHMI Studio")
         else()
@@ -343,6 +392,21 @@ if(FHMI_BUILD_TESTS)
     target_link_libraries(tst_can PRIVATE fhmi_comm Qt6::Test)
     target_compile_definitions(tst_can PRIVATE FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME can COMMAND tst_can)
+    add_executable(tst_can_initial_state tests/tst_can_initial_state.cpp)
+    target_link_libraries(tst_can_initial_state PRIVATE fhmi_comm Qt6::Test)
+    add_test(NAME can_initial_state COMMAND tst_can_initial_state)
+    add_executable(tst_zlg_status tests/tst_zlg_status.cpp)
+    target_link_libraries(tst_zlg_status PRIVATE fhmi_comm Qt6::Test)
+    add_test(NAME zlg_status COMMAND tst_zlg_status)
+    add_executable(tst_zlg_timing tests/tst_zlg_timing.cpp)
+    target_link_libraries(tst_zlg_timing PRIVATE fhmi_comm Qt6::Test)
+    add_test(NAME zlg_timing COMMAND tst_zlg_timing)
+    if(FHMI_CAN_DIAGNOSTICS)
+        add_executable(tst_can_diagnostics tests/tst_can_diagnostics.cpp)
+        target_link_libraries(tst_can_diagnostics PRIVATE fhmi_comm Qt6::Test)
+        add_test(NAME can_diagnostics COMMAND tst_can_diagnostics)
+        set_tests_properties(can_diagnostics PROPERTIES TIMEOUT 30)
+    endif()
 
     add_executable(tst_mqtt tests/tst_mqtt.cpp)
     target_link_libraries(tst_mqtt PRIVATE fhmi_comm Qt6::Test)
@@ -362,7 +426,7 @@ if(FHMI_BUILD_TESTS)
     add_test(NAME industrial COMMAND tst_industrial)
 
     add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp src/studio/designer_page.cpp
-        src/player/player_window.cpp resources/widget_icons.qrc)
+        src/player/player_window.cpp resources/app.qrc resources/widget_icons.qrc)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)
     target_compile_definitions(tst_runtime PRIVATE
         FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"

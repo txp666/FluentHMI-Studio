@@ -121,7 +121,7 @@ void MqttLink::close()
     m_socket.abort();
     m_socket.blockSignals(false);
     m_decoder.reset();
-    m_parsers.clear();
+    dropParsers();
     m_pendingSubscriptions.clear();
     m_inboundQos2.clear();
     m_outbound.clear();
@@ -149,14 +149,32 @@ bool MqttLink::sendPacket(const QByteArray &packet)
     return m_socket.state() == QAbstractSocket::ConnectedState && m_socket.write(packet) == packet.size();
 }
 
+void MqttLink::dropParsers()
+{
+    for (const auto &parser : std::as_const(m_parsers)) dropStream(parser.get());
+    m_parsers.clear();
+}
+
 qint64 MqttLink::writeBytes(const QByteArray &bytes)
 {
-    if (m_settings.publishTopic.isEmpty()) {
+    return writeTo(bytes, m_settings.publishTopic);
+}
+
+bool MqttLink::canSendTo(const QString &endpoint) const
+{
+    const QString &topic = endpoint.isEmpty() ? m_settings.publishTopic : endpoint;
+    return m_up && !topic.isEmpty() && !topic.contains(QLatin1Char('+')) && !topic.contains(QLatin1Char('#'));
+}
+
+qint64 MqttLink::writeTo(const QByteArray &bytes, const QString &endpoint)
+{
+    const QString topic = endpoint.isEmpty() ? m_settings.publishTopic : endpoint;
+    if (!canSendTo(topic)) {
         emit errorOccurred(tr("发送失败: 未设置发布主题"));
         return WriteFailureReported;
     }
     Mqtt::PublishMessage message;
-    message.topic = m_settings.publishTopic;
+    message.topic = topic;
     message.payload = bytes;
     message.qos = m_settings.qos;
     if (message.qos > 0) {
@@ -193,7 +211,7 @@ void MqttLink::handlePacket(const Mqtt::Packet &packet)
         m_up = true;
         m_everUp = true;
         m_reconnectDelayMs = 1000;
-        m_parsers.clear();
+        dropParsers();
         if (!m_settings.topics.isEmpty()) {
             const quint16 id = nextPacketId();
             m_pendingSubscriptions.insert(id, m_settings.topics);
@@ -262,20 +280,22 @@ void MqttLink::handleMessage(const Mqtt::PublishMessage &message)
     auto it = m_parsers.find(message.topic);
     if (it == m_parsers.end()) {
         if (m_parsers.size() >= kMaxTopicParsers) {
-            m_parsers.clear();
+            dropParsers();
         }
-        it = m_parsers.insert(message.topic, std::shared_ptr<Parser>(createStreamParser()));
+        it = m_parsers.insert(message.topic, std::shared_ptr<Parser>(createStreamParser(message.topic)));
+        registerStream(it->get(), message.topic);
     }
     const std::shared_ptr<Parser> parser = *it; // a slot may reconnect and clear m_parsers
     if (!parser) {
-        emit rawReceived(message.payload);
+        emit rawReceived(message.payload, dataSource(parser.get()));
         return;
     }
+    const DataSource source = dataSource(parser.get());
     // Each MQTT message is a whole record: a line parser gets its terminator if it is missing.
     const QByteArray terminator = parserType() == QLatin1String("line") ? lineTerminator(parserConfig()) : QByteArray();
-    const auto report = [this, &message, &parser, &terminator](const QList<QByteArray> &units) {
+    const auto report = [this, &message, &parser, &terminator, source](const QList<QByteArray> &units) {
         for (const QByteArray &unit : units) {
-            emit rawReceived(unit);
+            emit rawReceived(unit, source);
             QByteArray data = unit;
             if (!terminator.isEmpty() && !data.endsWith(terminator)) {
                 data.append(terminator);
@@ -284,7 +304,7 @@ void MqttLink::handleMessage(const Mqtt::PublishMessage &message)
                 if (parsed.size() == 1 && parsed.contains(QStringLiteral("ch0"))) {
                     parsed.insert(message.topic, parsed.value(QStringLiteral("ch0")));
                 }
-                emit messageReceived(parsed);
+                emit messageReceived(parsed, source);
             }
         }
     };
@@ -337,7 +357,7 @@ void MqttLink::connectionLost(const QString &reason)
     }
     m_up = false;
     m_pingTimer.stop();
-    m_parsers.clear();
+    dropParsers();
     m_pendingSubscriptions.clear();
     m_inboundQos2.clear();
     m_outbound.clear();

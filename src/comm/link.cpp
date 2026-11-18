@@ -11,18 +11,86 @@ namespace fhmi {
 Link::Link(QObject *parent)
     : QObject(parent), m_parser(createParser(m_parserType, m_parserConfig, nullptr, m_modbusRequests))
 {
+    qRegisterMetaType<DataSource>();
+    connect(this, &Link::connectedChanged, this, [this](bool connected) {
+        if (!connected) {
+            const auto streams = std::exchange(m_streams, {});
+            for (const auto &stream : streams) emit streamClosed({m_connectionId, stream.id, stream.endpoint, textEncoding(), isCan(), false});
+            m_endpointRequests.clear();
+            for (auto master : std::as_const(m_endpointMasters)) if (master) master->deleteLater();
+            m_endpointMasters.clear();
+            *m_modbusRequests = ModbusRequests{};
+            if (m_parser) m_parser->reset();
+        }
+    });
     m_modbusMaster = new ModbusMaster(this); // first to see each message, so a reply sends the next request
 }
 
 Link::~Link() = default;
 
-bool Link::send(const QByteArray &bytes)
+std::shared_ptr<ModbusRequests> Link::requestsFor(const QString &endpoint)
 {
-    if (!canSend() || bytes.isEmpty()) {
+    if (endpoint.isEmpty() || !addressedModbusReplies()) return m_modbusRequests;
+    auto &requests = m_endpointRequests[endpoint];
+    if (!requests) requests = std::make_shared<ModbusRequests>();
+    return requests;
+}
+
+ModbusMaster *Link::modbusMaster(const QString &endpoint)
+{
+    if (endpoint.isEmpty() || !addressedModbusReplies()) return m_modbusMaster;
+    auto &master = m_endpointMasters[endpoint];
+    if (!master) master = new ModbusMaster(this, endpoint);
+    return master;
+}
+
+DataSource Link::dataSource(Parser *parser)
+{
+    const Stream &stream = m_streams[parser ? parser : m_parser.get()];
+    return {m_connectionId, stream.id, stream.endpoint, textEncoding(), isCan(), false};
+}
+
+bool Link::ownsStream(quint64 streamId, const QString &endpoint) const
+{
+    for (const auto &stream : m_streams) {
+        if (stream.id == streamId && (endpoint.isEmpty() || endpoint == stream.endpoint))
+            return true;
+    }
+    return false;
+}
+
+bool Link::canSendTo(const QString &endpoint) const
+{
+    return isConnected() && canSend() && (endpoint.isEmpty() || sendEndpoints().contains(endpoint));
+}
+
+void Link::registerStream(Parser *parser, const QString &endpoint)
+{
+    dropStream(parser);
+    m_streams.insert(parser, Stream{nextDataStream(), endpoint});
+}
+
+qint64 Link::writeTo(const QByteArray &bytes, const QString &endpoint)
+{
+    if (!endpoint.isEmpty()) {
+        emit errorOccurred(tr("此连接没有可指定的子通道"));
+        return WriteFailureReported;
+    }
+    return writeBytes(bytes);
+}
+
+bool Link::send(const QByteArray &bytes, const QString &endpoint)
+{
+    if (!isConnected() || bytes.isEmpty()) {
         return false;
     }
-    m_modbusRequests->noteFrame(bytes, m_parserType); // before a fast reply can arrive
-    const qint64 written = writeBytes(bytes);
+    // Each peer owns a request book; unrelated replies must never consume its pending read.
+    const auto targets = endpoint.isEmpty() ? sendEndpoints() : QStringList{endpoint};
+    if (parsesModbus()) {
+        for (const QString &target : targets)
+            requestsFor(target)->noteFrame(bytes, m_parserType);
+    }
+    const qint64 written = writeTo(bytes, endpoint);
     if (written == WriteFailureReported) {
         return false;
     }
@@ -30,11 +98,18 @@ bool Link::send(const QByteArray &bytes)
         emit errorOccurred(written < 0 ? tr("写入失败") : tr("只写入了 %1/%2 字节").arg(written).arg(bytes.size()));
         return false;
     }
-    emit bytesSent(bytes);
+    for (const auto &target : targets) {
+        auto source = dataSource();
+        source.endpoint = target;
+        for (auto it = m_streams.cbegin(); it != m_streams.cend(); ++it) {
+            if (it->endpoint == target) { source.stream = it->id; break; }
+        }
+        emit bytesSent(bytes, source);
+    }
     return true;
 }
 
-std::unique_ptr<Parser> Link::makeParser(const QString &type, const QJsonObject &config, QString *error) const
+std::unique_ptr<Parser> Link::makeParser(const QString &type, const QJsonObject &config, QString *error, const std::shared_ptr<ModbusRequests> &requests) const
 {
     if (m_slave && type == QLatin1String("modbus")) {
         return std::make_unique<ModbusRtuRequestFramer>();
@@ -42,12 +117,12 @@ std::unique_ptr<Parser> Link::makeParser(const QString &type, const QJsonObject 
     if (m_slave && type == QLatin1String("modbus_tcp")) {
         return std::make_unique<ModbusTcpRequestFramer>();
     }
-    return createParser(type, config, error, m_modbusRequests);
+    return createParser(type, config, error, requests);
 }
 
 bool Link::setParser(const QString &type, const QJsonObject &config, QString *error)
 {
-    auto parser = makeParser(type, config, error);
+    auto parser = makeParser(type, config, error, m_modbusRequests);
     if (!parser) {
         return false;
     }
@@ -86,9 +161,9 @@ bool Link::answersModbus() const
     return m_slave && (m_parserType == QLatin1String("modbus") || m_parserType == QLatin1String("modbus_tcp"));
 }
 
-std::unique_ptr<Parser> Link::createStreamParser() const
+std::unique_ptr<Parser> Link::createStreamParser(const QString &endpoint)
 {
-    return makeParser(m_parserType, m_parserConfig, nullptr);
+    return makeParser(m_parserType, m_parserConfig, nullptr, requestsFor(endpoint));
 }
 
 void Link::deliver(Parser *parser, const QByteArray &bytes)
@@ -97,7 +172,7 @@ void Link::deliver(Parser *parser, const QByteArray &bytes)
         return;
     }
     if (!parser) {
-        emit rawReceived(bytes);
+        emit rawReceived(bytes, dataSource(parser));
         return;
     }
     if (const int idle = parser->idleTimeout(); idle > 0) {
@@ -121,26 +196,36 @@ void Link::deliverUnits(Parser *parser, const QList<QByteArray> &units)
             answer(parser, unit);
         }
         for (const QByteArray &unit : units) {
-            emit rawReceived(unit);
+            emit rawReceived(unit, dataSource(parser));
         }
         sendNextReply();
         return;
     }
-    // Everything is parsed before anything is emitted: a slot may replace or drop the parser.
+    // Snapshot source as well: a callback can disconnect and replace this stream.
+    const DataSource source = dataSource(parser);
     QList<QList<Message>> messages;
     for (const QByteArray &unit : units) {
         messages.append(parser->parse(unit));
     }
     for (int i = 0; i < units.size(); ++i) {
-        emit rawReceived(units.at(i));
+        emit rawReceived(units.at(i), source);
         for (const Message &message : messages.at(i)) {
-            emit messageReceived(message);
+            emit messageReceived(message, source);
         }
     }
 }
 
 void Link::dropStream(Parser *parser)
 {
+    if (m_streams.contains(parser)) {
+        const auto source = dataSource(parser);
+        m_streams.remove(parser);
+        emit streamClosed(source);
+        if (!source.endpoint.isEmpty()) {
+            m_endpointRequests.remove(source.endpoint);
+            if (auto master = m_endpointMasters.take(source.endpoint)) master->deleteLater();
+        }
+    }
     if (QTimer *timer = m_idleTimers.take(parser)) {
         timer->stop();
         timer->deleteLater(); // this may run inside the timer's own timeout
@@ -179,7 +264,7 @@ void Link::sendNextReply()
             }
             const PendingReply reply = m_replies.takeFirst();
             if (writeReply(reply.stream, reply.bytes) == reply.bytes.size()) {
-                emit bytesSent(reply.bytes);
+                emit bytesSent(reply.bytes, dataSource(reply.stream));
                 if (m_slave) {
                     m_slave->replied(*reply.answer);
                 }
@@ -200,13 +285,9 @@ void Link::dropReplies(Parser *parser)
 
 void Link::resetDefaultParser()
 {
-    dropReplies(m_parser.get());
-    if (m_parser) {
+    dropStream(m_parser.get());
+    if (m_parser)
         m_parser->reset();
-        if (QTimer *timer = m_idleTimers.value(m_parser.get())) {
-            timer->stop(); // nothing left to flush
-        }
-    }
 }
 
 } // namespace fhmi

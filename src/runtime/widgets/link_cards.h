@@ -2,6 +2,7 @@
 
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
+#include "runtime/ui_helpers.h"
 
 class QGridLayout;
 
@@ -42,6 +43,7 @@ class LinkCardBase : public HmiWidget
 {
   public:
     LinkCardBase(const WidgetMeta &meta, QWidget *parent);
+    bool fitsContentHeight() const override { return true; }
 
   protected:
     void paintEvent(QPaintEvent *event) override;
@@ -67,6 +69,8 @@ class LinkCardBase : public HmiWidget
     void finishFields();
     // The button at `column` of a single-row strip, then the same minimum height.
     void finishStrip(int column);
+    // One flyout for a repeated driver error while its previous notification is still visible.
+    void notifyError(const QString &title, const QString &message, int durationMs = 4000);
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_status = nullptr;
@@ -77,8 +81,6 @@ class LinkCardBase : public HmiWidget
     QList<QWidget *> m_fieldLabels;
 
   private:
-    // The card never gets shorter than its visible rows need, so they never overlap.
-    void updateMinimumHeight();
     ModbusPoller::Settings pollingSettings() const;
     // The connection text, followed by the poller's status while the link is connected and parses Modbus.
     void showStatus();
@@ -89,6 +91,7 @@ class LinkCardBase : public HmiWidget
     bool m_connected = false;
     QString m_connection; // what the status line says about the connection
     QString m_connectionTip;
+    ConnectionErrorNotice m_errorNotice;
 };
 
 class SerialConfigCardWidget : public LinkCardBase

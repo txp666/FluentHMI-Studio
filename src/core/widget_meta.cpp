@@ -132,8 +132,13 @@ QList<WidgetCategory> WidgetRegistry::categories() const
     return out;
 }
 
-QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject props, const QString &changed)
+QJsonObject normalizedWidgetProperties(const QString &typeName, QJsonObject props, const QString &changed)
 {
+    if (typeName == QLatin1String("CanMonitor") && !props.contains(QStringLiteral("autoSaveRows"))) {
+        // Freeze the old shared limit once; later display-limit edits must not change recording.
+        props.insert(QStringLiteral("autoSaveRows"),
+                     std::clamp(props.value(QStringLiteral("maxMessages")).toInt(1000), 1, 50000));
+    }
     const auto *meta = WidgetRegistry::instance().find(typeName);
     if (meta && isIndustrialCategory(meta->category) && meta->prop(QStringLiteral("minimum")) && meta->prop(QStringLiteral("maximum"))) {
         const auto defaults = meta->defaultProperties();
@@ -169,7 +174,9 @@ QJsonObject normalizedRangeProperties(const QString &typeName, QJsonObject props
     }
     const double fallback = typeName == QLatin1String("Slider") ? 50 : 0;
     const double value = std::clamp(props.value(QStringLiteral("value")).toDouble(fallback), lo, hi);
-    if (isGauge) {
+    const bool decimalInput = typeName == QLatin1String("SpinBox") &&
+                              props.value(QStringLiteral("numberMode")).toString() == QStringLiteral("小数"); // i18n: value
+    if (isGauge || decimalInput) {
         props.insert(QStringLiteral("minimum"), lo);
         props.insert(QStringLiteral("maximum"), hi);
         props.insert(QStringLiteral("value"), value);

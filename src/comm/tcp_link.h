@@ -52,6 +52,7 @@ class TcpServerLink : public Link
     QString description() const override;
     bool isConnected() const override; // listening
     bool canSend() const override { return !m_clients.isEmpty(); }
+    QStringList sendEndpoints() const override;
     int clientCount() const { return int(m_clients.size()); }
 
   signals:
@@ -60,6 +61,7 @@ class TcpServerLink : public Link
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
     qint64 writeReply(Parser *parser, const QByteArray &bytes) override;
+    qint64 writeTo(const QByteArray &bytes, const QString &endpoint) override;
 
   private:
     void onNewConnection();

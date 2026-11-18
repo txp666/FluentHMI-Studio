@@ -188,6 +188,7 @@ QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
     QJsonObject binding{
         {QStringLiteral("parseMode"), field("parseMode", ParseMode::KeyValue)},
         {QStringLiteral("sourceCardId"), field("sourceCardId", QString())},
+        {QStringLiteral("sourceEndpoint"), field("sourceEndpoint", QString())},
         {QStringLiteral("s7"), field("s7", QJsonObject())},
         {QStringLiteral("expression"), field("expression", QString())},
         {QStringLiteral("key"), field("key", QString())},
@@ -321,10 +322,14 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     const QString key = binding.value(QStringLiteral("key")).toString();
     const QString jsonPath = binding.value(QStringLiteral("jsonPath")).toString();
     const auto can = mode == ParseMode::CanSignal ? canSignalOf(binding) : std::nullopt;
-    const bool configured = (mode == ParseMode::KeyValue && !key.isEmpty()) ||
-                            (mode == ParseMode::JsonPath && !jsonPath.isEmpty()) || mode == ParseMode::HexBytes ||
-                            mode == ParseMode::Modbus || (mode == ParseMode::S7 && S7::point(binding.value(QStringLiteral("s7")).toObject()).has_value()) || can.has_value();
-    if (!configured) {
+    const bool configured =
+        ((mode == ParseMode::KeyValue || mode == ParseMode::DataPoint) && !key.isEmpty()) ||
+        (mode == ParseMode::JsonPath && !jsonPath.isEmpty()) || mode == ParseMode::HexBytes ||
+        mode == ParseMode::Modbus ||
+        (mode == ParseMode::S7 && S7::point(binding.value(QStringLiteral("s7")).toObject()).has_value()) ||
+        can.has_value();
+    const QString endpoint = binding.value(QStringLiteral("sourceEndpoint")).toString();
+    if (!configured || (!endpoint.isEmpty() && !allowsRouteEndpoint(bindingRouteTransport(mode)))) {
         return std::nullopt;
     }
 
@@ -333,7 +338,9 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     const QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
 
     BindingEntry entry;
-    entry.sourceCardId = binding.value(QStringLiteral("sourceCardId")).toString();
+    entry.sourceCardId =
+        mode == ParseMode::DataPoint ? QString() : binding.value(QStringLiteral("sourceCardId")).toString();
+    entry.sourceEndpoint = mode == ParseMode::DataPoint ? QString() : endpoint;
     if (mode == ParseMode::S7) entry.s7 = S7::point(binding.value(QStringLiteral("s7")).toObject());
     entry.widgetId = widget.value(QStringLiteral("id")).toString();
     entry.typeName = type;
@@ -347,7 +354,6 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.expression = binding.value(QStringLiteral("expression")).toString();
     entry.frameHeader = parseHexOrEmpty(binding.value(QStringLiteral("frameHeader")).toString());
     entry.frameTail = parseHexOrEmpty(binding.value(QStringLiteral("frameTail")).toString());
-    entry.m_rawFrames = RawFrameBuffer(entry.frameHeader, entry.frameTail);
     entry.mbRegIndex = binding.value(QStringLiteral("mbRegIndex")).toInt(0);
     entry.mbSlaveFilter = binding.value(QStringLiteral("mbSlaveFilter")).toInt(-1);
     entry.mbDataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
@@ -378,7 +384,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
 
 QVariant BindingEntry::extractFromParsed(const Message &data) const
 {
-    if (parseMode == ParseMode::KeyValue) {
+    if (parseMode == ParseMode::KeyValue || parseMode == ParseMode::DataPoint) {
         return data.value(key);
     }
     if (parseMode == ParseMode::JsonPath) {
@@ -542,12 +548,14 @@ QVariant BindingEntry::extractFromRaw(const QByteArray &raw) const
     return double(floatFromBits(readValue<quint32>(bytes, be)));
 }
 
-QList<QVariant> BindingEntry::extractAllFromRaw(const QByteArray &raw)
+QList<QVariant> BindingEntry::extractAllFromRaw(const QByteArray &raw, quint64 stream, bool keepInvalid)
 {
     QList<QVariant> values;
-    for (const QByteArray &frame : m_rawFrames.feed(raw)) {
+    auto it = m_rawFrames.find(stream);
+    if (it == m_rawFrames.end()) it = m_rawFrames.insert(stream, RawFrameBuffer(frameHeader, frameTail));
+    for (const QByteArray &frame : it->feed(raw)) {
         const QVariant value = extractFromRaw(frame);
-        if (value.isValid()) {
+        if (value.isValid() || keepInvalid) {
             values.append(value);
         }
     }
@@ -565,7 +573,12 @@ QVariant BindingEntry::extractFromCan(const CanFrame &frame) const
 
 void BindingEntry::resetStream()
 {
-    m_rawFrames.reset();
+    m_rawFrames.clear();
+}
+
+void BindingEntry::resetStream(quint64 stream)
+{
+    m_rawFrames.remove(stream);
 }
 
 QVariant BindingEntry::resolvePath(const QVariant &root, const QString &path, bool *found)
@@ -636,6 +649,10 @@ std::optional<double> BindingEntry::chartSample(const QVariant &raw) const
 
 QVariant BindingEntry::formatValue(const QVariant &value) const
 {
+    // Numeric inputs own their precision; display formatting must not turn an
+    // integer input's feedback into a decimal string or round a decimal input twice.
+    if (typeName == QLatin1String("SpinBox"))
+        return value;
     if (propName != QLatin1String("text") && propName != QLatin1String("value")) {
         return value;
     }

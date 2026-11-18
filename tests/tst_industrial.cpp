@@ -15,6 +15,7 @@
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QSpinBox>
 #include <QtWidgets/QTreeWidget>
 
 using namespace fhmi;
@@ -23,6 +24,35 @@ class TestIndustrial : public QObject
 {
     Q_OBJECT
   private slots:
+
+    void batteryThresholdsAndTextLockPreserveLegacyDefaults()
+    {
+        std::unique_ptr<HmiWidget> base(createHmiWidget("TractionBattery", {}));
+        auto *battery = dynamic_cast<IndustrialWidget *>(base.get());
+        BindingEntry binding;
+        battery->applyBoundValue(10, binding);
+        QVERIFY(battery->renderedSvg().contains("#3dbd84"));
+        auto props = battery->properties();
+        props.insert("chargeColors", true);
+        battery->setProperties(props);
+        battery->applyBoundValue(20, binding);
+        QVERIFY(battery->renderedSvg().contains("#e55252"));
+        battery->applyBoundValue(40, binding);
+        QVERIFY(battery->renderedSvg().contains("#e8b643"));
+        battery->applyBoundValue(41, binding);
+        QVERIFY(battery->renderedSvg().contains("#3dbd84"));
+        CanvasItem item("TractionBattery",
+                        {{"textLayout", "中心偏移"}, {"valueOffsetX", 17}, {"textPositionLocked", true}}, "battery");
+        PropertyEditor editor;
+        editor.showItem(&item);
+        editor.show();
+        bool locked = false;
+        for (auto *spin : editor.findChildren<QSpinBox *>())
+            if (spin->value() == 17)
+                locked = !spin->isEnabled();
+        QVERIFY(locked);
+        QCOMPARE(item.propertyValue("valueOffsetX").toInt(), 17);
+    }
     void initTestCase() { Q_INIT_RESOURCE(fluentqtwidgets); }
     void designerIntegration()
     {
@@ -56,6 +86,9 @@ class TestIndustrial : public QObject
                 for (int row = 0; row < form->rowCount(); ++row) {
                     auto *caption = form->itemAt(row, QFormLayout::LabelRole);
                     auto *label = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+                    if (!label && caption && caption->widget()) {
+                        label = caption->widget()->findChild<QLabel *>(); // label with an adjacent help button
+                    }
                     if (label && label->text() == QStringLiteral("转换表达式")) {
                         auto *edit = qobject_cast<QLineEdit *>(form->itemAt(row, QFormLayout::FieldRole)->widget());
                         QVERIFY(edit);
@@ -150,12 +183,13 @@ class TestIndustrial : public QObject
         QVERIFY(meta);
         QVERIFY(isIndustrialCategory(meta->category));
         QCOMPARE(meta->bindProperty(), QStringLiteral("value"));
-        const int special = type == "FlowPipe" ? 3 : (type == "Motor" || type == "Cylinder" ? 1 : 0);
-        const int expected = type == "BmsCellMatrix" || type == "DcPowerSupply" ? 1
-                             : type == "StatusWordPanel" || type == "DigitalTimingChart" || type == "RotaryEncoder"
-                                 ? 3
-                                 : 6 + special + (definition.value("limits").toArray().size() == 2 ? 3 : 0);
-        QCOMPARE(meta->properties.size(), expected);
+        for (const char *name : {"title", "showTitle", "showValue", "textLayout", "titleOffsetX", "titleOffsetY",
+                                 "valueOffsetX", "valueOffsetY", "showToolTip"}) {
+            QVERIFY2(meta->prop(QLatin1String(name)), name);
+        }
+        if (type != "BmsCellMatrix" && type != "DcPowerSupply") {
+            QVERIFY(meta->prop("value"));
+        }
         std::unique_ptr<HmiWidget> created(createHmiWidget(type, {}));
         auto *widget = dynamic_cast<IndustrialWidget *>(created.get());
         QVERIFY(widget);

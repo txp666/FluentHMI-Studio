@@ -1,59 +1,96 @@
+#include "comm/can/can_polling_backend.h"
+#include "comm/can/can_session.h"
 #include "comm/comm_hub.h"
 #include "comm/link.h"
+#include "comm/modbus_slave.h"
 #include "comm/tcp_link.h"
 #include "core/bit_profile.h"
+#include "core/i18n.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
 #include "player/player_window.h"
 #include "runtime/appearance.h"
+#include "runtime/can_recorder.h"
+#include "runtime/date_time_input.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
+#include "runtime/project_data.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
+#include "runtime/widgets/can_timing_dialog.h"
 #include "runtime/widgets/can_widgets.h"
+#include "runtime/widgets/container_widgets.h"
 #include "runtime/widgets/data_widgets.h"
 #include "runtime/widgets/display_widgets.h"
 #include "runtime/widgets/industrial_widget.h"
 #include "studio/designer_page.h"
 #include "studio/export_service.h"
+#include <QtCore/QThread>
 
 #include <FluentQtWidgets/Config.h>
+#include <FluentQtWidgets/DateTime/CalendarPicker.h>
+#include <FluentQtWidgets/DateTime/PickerBase.h>
+#include <FluentQtWidgets/Navigation/Pivot.h>
+#include <FluentQtWidgets/Navigation/SegmentedWidget.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
+#include <FluentQtWidgets/Widgets/InfoBadge.h>
+#include <FluentQtWidgets/Widgets/Menu.h>
+#include <FluentQtWidgets/Widgets/RealtimePlotWidget.h>
 #include <FluentQtWidgets/Widgets/Selection.h>
 #include <FluentQtWidgets/Widgets/Slider.h>
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
+#include <FluentQtWidgets/Widgets/TabView.h>
 
 #include <QtCore/QDirIterator>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QLockFile>
 #include <QtCore/QProcess>
+#include <QtCore/QSaveFile>
 #include <QtCore/QScopeGuard>
+#include <QtCore/QSemaphore>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QTimer>
+#include <QtCore/QTimeZone>
+#include <QtCore/QRegularExpression>
 #include <QtGui/QImage>
+#include <QtGui/QContextMenuEvent>
+#include <QtGui/QScreen>
+#include <QtGui/QClipboard>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 #include <QtTest/QAbstractItemModelTester>
 #include <QtTest/QtTest>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QButtonGroup>
+#include <QtWidgets/QDateTimeEdit>
+#include <QtWidgets/QDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QGraphicsView>
+#include <QtWidgets/QGraphicsProxyWidget>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QDoubleSpinBox>
+#include <QtWidgets/QTableWidget>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QScrollBar>
+#include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSpinBox>
+#include <QtWidgets/QTabBar>
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QTableView>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QToolButton>
 
+#include <algorithm>
 #include <tuple>
 
 using namespace fhmi;
@@ -224,7 +261,7 @@ QJsonArray normalized(const QJsonArray &widgets)
             widget.insert(QStringLiteral("children"), children);
         }
         widget.insert(QStringLiteral("properties"),
-                      normalizedRangeProperties(widget.value(QStringLiteral("type")).toString(),
+                      normalizedWidgetProperties(widget.value(QStringLiteral("type")).toString(),
                                                 widget.value(QStringLiteral("properties")).toObject()));
         out.append(widget);
     }
@@ -264,6 +301,9 @@ QWidget *fieldFor(QWidget *root, const QString &label)
         for (int row = 0; row < form->rowCount(); ++row) {
             QLayoutItem *caption = form->itemAt(row, QFormLayout::LabelRole);
             auto *text = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+            if (!text && caption && caption->widget()) {
+                text = caption->widget()->findChild<QLabel *>(); // a label with a help button beside it
+            }
             if (text && text->text() == label) {
                 QLayoutItem *field = form->itemAt(row, QFormLayout::FieldRole);
                 return field ? field->widget() : nullptr;
@@ -320,9 +360,646 @@ class TestRuntime : public QObject
     Q_OBJECT
 
   private slots:
+
+    void dataPointDialogRenamesAtomicallyAndSupportsUndo()
+    {
+        QTemporaryDir directory;
+        Project project;
+        QString error;
+        QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/14-工程数据与报警.uidp"), &project, &error), qPrintable(error));
+        auto points = project.logic.value("points").toArray();
+        points.append(QJsonObject{{"name", "Standalone"}, {"binding", QJsonObject{{"key", "standalone"}}}});
+        project.logic.insert("points", points);
+        project.widgets.append(QJsonObject{{"type", "RealtimeChart"}, {"id", "trend"},
+                                           {"properties", QJsonObject{{"_curve_0_parseMode", ParseMode::DataPoint},
+                                                                       {"_curve_0_key", "L1"}}}});
+        project.widgets.append(QJsonObject{{"type", "NumericDisplay"}, {"id", "standaloneDisplay"},
+                                           {"binding", QJsonObject{{"parseMode", ParseMode::DataPoint},
+                                                                   {"key", "Standalone"}}}});
+        const QString path = directory.filePath("rename.uidp");
+        QVERIFY2(project.save(path, &error), qPrintable(error));
+        DesignerPage page;
+        QVERIFY(page.openProject(path));
+        page.resize(1200, 800);
+        page.show();
+        auto *editor = page.findChild<PropertyEditor *>();
+        const auto before = page.snapshot().toJson();
+        QTimer::singleShot(0, &page, [&] {
+            auto *dialog = page.findChild<AppDialog *>(QStringLiteral("projectLogicDialog"));
+            QVERIFY(dialog);
+            const auto close = qScopeGuard([dialog] { dialog->reject(); });
+            auto *table = dialog->findChild<QTableWidget *>("projectDataPoints");
+            QVERIFY(table);
+            table->setCurrentCell(table->rowCount() - 1, 0);
+            for (auto *button : dialog->findChildren<QPushButton *>())
+                if (button->isVisible() && button->text() == QStringLiteral("删除所选"))
+                    button->click();
+            dialog->yesButton()->click();
+            const auto labels = dialog->findChildren<QLabel *>();
+            QVERIFY(std::any_of(labels.cbegin(), labels.cend(), [](const QLabel *label) {
+                return label->text().contains(QStringLiteral("standaloneDisplay"));
+            }));
+        });
+        editor->editProjectLogic();
+        QCOMPARE(page.snapshot().toJson(), before);
+        const auto edit = [&](bool accept) {
+            QTimer::singleShot(0, &page, [&, accept] {
+                auto *dialog = page.findChild<AppDialog *>(QStringLiteral("projectLogicDialog"));
+                QVERIFY(dialog);
+                const auto close = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+                auto *points = dialog->findChild<QTableWidget *>("projectDataPoints");
+                auto *alarms = dialog->findChild<QTableWidget *>("projectAlarms");
+                QVERIFY(points && alarms);
+                points->item(0, 0)->setText("L2");
+                QCOMPARE(points->item(0, 0)->text(), QStringLiteral("L1")); // collision is rejected before rewriting references
+                points->item(0, 0)->setText("设备A故障");
+                QVERIFY(points->item(3, 2)->text().contains(QStringLiteral("T[\"设备A故障\"]")));
+                points->item(3, 0)->setText("汇总故障");
+                QVERIFY(alarms->item(0, 1)->text().contains(QStringLiteral("T[\"汇总故障\"]")));
+                (accept ? dialog->yesButton() : dialog->cancelButton())->click();
+            });
+            editor->editProjectLogic();
+        };
+        edit(false);
+        QCOMPARE(page.snapshot().toJson(), before);
+        QVERIFY(!page.canUndo());
+        edit(true);
+        auto *scene = page.findChild<DesignScene *>();
+        QCOMPARE(scene->findItem("status")->binding().value("key").toString(), QStringLiteral("汇总故障"));
+        QCOMPARE(scene->findItem("trend")->propertyValue("_curve_0_key").toString(), QStringLiteral("设备A故障"));
+        const auto after = page.snapshot().toJson();
+        QVERIFY2(Project::validate(after, &error), qPrintable(error));
+        QVERIFY(page.canUndo());
+        page.undo();
+        QCOMPARE(page.snapshot().toJson(), before);
+        QVERIFY(!page.canUndo());
+        page.redo();
+        QCOMPARE(page.snapshot().toJson(), after);
+    }
+
+    void dataPointSelectorsShareChoicesAndKeepTypedBindings()
+    {
+        Project project;
+        project.logic = {{"points", QJsonArray{QJsonObject{{"name", "temperature"}}, QJsonObject{{"name", "fault"}}}}};
+        CanvasItem display("NumericDisplay", {}, "display");
+        display.setBinding({{"parseMode", ParseMode::DataPoint}, {"key", "old-name"}});
+        CanvasItem chart("RealtimeChart", {{"_curve_0_parseMode", ParseMode::DataPoint},
+                                            {"_curve_0_key", "temperature"}}, "chart");
+        PropertyEditor editor;
+        editor.setProject(&project);
+        editor.showItem(&display);
+        auto *key = qobject_cast<FluentQt::EditableComboBox *>(fieldFor(&editor, QStringLiteral("绑定字段")));
+        QVERIFY(key);
+        QCOMPARE(key->text(), QStringLiteral("old-name")); // Opening the form must not replace old/unlisted keys.
+        QCOMPARE(key->count(), 2);
+        editor.resize(420, 900);
+        editor.show();
+        key->dropButton()->click();
+        QVERIFY(key->dropMenu());
+        QVERIFY(key->dropMenu()->isVisible());
+        QCOMPARE(key->dropMenu()->menuActions().size(), 2);
+        key->dropMenu()->close();
+        key->setCurrentIndex(1);
+        QCOMPARE(display.binding().value("key").toString(), QStringLiteral("fault"));
+        key->setText("typed-name");
+        QCOMPARE(display.binding().value("key").toString(), QStringLiteral("typed-name"));
+        editor.showItem(&chart);
+        key = qobject_cast<FluentQt::EditableComboBox *>(fieldFor(&editor, QStringLiteral("匹配键")));
+        QVERIFY(key);
+        QCOMPARE(key->count(), 2);
+        QCOMPARE(key->text(), QStringLiteral("temperature"));
+        key->setCurrentIndex(1);
+        QCOMPARE(chart.propertyValue("_curve_0_key").toString(), QStringLiteral("fault"));
+        QCOMPARE(display.binding().value("key").toString(), QStringLiteral("typed-name"));
+    }
+
+    void projectDataRoutesAggregateAndKeepAlarmStateAcrossDisconnect()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        Project project;
+        project.logic = {
+            {"points",
+             QJsonArray{QJsonObject{{"name", "L1"}, {"binding", QJsonObject{{"key", "fault"}, {"sourceCardId", "A"}}}},
+                        QJsonObject{{"name", "L2"}, {"binding", QJsonObject{{"key", "fault"}, {"sourceCardId", "B"}}}},
+                        QJsonObject{{"name", "Any"}, {"expression", "T[\"L1\"] or T[\"L2\"]"}}}},
+            {"alarms", QJsonArray{QJsonObject{
+                           {"id", "fault"}, {"condition", "T[\"Any\"] != 0"}, {"level", 3}, {"text", "总故障"}}}}};
+        RuntimeContext context;
+        context.configureData(project);
+        context.projectData()->configure(project.logic, dir.filePath("history.json"));
+        auto display = std::unique_ptr<HmiWidget>(
+            createHmiWidget("NumericDisplay", {{"displayFormat", "枚举"}, {"textList", "0=正常\n1=故障|#d13438"}}));
+        context.registerWidget("status", display.get());
+        display->attach(&context);
+        context.addBinding(
+            *BindingEntry::fromWidget({{"id", "status"},
+                                       {"type", "NumericDisplay"},
+                                       {"binding", QJsonObject{{"parseMode", ParseMode::DataPoint}, {"key", "Any"}}}}));
+        FakeLink a, b;
+        context.hub()->addLink(&a, "A");
+        context.hub()->addLink(&b, "B");
+        context.setActive(true);
+        QSignalSpy raised(context.projectData(), &ProjectData::alarmRaised);
+        b.inject("fault=0\n");
+        QVERIFY(!context.projectData()->values().value("Any").isValid());
+        b.inject("fault=1\n");
+        QCOMPARE(raised.size(), 1);
+        QVERIFY(context.projectData()->alarms().first().known); // A is still unknown; B's known fault wins.
+        QVERIFY(context.projectData()->audible());
+        QVERIFY(context.projectData()->alarms().first().active);
+        a.inject("fault=0\n");
+        QCOMPARE(raised.size(), 1); // A must not overwrite B's fault.
+        b.setConnected(false);
+        QVERIFY(!context.projectData()->values().value("Any").isValid());
+        QVERIFY(context.projectData()->alarms().first().active); // unknown is not a recovery
+        context.projectData()->silence();
+        QVERIFY(!context.projectData()->audible());
+        b.setConnected(true);
+        b.inject("fault=0\n");
+        QVERIFY(!context.projectData()->alarms().first().active);
+        QVERIFY(context.projectData()->alarms().first().outstanding());
+        context.projectData()->acknowledge("fault");
+        QVERIFY(!context.projectData()->alarms().first().outstanding());
+        b.inject("fault=1\n");
+        QCOMPARE(raised.size(), 2);
+        QVERIFY(context.projectData()->audible());
+        bool textShown = false;
+        for (auto *label : display->findChildren<QLabel *>())
+            textShown |= label->text() == QStringLiteral("故障");
+        QVERIFY(textShown);
+        auto badgeProps = display->properties();
+        badgeProps.insert("displayStyle", "状态徽标");
+        badgeProps.insert("unknownText", "未定义");
+        display->setProperties(badgeProps);
+        auto *badge = display->findChild<FluentQt::InfoBadge *>("numericDisplayBadge");
+        QVERIFY(badge && !badge->isHidden());
+        QCOMPARE(badge->text(), QStringLiteral("故障"));
+        const QColor faultBackground = badge->lightBackgroundColor();
+        display->applyBoundValue(0, {});
+        QCOMPARE(badge->text(), QStringLiteral("正常"));
+        QVERIFY(badge->lightBackgroundColor() != faultBackground);
+        display->applyBoundValue(9, {});
+        QCOMPARE(badge->text(), QStringLiteral("未定义"));
+        display->applyBoundValue({}, {});
+        QCOMPARE(badge->text(), QString::fromUtf8("—"));
+        badgeProps.remove("displayStyle");
+        display->setProperties(badgeProps);
+        QVERIFY(badge->isHidden());
+        context.projectData()->flushHistory();
+        ProjectData restored;
+        const QString historyPath = dir.filePath("history.json");
+        restored.configure(project.logic, historyPath);
+        QTRY_COMPARE(restored.history().size(), 5); // raise, silence, recovery, acknowledge, new raise
+        QVERIFY(restored.history().first().toObject().value("time").toString().endsWith(QLatin1Char('Z')));
+
+        const auto onDisk = [&] {
+            QFile file(historyPath);
+            return file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(file.readAll()).array() : QJsonArray();
+        };
+        QLockFile competingWriter(historyPath + QStringLiteral(".lock"));
+        QVERIFY(competingWriter.tryLock(0));
+        context.projectData()->acknowledge("fault");
+        context.projectData()->flushHistory();
+        ProjectData pending;
+        pending.configure(project.logic, historyPath);
+        QTRY_COMPARE(pending.history().size(), 6);
+        auto external = onDisk();
+        QCOMPARE(external.size(), 5);
+        external.append(QJsonObject{{"time", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+                                    {"id", "external event"}, {"level", 1}, {"event", "raised"}});
+        QSaveFile writtenByOtherProcess(historyPath);
+        QVERIFY(writtenByOtherProcess.open(QIODevice::WriteOnly));
+        const auto bytes = QJsonDocument(external).toJson();
+        QCOMPARE(writtenByOtherProcess.write(bytes), bytes.size());
+        QVERIFY(writtenByOtherProcess.commit());
+        competingWriter.unlock();
+        QTRY_COMPARE(onDisk().size(), 7); // timed retry must merge the new file, not overwrite it
+        const auto events = onDisk();
+        QVERIFY(std::any_of(events.begin(), events.end(), [](const QJsonValue &event) {
+            return event.toObject().value("id") == QStringLiteral("external event");
+        }));
+    }
+
+    void projectDataCommitsSameFrameBeforeEvaluatingAlarms()
+    {
+        Project project;
+        project.logic = {{"points", QJsonArray{QJsonObject{{"name", "a"}, {"binding", QJsonObject{{"key", "a"}}}},
+                                               QJsonObject{{"name", "b"}, {"binding", QJsonObject{{"key", "b"}}}},
+                                               QJsonObject{{"name", "sum"}, {"expression", "T[\"a\"] + T[\"b\"]"}}}},
+                         {"alarms", QJsonArray{QJsonObject{{"id", "mismatch"}, {"condition", "T[\"sum\"] != 10"}}}}};
+        RuntimeContext context;
+        context.configureData(project);
+        context.projectData()->configure(project.logic);
+        FakeLink link;
+        context.hub()->addLink(&link, "A");
+        context.setActive(true);
+        QSignalSpy raised(context.projectData(), &ProjectData::alarmRaised);
+        link.inject("a=1,b=9\n");
+        link.inject("a=9,b=1\n");
+        QCOMPARE(context.projectData()->values().value("sum").toInt(), 10);
+        QCOMPARE(raised.size(), 0);
+        Project rawProject;
+        rawProject.logic = {
+            {"points", QJsonArray{QJsonObject{{"name", "fault"},
+                                              {"binding", QJsonObject{{"parseMode", ParseMode::HexBytes},
+                                                                      {"frameHeader", "AA"},
+                                                                      {"frameTail", "55"},
+                                                                      {"dataType", "uint8"}}}}}},
+            {"alarms", QJsonArray{QJsonObject{{"id", "raw"}, {"condition", "T[\"fault\"] == 1"}}}}};
+        RuntimeContext raw;
+        raw.configureData(rawProject);
+        raw.projectData()->configure(rawProject.logic);
+        raw.setActive(true);
+        QSignalSpy rawRaised(raw.projectData(), &ProjectData::alarmRaised);
+        emit raw.hub()->rawReceived(QByteArray::fromHex("AA0155AA0055"), DataSource{"A", 1});
+        QCOMPARE(rawRaised.size(), 1);
+        QVERIFY(!raw.projectData()->alarms().first().active);
+        QVERIFY(raw.projectData()->alarms().first().outstanding());
+    }
+
+    void canRecoveryIsPerChannelAndOptIn()
+    {
+        const QByteArray oldQueries = qgetenv("FHMI_CAN_STATUS_QUERIES");
+        qputenv("FHMI_CAN_STATUS_QUERIES", "1");
+        const auto restoreQueries = qScopeGuard([oldQueries] {
+            if (oldQueries.isNull())
+                qunsetenv("FHMI_CAN_STATUS_QUERIES");
+            else
+                qputenv("FHMI_CAN_STATUS_QUERIES", oldQueries);
+        });
+        struct Backend : CanPollingBackend
+        {
+            std::atomic<bool> off{true};
+            std::atomic<int> recovered{0};
+            std::atomic<int> written{0};
+            QSemaphore allowRecovery;
+            bool openState = false;
+            ~Backend() override { close(); }
+            bool open(const CanSettings &s, QString *) override
+            {
+                setAutoRecover(s.autoRecover);
+                openState = true;
+                startWorker();
+                return true;
+            }
+            void close() override
+            {
+                stopWorker();
+                openState = false;
+            }
+            bool isOpen() const override { return openState; }
+            QString description() const override { return "recovery"; }
+            bool readFrames(QList<CanFrame> &, QString *) override { return true; }
+            bool writeFrame(const CanFrame &, QString *) override
+            {
+                ++written;
+                return true;
+            }
+            CanBusState readBusState() override { return off ? CanBusState::BusOff : CanBusState::Normal; }
+            bool recoverBus(QString *) override
+            {
+                ++recovered;
+                if (!allowRecovery.tryAcquire(1, 3000))
+                    return false;
+                off = false;
+                return true;
+            }
+        };
+        Backend automatic, manual;
+        CanSettings settings;
+        settings.autoRecover = true;
+        automatic.open(settings, nullptr);
+        settings.autoRecover = false;
+        manual.open(settings, nullptr);
+        QTRY_COMPARE(automatic.recovered.load(), 1);
+        QCOMPARE(manual.recovered.load(), 0);
+        QVERIFY(!automatic.send({}, nullptr)); // a write during bus-off must not reach the driver after recovery
+        automatic.allowRecovery.release();
+        QTRY_VERIFY(!automatic.transmitState()->busOff);
+        QVERIFY(automatic.send({}, nullptr));
+        QTRY_COMPARE(automatic.written.load(), 1);
+        QVERIFY(manual.isOpen());
+        automatic.close();
+        QVERIFY(manual.isOpen());
+        manual.close();
+    }
     void initTestCase()
     {
         Q_INIT_RESOURCE(fluentqtwidgets);
+    }
+
+
+    void routesKeepBindingsFramesAndCommandsSeparate()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        auto a = std::unique_ptr<HmiWidget>(createHmiWidget("LineEdit", {}));
+        auto b = std::unique_ptr<HmiWidget>(createHmiWidget("LineEdit", {}));
+        auto raw = std::unique_ptr<HmiWidget>(createHmiWidget("LineEdit", {}));
+        context.registerWidget("a", a.get()); context.registerWidget("b", b.get()); context.registerWidget("raw", raw.get());
+        auto binding = [](const QString &id, const QJsonObject &config) { return *BindingEntry::fromWidget({{"id",id},{"type","LineEdit"},{"binding",config}}); };
+        context.addBinding(binding("a", {{"key","value"},{"sourceCardId","A"}}));
+        context.addBinding(binding("b", {{"key","value"},{"sourceCardId","B"}}));
+        context.addBinding(binding("raw", {{"parseMode",ParseMode::HexBytes},{"frameHeader","AA"},{"frameTail","55"},{"dataType","uint16"}}));
+        FakeLink first, second;
+        context.hub()->addLink(&first,"A"); context.hub()->addLink(&second,"B");
+        first.inject("value=11\n"); second.inject("value=22\n");
+        QCOMPARE(a->findChild<QLineEdit *>()->text(), QStringLiteral("11"));
+        QCOMPARE(b->findChild<QLineEdit *>()->text(), QStringLiteral("22"));
+        first.inject(QByteArray::fromHex("AA01"));
+        second.inject(QByteArray::fromHex("0255"));
+        QVERIFY(raw->findChild<QLineEdit *>()->text().isEmpty());
+        second.setConnected(false); // must not discard A's half frame
+        first.inject(QByteArray::fromHex("0255"));
+        QCOMPARE(raw->findChild<QLineEdit *>()->text(), QStringLiteral("258"));
+        auto command = CommandEncoder::encode({{"commandTargetId","A"}},"RUN");
+        QVERIFY(context.send(command));
+        QCOMPARE(first.sent.size(),1); QCOMPARE(second.sent.size(),0);
+        first.setConnected(false); second.setConnected(true);
+        QVERIFY(!context.send(command)); // never fall back to B
+        QVERIFY(second.sent.isEmpty());
+        QVERIFY(context.send(CommandEncoder::encode({},"LEGACY")));
+        QCOMPARE(second.sent.size(),1);
+
+        first.setConnected(true);
+        first.setConnectionId(QStringLiteral("*"));
+        QVERIFY(context.send(CommandEncoder::encode({{"commandTargetId", "*"}}, "Only literal ID")));
+        QCOMPARE(first.sent.size(), 2);
+        QCOMPARE(second.sent.size(), 1);
+    }
+
+    void slowModbusChannelDoesNotDelayAnotherChannel()
+    {
+        RuntimeContext context;
+        FakeLink slow, fast;
+        QVERIFY(slow.setParser("modbus_tcp",{})); QVERIFY(fast.setParser("modbus_tcp",{}));
+        context.hub()->addLink(&slow,"slow"); context.hub()->addLink(&fast,"fast");
+        auto *poller = context.modbusPoller();
+        poller->setLinkCard(&slow,&slow,{500,5000,1}); poller->setLinkCard(&fast,&fast,{50,100,2});
+        ModbusNeed need; need.table="hr"; need.address=100;
+        context.setCurveNeeds(this,{need});
+        qint64 now=0; context.setClock([&] { return now; }); context.setActive(true);
+        QCOMPARE(slow.sent.size(),1); QCOMPARE(fast.sent.size(),1);
+        QCOMPARE(quint8(slow.sent.first().at(6)),quint8(1));
+        QCOMPARE(quint8(fast.sent.first().at(6)),quint8(2));
+        fast.inject(plcReply(fast.sent.first(),{{100,42}}));
+        now=50; poller->poll();
+        QCOMPARE(fast.sent.size(),2); QCOMPARE(slow.sent.size(),1);
+        QVERIFY(slow.modbusMaster()->busy());
+    }
+
+    void modbusFailureInvalidatesOnlyItsOwnProjectPoints()
+    {
+        const auto point = [](const char *name, const char *source, int address) {
+            return QJsonObject{{"name", name}, {"binding", QJsonObject{{"parseMode", "Modbus"},
+                {"sourceCardId", source}, {"mbRegIndex", address}}}};
+        };
+        Project project;
+        project.logic = {{"points", QJsonArray{point("a", "A", 100), point("otherBlock", "A", 200),
+                                                point("b", "B", 100), point("latest", "", 100)}}};
+        RuntimeContext context;
+        context.configureData(project);
+        FakeLink a, b;
+        QVERIFY(a.setParser("modbus_tcp", {}));
+        QVERIFY(b.setParser("modbus_tcp", {}));
+        context.hub()->addLink(&a, "A");
+        context.hub()->addLink(&b, "B");
+        qint64 now = 0;
+        context.setClock([&] { return now; });
+        context.setActive(true);
+        QCOMPARE(a.sent.size(), 1);
+        QCOMPARE(b.sent.size(), 1);
+        a.inject(plcReply(a.sent.last(), {{100, 1}}));
+        QCOMPARE(a.sent.size(), 2);
+        a.inject(plcReply(a.sent.last(), {{200, 2}}));
+        b.inject(plcReply(b.sent.last(), {{100, 3}}));
+        QCOMPARE(context.projectData()->values().value("a").toInt(), 1);
+        QCOMPARE(context.projectData()->values().value("latest").toInt(), 3);
+
+        now = 500;
+        context.modbusPoller()->poll();
+        QCOMPARE(a.sent.size(), 3);
+        const auto request = a.sent.last();
+        QVERIFY(QMetaObject::invokeMethod(a.modbusMaster()->findChild<QTimer *>(), "timeout"));
+        const auto values = context.projectData()->values();
+        QVERIFY(!values.value("a").isValid());
+        QCOMPARE(values.value("otherBlock").toInt(), 2);
+        QCOMPARE(values.value("b").toInt(), 3);
+        QCOMPARE(values.value("latest").toInt(), 3);
+        a.inject(plcReply(request, {{100, 99}}));
+        QCOMPARE(context.projectData()->values(), values); // A late TCP reply cannot revive stale values.
+    }
+
+    void switchingConnectionClearsItsOldEndpointWithoutBroadeningTarget()
+    {
+        Project project;
+        project.widgets = {
+            QJsonObject{{"id", "tcp"}, {"type", "TcpConfigCard"}},
+            QJsonObject{{"id", "uart"}, {"type", "SerialConfigCard"}},
+            QJsonObject{{"id", "bus"}, {"type", "CanConfigCard"}},
+            QJsonObject{{"id", "switch"}, {"type", "ToggleSwitch"},
+                        {"properties", QJsonObject{{"commandMode", "文本"}, {"onCommand", "01"},
+                                                   {"commandTargetId", "tcp"}, {"commandEndpoint", "192.168.1.20:502"},
+                                                   {"canId", "100"}}},
+                        {"binding", QJsonObject{{"parseMode", "键值匹配"}, {"key", "state"}, {"sourceCardId", "tcp"},
+                                                {"sourceEndpoint", "192.168.1.20:502"}}}},
+        };
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets(project.widgets, &error), qPrintable(error));
+        auto *item = scene.findItem("switch");
+        PropertyEditor editor;
+        editor.setProject(&project);
+        editor.setScene(&scene);
+        editor.showItem(item);
+        editor.show();
+        auto *target = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("发送连接")));
+        auto *destination = qobject_cast<QLineEdit *>(fieldFor(&editor, QStringLiteral("发送子通道")));
+        auto *source = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("来源连接")));
+        auto *endpoint = qobject_cast<QLineEdit *>(fieldFor(&editor, QStringLiteral("来源子通道")));
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("发送模式")));
+        QVERIFY(target && destination && source && endpoint && mode);
+        QVERIFY(!destination->isHidden() && !endpoint->isHidden());
+        target->setCurrentIndex(target->findData(QStringLiteral("uart")));
+        source->setCurrentIndex(source->findData(QStringLiteral("uart")));
+        QVERIFY(destination->isHidden() && endpoint->isHidden());
+        QVERIFY(item->propertyValue("commandEndpoint").toString().isEmpty());
+        QVERIFY(item->binding().value("sourceEndpoint").toString().isEmpty());
+        project.widgets = scene.widgetsJson();
+        QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
+
+        target->setCurrentIndex(0);
+        destination->setText(QStringLiteral("192.168.1.20:502")); // A route scoped only by endpoint.
+        mode->setCurrentText(QStringLiteral("CAN"));
+        QVERIFY(!destination->isHidden());
+        QCOMPARE(item->propertyValue("commandEndpoint").toString(), QStringLiteral("192.168.1.20:502"));
+        QVERIFY(!CommandEncoder::encode(item->properties(), QStringLiteral("01")).command.has_value());
+        project.widgets = scene.widgetsJson();
+        QVERIFY(!Project::validate(project.toJson(), &error));
+        target->setCurrentIndex(target->findData(QStringLiteral("bus")));
+        QVERIFY(destination->isHidden());
+        project.widgets = scene.widgetsJson();
+        QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
+    }
+
+    void explicitlyRoutedModbusControlDoesNotWriteItsLocalBinding()
+    {
+        RuntimeContext context;
+        ModbusSlave local({1, 0, true}, ModbusSlaveStore::fromProperties({{"slaveHrCount", 10}}));
+        context.hub()->addModbusSlave(&local, "local");
+        FakeLink remote;
+        context.hub()->addLink(&remote, "remote");
+        const QJsonObject props{{"commandMode", "Modbus"}, {"commandTargetId", "remote"}, {"mbAddress", 2}};
+        auto input = std::unique_ptr<HmiWidget>(createHmiWidget("SpinBox", props));
+        context.registerWidget("control", input.get());
+        context.addBinding(*BindingEntry::fromWidget({{"id", "control"}, {"type", "SpinBox"},
+            {"binding", QJsonObject{{"parseMode", "Modbus"}, {"sourceCardId", "local"}, {"mbRegIndex", 2}}}}));
+        input->attach(&context);
+        auto *spin = input->findChild<QSpinBox *>();
+        QVERIFY(spin);
+        spin->setValue(7);
+        QCOMPARE(remote.sent.size(), 1);
+        QCOMPARE(local.store().value("hr", 2), quint16(0));
+
+        auto localTarget = props;
+        localTarget.insert("commandTargetId", "local");
+        input->setProperties(localTarget);
+        QSignalSpy changes(&local, &ModbusSlave::changed);
+        spin->setValue(8);
+        QCOMPARE(remote.sent.size(), 1);
+        QCOMPARE(local.store().value("hr", 2), quint16(8));
+        QCOMPARE(changes.size(), 1);
+
+        const QJsonObject s7Target{{"commandMode", "S7"}, {"commandTargetId", "offline-plc"},
+            {"s7Command", QJsonObject{{"address", "DB1.DBW0"}, {"dataType", "INT"}}}};
+        input->setProperties(s7Target);
+        spin->setValue(9);
+        QCOMPARE(local.store().value("hr", 2), quint16(8)); // A named receive source is never an S7 destination.
+        QCOMPARE(changes.size(), 1);
+    }
+
+    void canCaptureKeepsChannelsAndEvictedFramesAndFlushesTail()
+    {
+        QTemporaryDir directory;
+        RuntimeContext context;
+        auto widget=std::unique_ptr<HmiWidget>(createHmiWidget("CanMonitor",{{"maxMessages",8},{"autoSaveRows",3},{"autoSave",true},{"autoSaveDirectory",directory.path()}}));
+        auto *monitor=dynamic_cast<CanMonitorWidget *>(widget.get());
+        monitor->attach(&context);
+        auto *recorder=monitor->findChild<CanRecorder *>();
+        QSignalSpy finished(recorder,&CanRecorder::finished);
+        CanFrame frame; frame.id=0x123; frame.data=QByteArray::fromHex("11"); frame.timestampMs=1700000000000LL;
+        emit context.hub()->canFrames(nullptr,{frame,frame},false,{"A",11});
+        frame.data=QByteArray::fromHex("22");
+        emit context.hub()->canFrames(nullptr,{frame,frame,frame},false,{"B",22});
+        auto *view=monitor->findChild<QTableView *>("canMessages");
+        QTRY_COMPARE(view->model()->rowCount(),2); // identical IDs stay separate
+        QHash<QString,QString> counts;
+        for (int row=0;row<2;++row) counts.insert(view->model()->index(row,10).data().toString().section(" / ",0,0),view->model()->index(row,8).data().toString());
+        QCOMPARE(counts.value("A"),QStringLiteral("2")); QCOMPARE(counts.value("B"),QStringLiteral("3"));
+        monitor->findChild<QSpinBox *>("canMaxMessages")->setValue(1);
+        QTRY_COMPARE(view->model()->rowCount(),1);
+        emit context.hub()->canFrames(nullptr,{frame,frame,frame},false,{"B",22});
+        monitor->detach();
+        QTRY_COMPARE(finished.size(),1);
+        const auto files=QDir(directory.path()).entryList({"*.csv"},QDir::Files,QDir::Name);
+        QCOMPARE(files.size(),3);
+        QStringList records;
+        QList<int> fileRows;
+        for(const auto &name:files) {
+            QFile file(QDir(directory.path()).filePath(name)); QVERIFY(file.open(QIODevice::ReadOnly));
+            const auto lines=QString::fromUtf8(file.readAll()).split("\r\n",Qt::SkipEmptyParts);
+            QVERIFY(lines.first().contains("connection_id")); records+=lines.mid(1);
+            fileRows.append(lines.size()-1);
+        }
+        QCOMPARE(fileRows,QList<int>({3,3,2})); // changing display rows must neither rotate nor resize capture files
+        QCOMPARE(records.size(),8);
+        QVERIFY(records.at(0).contains("\"A\"")); QVERIFY(records.at(4).contains("\"B\""));
+        QFile blocked(directory.filePath("not-a-directory")); QVERIFY(blocked.open(QIODevice::WriteOnly)); blocked.close();
+        QSignalSpy failed(recorder,&CanRecorder::failed);
+        recorder->start(blocked.fileName(),3); recorder->append({frame},false,{"A",11},"CAN0",nullptr);
+        QTRY_COMPARE(failed.size(),1); QVERIFY(!recorder->isRecording());
+        QVERIFY(failed.at(0).at(2).toBool());
+        recorder->start(blocked.fileName(), 3);
+        recorder->append({frame}, false, {"A", 11}, "CAN0", nullptr);
+        recorder->start(directory.path(), 3);
+        QTRY_COMPARE(failed.size(), 2);
+        QVERIFY(!failed.at(1).at(2).toBool());
+        QVERIFY(recorder->isRecording());
+        recorder->stop();
+    }
+
+    void canSessionOpensClosesAndOutlivesItsCardWithoutBlockingUi()
+    {
+        struct DriverCalls
+        {
+            std::atomic<int> open{0};
+            std::atomic<int> close{0};
+            std::atomic<int> send{0};
+            QSemaphore completeSend;
+        };
+        struct DelayedBackend : CanBackend
+        {
+            std::shared_ptr<DriverCalls> calls;
+            bool up = false;
+
+            explicit DelayedBackend(std::shared_ptr<DriverCalls> calls) : calls(std::move(calls)) {}
+            ~DelayedBackend() override { close(); }
+            bool open(const CanSettings &, QString *) override
+            {
+                ++calls->open;
+                QThread::msleep(120);
+                up = true;
+                return true;
+            }
+            void close() override
+            {
+                if (up) {
+                    QThread::msleep(120);
+                    up = false;
+                    ++calls->close;
+                }
+            }
+            bool send(const CanFrame &frame, QString *) override
+            {
+                if (++calls->send == 1 && !calls->completeSend.tryAcquire(1, 3000))
+                    return false;
+                emit framesSent({frame});
+                return true;
+            }
+            bool isOpen() const override { return up; }
+            QString description() const override { return QStringLiteral("delayed"); }
+        };
+        auto calls = std::make_shared<DriverCalls>();
+        const auto factory = [calls](const QString &, QString *) { return std::make_unique<DelayedBackend>(calls); };
+        CanSession session(factory);
+        QSignalSpy opened(&session, &CanSession::opened), stopped(&session, &CanSession::closed);
+        int ticks = 0;
+        QTimer heartbeat;
+        heartbeat.setInterval(10);
+        connect(&heartbeat, &QTimer::timeout, this, [&] { ++ticks; });
+        heartbeat.start();
+        QVERIFY(session.open({}, nullptr));
+        QTRY_COMPARE(opened.size(), 1);
+        QVERIFY(session.isOpen());
+        QVERIFY(ticks >= 3);
+
+        QVERIFY(session.send({}, nullptr));
+        QVERIFY(session.send({}, nullptr));
+        QTRY_COMPARE(calls->send.load(), 1);
+        const int before = ticks;
+        session.close();
+        calls->completeSend.release();
+        QTRY_COMPARE(stopped.size(), 1);
+        QVERIFY(ticks - before >= 3);
+        QCOMPARE(calls->close.load(), 1);
+        QCOMPARE(calls->send.load(), 1); // only the already running driver call can finish
+
+        auto detached = std::make_unique<CanSession>(factory);
+        QVERIFY(detached->open({}, nullptr));
+        QTRY_COMPARE(calls->open.load(), 2);
+        detached.reset();
+        QTRY_COMPARE(calls->close.load(), 2); // native cleanup outlives the card
     }
 
     void canLogRetainsNewestFramesAndCanStopFollowing()
@@ -341,6 +1018,10 @@ class TestRuntime : public QObject
         auto *follow = monitor->findChild<FluentQt::CheckBox *>("canAutoScroll");
         auto *mode = monitor->findChild<FluentQt::ComboBox *>("canDisplayMode");
         QVERIFY(view && maximum && follow && mode);
+        QVERIFY(view->isColumnHidden(7)); // period/count describe an aggregate, not an individual frame
+        QVERIFY(view->isColumnHidden(8));
+        QVERIFY(!view->isSortingEnabled());
+        QVERIFY(follow->isVisible());
         QAbstractItemModelTester tester(view->model(), QAbstractItemModelTester::FailureReportingMode::QtTest);
         QList<CanFrame> frames;
         for (int i = 0; i < 150; ++i) {
@@ -352,8 +1033,12 @@ class TestRuntime : public QObject
         }
         emit context.hub()->canFrames(nullptr, frames, false);
         QTRY_COMPARE(view->model()->rowCount(), 100);
-        QCOMPARE(view->model()->index(0, 0).data(Qt::UserRole).toLongLong(), 1700000000050LL);
-        QCOMPARE(view->model()->index(99, 5).data().toString(), QStringLiteral("95"));
+        QCOMPARE(view->model()->index(0, 1).data(Qt::UserRole).toLongLong(), 1700000000050LL);
+        QCOMPARE(view->model()->index(99, 6).data().toString(), QStringLiteral("95"));
+        for (int row = 0; row < 100; ++row) {
+            QCOMPARE(view->model()->index(row, 0).data().toString(), QString::number(row + 51));
+            QCOMPARE(view->model()->index(row, 0).data(Qt::UserRole).toULongLong(), quint64(row + 51));
+        }
         QTRY_VERIFY(view->verticalScrollBar()->maximum() > 0);
         QTRY_COMPARE(view->verticalScrollBar()->value(), view->verticalScrollBar()->maximum());
         follow->setChecked(false);
@@ -362,7 +1047,9 @@ class TestRuntime : public QObject
         next.data = QByteArray::fromHex("AA");
         next.timestampMs++;
         emit context.hub()->canFrames(nullptr, {next}, false);
-        QTRY_COMPARE(view->model()->index(99, 5).data().toString(), QStringLiteral("AA"));
+        QTRY_COMPARE(view->model()->index(99, 6).data().toString(), QStringLiteral("AA"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("52"));
+        QCOMPARE(view->model()->index(99, 0).data().toString(), QStringLiteral("151"));
         QCOMPARE(view->verticalScrollBar()->value(), 0);
 
         // Export flushes the pending batch too, before the next 100 ms repaint.
@@ -379,18 +1066,65 @@ class TestRuntime : public QObject
         QVERIFY(csv.startsWith(QByteArray::fromHex("EFBBBF")));
         QVERIFY(csv.contains("\"BB\""));
         QVERIFY(!csv.contains("\"32\"")); // oldest retained payload was evicted
+        const QStringList lines = QString::fromUtf8(csv).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 101);
+        QVERIFY(!lines.first().contains(QStringLiteral("\"period_ms\"")));
+        QVERIFY(!lines.first().contains(QStringLiteral("\"count\"")));
+        for (int row = 0; row < 100; ++row) {
+            const QString first = lines.at(row + 1).section(QLatin1Char(','), 0, 0);
+            QCOMPARE(first, QLatin1Char('"') + view->model()->index(row, 0).data().toString() + QLatin1Char('"'));
+        }
         maximum->setValue(3);
         QCOMPARE(view->model()->rowCount(), 3);
-        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("95"));
+        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("95"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("150"));
         mode->setCurrentIndex(0);
         QCOMPARE(view->model()->rowCount(), 1);
-        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("3"));
-        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 8).data().toString(), QStringLiteral("3"));
+        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("152"));
         QVERIFY(!follow->isEnabled());
+        QVERIFY(!follow->isVisible());
+        QVERIFY(!view->isColumnHidden(7));
+        QVERIFY(!view->isColumnHidden(8));
+        QVERIFY(view->isSortingEnabled());
+        QVERIFY2(monitor->saveCsv(dir.filePath("summary.csv"), &error), qPrintable(error));
+        QFile summary(dir.filePath("summary.csv"));
+        QVERIFY(summary.open(QIODevice::ReadOnly));
+        const auto summaryCsv = summary.readAll();
+        QVERIFY(summaryCsv.contains("\"period_ms\",\"count\""));
+
         mode->setCurrentIndex(1);
         QCOMPARE(view->model()->rowCount(), 1);
-        QCOMPARE(view->model()->index(0, 5).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("BB"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("152"));
         QVERIFY(follow->isEnabled());
+        QVERIFY(follow->isVisible());
+        QVERIFY(!follow->isChecked()); // hiding it must keep the user's previous preference
+        QVERIFY(view->isColumnHidden(7));
+        QVERIFY(view->isColumnHidden(8));
+        QVERIFY(!view->isSortingEnabled());
+
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 2);
+        QCOMPARE(view->model()->index(1, 0).data().toString(), QStringLiteral("153"));
+
+        // Exercise the actual Clear action, which resets the counter as well as the retained rows.
+        emit view->customContextMenuRequested(QPoint(4, 4));
+        auto *menu = monitor->findChild<QMenu *>();
+        QVERIFY(menu && !menu->actions().isEmpty());
+        menu->actions().first()->trigger();
+        menu->hide();
+        QCOMPARE(view->model()->rowCount(), 0);
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("1"));
+
+        emit context.hub()->canLinkConnected(nullptr); // the first connection follows the same clear path
+        QCOMPARE(view->model()->rowCount(), 0);
+        emit context.hub()->canFrames(nullptr, {next}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("1"));
     }
 
     void canSummaryCapsIdsAndExportsFilteredFdAndRemoteFrames()
@@ -431,9 +1165,10 @@ class TestRuntime : public QObject
         emit context.hub()->canFrames(nullptr, {frame, old, newer, fd}, false);
         emit context.hub()->canFrames(nullptr, {remote}, true);
         QTRY_COMPARE(view->model()->rowCount(), 3);
-        QCOMPARE(view->model()->index(0, 1).data().toString(), QStringLiteral("0x102"));
-        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("2"));
-        QCOMPARE(view->model()->index(0, 6).data().toString(), QStringLiteral("20.0"));
+        QCOMPARE(view->model()->index(0, 2).data().toString(), QStringLiteral("0x102"));
+        QCOMPARE(view->model()->index(0, 8).data().toString(), QStringLiteral("2"));
+        QCOMPARE(view->model()->index(0, 7).data().toString(), QStringLiteral("20.0"));
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("3"));
         type->setCurrentIndex(3);
         id->setText(QStringLiteral("00000102"));
         QCOMPARE(view->model()->rowCount(), 1);
@@ -457,6 +1192,354 @@ class TestRuntime : public QObject
         QVERIFY(readCsv(dir.filePath("remote.csv")).contains(QStringLiteral("\"TX\",\"RTR\",\"8\",\"\"")));
         QVERIFY(!monitor->saveCsv(dir.filePath("missing/frames.csv"), &error));
         QVERIFY(!error.isEmpty());
+    }
+
+    void canSequenceSurvivesFilteringSortingAndSummaryUpdates()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("CanMonitor", {{"showSignals", true}}));
+        auto *monitor = dynamic_cast<CanMonitorWidget *>(widget.get());
+        QVERIFY(monitor);
+        monitor->attach(&context);
+        auto *view = monitor->findChild<QTableView *>("canMessages");
+        auto *filter = monitor->findChild<QLineEdit *>("canIdFilter");
+        auto *mode = monitor->findChild<FluentQt::ComboBox *>("canDisplayMode");
+        QVERIFY(view && filter && mode);
+        QList<CanFrame> frames;
+        for (int i = 0; i < 12; ++i) {
+            CanFrame frame;
+            frame.id = quint32(0x100 + i);
+            frame.data = QByteArray(1, char(i));
+            frame.timestampMs = 1700000000000LL + i;
+            frames.append(frame);
+        }
+        emit context.hub()->canFrames(nullptr, frames, false);
+        QTRY_COMPARE(view->model()->rowCount(), 12);
+        filter->setText(QStringLiteral("102-10B"));
+        QCOMPARE(view->model()->rowCount(), 10);
+        view->sortByColumn(0, Qt::DescendingOrder);
+        // Numeric sequence ordering: 12, 11, 10, 9, ... rather than lexical 9, 8, ... .
+        for (int row = 0; row < 10; ++row) {
+            QCOMPARE(view->model()->index(row, 0).data().toString(), QString::number(12 - row));
+        }
+
+        QTemporaryDir dir;
+        QString error;
+        const QString path = dir.filePath("sequence.csv");
+        QVERIFY2(monitor->saveCsv(path, &error), qPrintable(error));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QStringList lines = QString::fromUtf8(file.readAll()).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 11);
+        QVERIFY(lines.first().endsWith(QStringLiteral("\"signals\",\"timestamp_ms\",\"connection_id\",\"channel\"")));
+        for (int row = 0; row < 10; ++row) {
+            const QStringList fields = lines.at(row + 1).split(QLatin1Char(','));
+            QCOMPARE(fields.size(), 14); // includes both the optional signal column and the raw timestamp
+            QCOMPARE(fields.first(), QStringLiteral("\"%1\"").arg(view->model()->index(row, 0).data().toString()));
+            QCOMPARE(fields.at(2), QStringLiteral("\"%1\"").arg(view->model()->index(row, 2).data().toString()));
+        }
+
+        mode->setCurrentIndex(1); // switching to chronological log preserves each latest summary sequence
+        QCOMPARE(view->model()->rowCount(), 10);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("3"));
+        QCOMPARE(view->model()->index(9, 0).data().toString(), QStringLiteral("12"));
+        emit context.hub()->canFrames(nullptr, {frames.at(3)}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 11);
+        QCOMPARE(view->model()->index(10, 0).data().toString(), QStringLiteral("13"));
+        mode->setCurrentIndex(0);
+        QCOMPARE(view->model()->rowCount(), 10);
+        QCOMPARE(view->model()->index(1, 2).data().toString(), QStringLiteral("0x103"));
+        QCOMPARE(view->model()->index(1, 0).data().toString(), QStringLiteral("13"));
+        QCOMPARE(view->model()->index(1, 8).data().toString(), QStringLiteral("2"));
+
+        emit context.hub()->canFrames(nullptr, {frames.at(2)}, false);
+        QTRY_COMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("14"));
+        view->sortByColumn(0, Qt::DescendingOrder);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("14"));
+        QCOMPARE(view->model()->index(1, 0).data().toString(), QStringLiteral("13"));
+        QCOMPARE(view->model()->index(2, 0).data().toString(), QStringLiteral("12"));
+    }
+
+    void canCsvHasReadableMillisecondsAndRawTimestamp_data()
+    {
+        QTest::addColumn<QString>("mode");
+        QTest::newRow("summary") << QStringLiteral("按 ID 汇总");
+        QTest::newRow("scrolling") << QStringLiteral("滚动日志");
+    }
+
+    void canCsvHasReadableMillisecondsAndRawTimestamp()
+    {
+        QFETCH(QString, mode);
+        RuntimeContext context;
+        context.setActive(true);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("CanMonitor", {{"displayMode", mode}}));
+        auto *monitor = dynamic_cast<CanMonitorWidget *>(widget.get());
+        QVERIFY(monitor);
+        monitor->attach(&context);
+        const QDateTime beforeMidnight(QDate(2026, 11, 17), QTime(23, 59, 59, 999), QTimeZone::systemTimeZone());
+        QList<CanFrame> frames;
+        for (int i = 0; i < 2; ++i) {
+            CanFrame frame;
+            frame.id = quint32(0x18FF0A01 + i);
+            frame.extended = true;
+            frame.timestampMs = beforeMidnight.toMSecsSinceEpoch() + i * 2;
+            frame.data = QByteArray::fromHex("1122334400000500");
+            frames.append(frame);
+        }
+        emit context.hub()->canFrames(nullptr, frames, false);
+        QTemporaryDir dir;
+        const QString path = dir.filePath("can-time.csv");
+        QString error;
+        QVERIFY2(monitor->saveCsv(path, &error), qPrintable(error));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray bytes = file.readAll();
+        QVERIFY(bytes.startsWith(QByteArray::fromHex("EFBBBF") + "\"sequence\",\"time\",\"id\","));
+        const QStringList lines = QString::fromUtf8(bytes).split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 3);
+        QVERIFY(lines.first().contains(QStringLiteral("\"timestamp_ms\"")));
+        for (int i = 0; i < 2; ++i) {
+            const QStringList fields = lines.at(i + 1).split(QLatin1Char(','));
+            QCOMPARE(fields.size(), mode == QStringLiteral("滚动日志") ? 11 : 13);
+            QCOMPARE(fields.first(), QStringLiteral("\"%1\"").arg(i + 1));
+            const QString time = fields.at(1).mid(1, fields.at(1).size() - 2);
+            const auto rawField = fields.at(fields.size() - 3);
+            const QString raw = rawField.mid(1, rawField.size() - 2);
+            QVERIFY(QRegularExpression(QStringLiteral("\\.\\d{3}(?:Z|[+-]\\d{2}:\\d{2})$")).match(time).hasMatch());
+            QVERIFY(time.startsWith(i == 0 ? QStringLiteral("2026-11-17T23:59:59.999")
+                                          : QStringLiteral("2026-11-18T00:00:00.001")));
+            const QDateTime parsed = QDateTime::fromString(time, Qt::ISODateWithMs);
+            QVERIFY(parsed.isValid());
+            QCOMPARE(parsed.toMSecsSinceEpoch(), frames.at(i).timestampMs);
+            QCOMPARE(raw, QString::number(frames.at(i).timestampMs));
+        }
+    }
+
+    void zlgTimingFieldsFollowModelAndCustomValue()
+    {
+        std::unique_ptr<HmiWidget> widget(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"zlgCustomTiming", "00,1C"}}));
+        auto *card = dynamic_cast<CanConfigCardWidget *>(widget.get());
+        QVERIFY(card);
+        card->show();
+        auto *adapter = card->findChild<FluentQt::ComboBox *>("canAdapter");
+        auto *model = card->findChild<FluentQt::ComboBox *>("canZlgModel");
+        auto *rate = card->findChild<FluentQt::ComboBox *>("canBitrate");
+        auto *sample = card->findChild<FluentQt::ComboBox *>("canSamplePoint");
+        auto *dataRate = card->findChild<FluentQt::ComboBox *>("canDataBitrate");
+        auto *dataSample = card->findChild<FluentQt::ComboBox *>("canDataSamplePoint");
+        auto *custom = card->findChild<FluentQt::LineEdit *>("canCustomTiming");
+        auto *hint = card->findChild<QLabel *>("canTimingHint");
+        auto *fd = card->findChild<QCheckBox *>("canFd");
+        QVERIFY(adapter && model && rate && sample && dataRate && dataSample && custom && hint && fd);
+        QVERIFY(custom->isVisible());
+        QCOMPARE(custom->text(), QStringLiteral("00,1C"));
+        QVERIFY(!sample->isVisible());
+        QVERIFY(!rate->isVisible());
+        QVERIFY(!fd->isVisible());
+        QVERIFY(hint->text().contains(QStringLiteral("87.5%")));
+        custom->clear();
+        QVERIFY(sample->isVisible());
+        QVERIFY(rate->isVisible());
+        sample->setCurrentText(QStringLiteral("75%"));
+        QVERIFY(hint->text().contains(QStringLiteral("75%")));
+        QVERIFY(hint->text().contains(QStringLiteral("00,3A")));
+        custom->setText(QStringLiteral("65,13,2,1"));
+        QVERIFY(custom->isError());
+        QCOMPARE(hint->text(), QStringLiteral("位时序无效"));
+        QVERIFY(custom->toolTip().contains(QStringLiteral("BRP")));
+
+        model->setCurrentText(QStringLiteral("USBCANFD-200U"));
+        fd->setChecked(true);
+        custom->setText(QStringLiteral("1Mbps(75%),5Mbps(75%),(60,0080040D,00800001)"));
+        QVERIFY(!custom->isError());
+        QVERIFY(!rate->isVisible());
+        QVERIFY(!sample->isVisible());
+        QVERIFY(!dataRate->isVisible());
+        QVERIFY(!dataSample->isVisible());
+        QVERIFY(hint->text().contains(QStringLiteral("5Mbps(75%)")));
+        QVERIFY(custom->toolTip().contains(QStringLiteral("ZCANPRO")));
+        custom->clear();
+        QVERIFY(rate->isVisible());
+        QVERIFY(dataRate->isVisible());
+        QVERIFY(!sample->isVisible());
+        QVERIFY(!dataSample->isVisible());
+
+        model->setCurrentText(QStringLiteral("USBCAN-4E-U"));
+        QVERIFY(!fd->isVisible());
+        QVERIFY(!dataRate->isVisible());
+        QVERIFY(fd->isChecked()); // The remembered FD configuration is inactive on a classic model.
+        custom->setText(QStringLiteral("200000"));
+        QVERIFY(!custom->isError());
+        QVERIFY(hint->text().contains(QStringLiteral("200k")));
+        QVERIFY(!sample->isVisible());
+        adapter->setCurrentText(QStringLiteral("slcan"));
+        QVERIFY(!custom->isVisible());
+        QVERIFY(!hint->isVisible());
+        adapter->setCurrentText(QStringLiteral("ZLG"));
+        QVERIFY(custom->isVisible());
+        QCOMPARE(custom->text(), QStringLiteral("200000"));
+        QVERIFY(hint->isVisible());
+        custom->clear();
+        model->setCurrentText(QStringLiteral("USBCANFD-200U"));
+        QVERIFY(fd->isVisible() && fd->isChecked());
+        QVERIFY(dataRate->isVisible());
+    }
+
+    void canPropertyHelpCopiesExamplesWithoutChangingTheProject()
+    {
+        DesignScene scene;
+        QString error;
+        QVERIFY2(scene.loadWidgets({QJsonObject{{"id", "can"}, {"type", "CanConfigCard"}},
+                                    QJsonObject{{"id", "red"},
+                                                {"type", "ToggleSwitch"},
+                                                {"properties", QJsonObject{{"commandMode", "CAN"},
+                                                                           {"canId", "HMI"},
+                                                                           {"commandTemplate", "B4b4={value}"}}}}},
+                                   &error),
+                 qPrintable(error));
+        PropertyEditor editor;
+        editor.setScene(&scene);
+        editor.resize(400, 720);
+        editor.showItem(scene.findItem(QStringLiteral("can")));
+        editor.show();
+        const auto original = scene.widgetsJson();
+        QSignalSpy changed(&editor, &PropertyEditor::modified);
+        const QString clipboard = QGuiApplication::clipboard()->text();
+        const auto restoreClipboard = qScopeGuard([clipboard]() { QGuiApplication::clipboard()->setText(clipboard); });
+        auto *help = editor.findChild<QToolButton *>(QStringLiteral("propertyHelp_canTxInitialState"));
+        QVERIFY(help && !help->isHidden());
+        editor.ensureWidgetVisible(help);
+        QTest::mouseClick(help, Qt::LeftButton);
+        QPointer<QDialog> dialog = editor.findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+        QTRY_VERIFY(dialog && dialog->isVisible());
+        QVERIFY(!dialog->isWindow()); // help stays in the host, including on native macOS
+        auto *example = dialog->findChild<QPlainTextEdit *>(QStringLiteral("fieldHelpExample0"));
+        QVERIFY(example && example->isReadOnly());
+        QCOMPARE(example->toPlainText(), QStringLiteral("HMI=IO"));
+        auto *copy = dialog->findChild<QPushButton *>(QStringLiteral("fieldHelpCopy0"));
+        QVERIFY(copy);
+        QTest::mouseClick(copy, Qt::LeftButton);
+        QCOMPARE(QGuiApplication::clipboard()->text(), example->toPlainText());
+        editor.resize(400, 360); // the overlay follows its host; long help keeps scrolling
+        auto *scroll = dialog->findChild<QScrollArea *>(QStringLiteral("fieldHelpScroll"));
+        QVERIFY(scroll);
+        QTRY_VERIFY(scroll->verticalScrollBar()->maximum() > 0);
+        auto *close = dialog->findChild<QPushButton *>(QStringLiteral("fieldHelpClose"));
+        QVERIFY(close && close->isVisible());
+        QTest::mouseClick(close, Qt::LeftButton);
+        QTRY_VERIFY(dialog.isNull());
+        editor.showItem(scene.findItem(QStringLiteral("red")));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        help = editor.findChild<QToolButton *>(QStringLiteral("propertyHelp_commandTemplate"));
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("发送模式")));
+        QVERIFY(help && mode);
+        QVERIFY(!help->isHidden());
+        editor.ensureWidgetVisible(help);
+        QTest::mouseClick(help, Qt::LeftButton);
+        dialog = editor.findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+        QVERIFY(dialog);
+        QCOMPARE(dialog->findChild<QPlainTextEdit *>(QStringLiteral("fieldHelpExample0"))->toPlainText(),
+                 QStringLiteral("B4b4={value}"));
+
+        QTest::keyClick(dialog, Qt::Key_Escape);
+        QTRY_VERIFY(dialog.isNull());
+        QCOMPARE(scene.widgetsJson(), original);
+        QCOMPARE(changed.count(), 0);
+        mode->setCurrentText(QStringLiteral("文本"));
+        QVERIFY(help->isHidden());
+        mode->setCurrentText(QStringLiteral("CAN"));
+        QVERIFY(!help->isHidden());
+    }
+
+    void canRuntimeHelpIsTranslatedAndKeepsTimingUnchanged()
+    {
+        TableTranslator translator;
+        QVERIFY(translator.loadTable(QString::fromLatin1(kEnglishTable)));
+        QVERIFY(qApp->installTranslator(&translator));
+        const auto removeTranslator = qScopeGuard([&]() { qApp->removeTranslator(&translator); });
+        std::unique_ptr<HmiWidget> card(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"zlgCustomTiming", "00,1C"}}));
+        card->show();
+        auto *help = card->findChild<QToolButton *>(QStringLiteral("canTimingHelp"));
+        auto *custom = card->findChild<QLineEdit *>(QStringLiteral("canCustomTiming"));
+        QVERIFY(help && custom && help->isVisible());
+        QTest::mouseClick(help, Qt::LeftButton);
+        QPointer<QDialog> dialog = card->findChild<QDialog *>(QStringLiteral("fieldHelpDialog"));
+        QVERIFY(dialog);
+        QCOMPARE(dialog->windowTitle(), QStringLiteral("Help: Sample point and custom bit timing"));
+        QCOMPARE(dialog->findChild<QPlainTextEdit *>(QStringLiteral("fieldHelpExample0"))->toPlainText(),
+                 QStringLiteral("00,1C"));
+        QTest::keyClick(dialog, Qt::Key_Escape);
+        QTRY_VERIFY(dialog.isNull());
+        QCOMPARE(custom->text(), QStringLiteral("00,1C"));
+        QVERIFY(labelShown(card.get(), QStringLiteral("Not connected")));
+    }
+
+    void zlgCalculatorAppliesSelectedTimingWithoutConnecting()
+    {
+        std::unique_ptr<HmiWidget> widget(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"}, {"zlgSamplePoint", "87.5%"}}));
+        auto *card = dynamic_cast<CanConfigCardWidget *>(widget.get());
+        QVERIFY(card);
+        card->resize(380, 340);
+        card->show();
+        auto *calculate = card->findChild<QPushButton *>("canTimingCalculatorButton");
+        auto *custom = card->findChild<QLineEdit *>("canCustomTiming");
+        auto *model = card->findChild<FluentQt::ComboBox *>("canZlgModel");
+        QVERIFY(calculate && custom && model);
+        QVERIFY(calculate->isEnabled());
+        const auto openCalculator = [&]() -> CanTimingDialog * {
+            calculate->click();
+            for (auto *dialog : card->findChildren<CanTimingDialog *>()) {
+                if (dialog->isVisible()) {
+                    return dialog;
+                }
+            }
+            return nullptr;
+        };
+        auto *dialog = openCalculator();
+        QVERIFY(dialog);
+        auto *table = dialog->findChild<QTableWidget *>("timingCalculatorResults");
+        auto *sample = dialog->findChild<QDoubleSpinBox *>("timingCalculatorSample");
+        auto *apply = dialog->findChild<QPushButton *>("timingCalculatorApply");
+        QVERIFY(table && sample && apply);
+        QVERIFY(dialog->widget()->rect().contains(
+            QRect(apply->mapTo(dialog->widget(), QPoint()), apply->size())));
+        QCOMPARE(table->item(0, 7)->text(), QStringLiteral("00,1C"));
+        QCOMPARE(dialog->selectedTiming(), QStringLiteral("00,1C"));
+        sample->setValue(75);
+        QCOMPARE(dialog->selectedTiming(), QStringLiteral("00,3A"));
+        apply->click();
+        QTRY_COMPARE(custom->text(), QStringLiteral("00,3A"));
+        QVERIFY(labelShown(card, QStringLiteral("未连接")));
+
+        dialog = openCalculator();
+        QVERIFY(dialog);
+        auto *rate = dialog->findChild<QLineEdit *>("timingCalculatorRate");
+        apply = dialog->findChild<QPushButton *>("timingCalculatorApply");
+        QVERIFY(rate && apply);
+        rate->setText(QStringLiteral("nan"));
+        QVERIFY(dialog->selectedTiming().isEmpty());
+        QVERIFY(!apply->isEnabled());
+        QPointer<CanTimingDialog> closing = dialog;
+        dialog->reject();
+        QTRY_VERIFY(closing.isNull());
+        QCOMPARE(custom->text(), QStringLiteral("00,3A"));
+
+        custom->setText(QStringLiteral("00,9C"));
+        dialog = openCalculator();
+        QVERIFY(dialog);
+        auto *triple = dialog->findChild<QCheckBox *>("timingCalculatorTriple");
+        QVERIFY(triple && triple->isChecked());
+        QCOMPARE(dialog->selectedTiming(), QStringLiteral("00,9C"));
+        closing = dialog;
+        dialog->accept();
+        QTRY_VERIFY(closing.isNull());
+        QCOMPARE(custom->text(), QStringLiteral("00,9C"));
+        model->setCurrentText(QStringLiteral("USBCANFD-200U"));
+        QVERIFY(!calculate->isEnabled());
     }
 
     void copiedS7GroupRetargetsConnections()
@@ -884,11 +1967,554 @@ class TestRuntime : public QObject
         }
         QVERIFY(shown);
 
-        auto *button = surface.findChild<FluentQt::PushButton *>();
-        QVERIFY(button);
-        button->click();
-        QCOMPARE(link.sent, QList<QByteArray>{QByteArray("RUN\n")});
+        HmiWidget *command = surface.widgets().at(1);
+        for (const QString &style : {QStringLiteral("标准"), QStringLiteral("强调"), QStringLiteral("轻量"),
+                                     QStringLiteral("描边"), QString()}) {
+            QJsonObject props = command->properties();
+            if (style.isEmpty())
+                props.remove("buttonStyle");
+            else
+                props.insert("buttonStyle", style);
+            command->setProperties(props);
+            const auto buttons = command->findChildren<FluentQt::PushButton *>();
+            QCOMPARE(buttons.size(), 1);
+            auto *button = buttons.first();
+            QCOMPARE(dynamic_cast<FluentQt::PrimaryPushButton *>(button) != nullptr, style == QStringLiteral("强调"));
+            QCOMPARE(dynamic_cast<FluentQt::TransparentPushButton *>(button) != nullptr,
+                     style == QStringLiteral("轻量"));
+            QCOMPARE(dynamic_cast<FluentQt::OutlinedPushButton *>(button) != nullptr, style == QStringLiteral("描边"));
+            QVERIFY(!button->isCheckable());
+            link.sent.clear();
+            button->click();
+            QCOMPARE(link.sent, QList<QByteArray>{QByteArray("RUN\n")});
+            command->detach();
+            button->click();
+            QCOMPARE(link.sent.size(), 1);
+            command->attach(surface.context());
+            button->click();
+            QCOMPARE(link.sent, (QList<QByteArray>{QByteArray("RUN\n"), QByteArray("RUN\n")}));
+        }
         surface.context()->hub()->removeLink(&link);
+    }
+
+    void numericInputKeepsPrecisionAndLegacyBinding()
+    {
+        Project project;
+        const QJsonObject props{{"numberMode", "小数"}, {"decimals", 6}, {"minimum", 0}, {"maximum", 100},
+                                {"value", 0.123456}, {"singleStep", 0.000001}, {"sendOnChange", true},
+                                {"commandNewline", "\\n"}};
+        project.widgets = QJsonArray{QJsonObject{{"id", "setpoint"}, {"type", "SpinBox"}, {"properties", props},
+                                               {"binding", QJsonObject{{"key", "setpoint"}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        FakeLink link;
+        surface.context()->hub()->addLink(&link);
+        auto *input = surface.widgets().first();
+        auto *decimal = input->findChild<QDoubleSpinBox *>("hmiNumericInput");
+        QVERIFY(decimal);
+        QCOMPARE(decimal->value(), 0.123456);
+        link.inject("setpoint=1.234567\n");
+        QCOMPARE(decimal->value(), 1.234567);
+        QVERIFY(link.sent.isEmpty());
+        decimal->stepUp();
+        QCOMPARE(link.sent, QList<QByteArray>{QByteArray("1.234568\n")});
+        auto coarseProps = props;
+        coarseProps.insert("decimals", 2);
+        input->setProperties(coarseProps);
+        QCOMPARE(decimal->singleStep(), 0.01);
+        QCOMPARE(link.sent.size(), 1);
+        auto integerProps = props;
+        integerProps.remove("numberMode");
+        integerProps.remove("singleStep");
+        input->setProperties(integerProps);
+        auto *integer = input->findChild<QSpinBox *>("hmiNumericInput");
+        QVERIFY(integer);
+        link.inject("setpoint=7\n");
+        QCOMPARE(integer->value(), 7);
+        QCOMPARE(link.sent.size(), 1);
+        integer->stepUp();
+        QCOMPARE(link.sent.last(), QByteArray("8\n"));
+        input->detach();
+        integer->stepUp();
+        QCOMPARE(link.sent.size(), 2);
+        input->attach(surface.context());
+        integer->stepUp();
+        QCOMPARE(link.sent.size(), 3);
+
+        CanvasItem item("SpinBox", props, "setpoint");
+        PropertyEditor editor;
+        editor.setProject(&project);
+        editor.showItem(&item);
+        auto *value = qobject_cast<QDoubleSpinBox *>(fieldFor(&editor, QStringLiteral("默认值")));
+        QVERIFY(value);
+        QCOMPARE(value->decimals(), 6);
+        value->setValue(0.654321);
+        QCOMPARE(item.propertyValue("value").toDouble(), 0.654321);
+        auto *mode = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("数值模式")));
+        QVERIFY(mode);
+        mode->setCurrentIndex(0);
+        QTRY_VERIFY(qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("默认值"))));
+        QVERIFY(fieldFor(&editor, QStringLiteral("小数位数"))->isHidden());
+        surface.context()->hub()->removeLink(&link);
+    }
+
+    void selectionStylesShareCommandsAndFeedback()
+    {
+        Project project;
+        const QJsonObject choices{{"items", "手动模式\n自动模式\n维护模式"}, {"commands", "0\n1\n2"},
+                                  {"sendOnSelect", true}, {"commandNewline", "\\n"}};
+        const QJsonObject toggles{{"onCondition", "等于指定值"}, {"onValue", "2"},
+                                  {"onCommand", "ON"}, {"offCommand", "OFF"}, {"commandNewline", "\\n"}};
+        project.widgets = QJsonArray{
+            QJsonObject{{"id", "mode"}, {"type", "ComboBox"}, {"properties", choices},
+                        {"binding", QJsonObject{{"key", "mode"}}}},
+            QJsonObject{{"id", "enable"}, {"type", "ToggleSwitch"}, {"properties", toggles},
+                        {"binding", QJsonObject{{"key", "enable"}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        FakeLink link;
+        surface.context()->hub()->addLink(&link);
+        auto *choice = surface.widgets().at(0);
+        surface.show();
+        choice->resize(160, 36);
+        for (const QString &style : {QString(), QStringLiteral("分段"), QStringLiteral("单选组"), QStringLiteral("下拉框")}) {
+            auto props = choices;
+            if (!style.isEmpty())
+                props.insert("selectionStyle", style);
+            link.sent.clear();
+            choice->setProperties(props);
+            link.inject("mode=1\n");
+            QVERIFY(link.sent.isEmpty());
+            if (auto *combo = choice->findChild<FluentQt::ComboBox *>("hmiOptionCombo")) {
+                QCOMPARE(combo->currentIndex(), 1);
+                combo->setCurrentIndex(2);
+            } else if (auto *segments = choice->findChild<FluentQt::SegmentedWidget *>("hmiOptionSegments")) {
+                QCOMPARE(segments->currentItem(), QStringLiteral("1"));
+                segments->item("2")->click();
+            } else {
+                auto *group = choice->findChild<QButtonGroup *>("hmiOptionGroup");
+                QVERIFY(group);
+                QCOMPARE(group->checkedId(), 1);
+                auto other = std::unique_ptr<HmiWidget>(createHmiWidget("ComboBox", props));
+                auto *independent = other->findChild<QButtonGroup *>("hmiOptionGroup");
+                independent->button(1)->click();
+                QCOMPARE(group->checkedId(), 1);
+                group->button(2)->click();
+                QCOMPARE(independent->checkedId(), 1);
+            }
+            QCOMPARE(link.sent, QList<QByteArray>{QByteArray("2\n")});
+            if (auto *scroll = choice->findChild<QScrollArea *>("hmiOptionScroll")) {
+                QTRY_VERIFY(scroll->horizontalScrollBar()->maximum() > 0);
+                QTRY_VERIFY(scroll->horizontalScrollBar()->value() > 0);
+                QVERIFY(scroll->viewport()->height() >= 32);
+                QWidget *last = choice->findChild<FluentQt::SegmentedWidget *>("hmiOptionSegments")
+                                    ? choice->findChild<FluentQt::SegmentedWidget *>("hmiOptionSegments")->item("2")
+                                    : choice->findChild<QButtonGroup *>("hmiOptionGroup")->button(2);
+                const int left = last->mapTo(scroll->viewport(), QPoint()).x();
+                QVERIFY(left >= 0 && left < scroll->viewport()->width());
+            }
+            link.inject("mode=99\n");
+            if (auto *combo = choice->findChild<FluentQt::ComboBox *>("hmiOptionCombo"))
+                QCOMPARE(combo->currentIndex(), -1);
+            else if (auto *segments = choice->findChild<FluentQt::SegmentedWidget *>("hmiOptionSegments"))
+                QVERIFY(segments->currentItem().isEmpty());
+            else
+                QCOMPARE(choice->findChild<QButtonGroup *>("hmiOptionGroup")->checkedId(), -1);
+            QCOMPARE(link.sent.size(), 1);
+        }
+        auto *toggle = surface.widgets().at(1);
+        for (const QString &style : {QStringLiteral("复选框"), QStringLiteral("开关")}) {
+            auto props = toggles;
+            props.insert("switchStyle", style);
+            link.sent.clear();
+            toggle->setProperties(props);
+            link.inject("enable=2\n");
+            QVERIFY(link.sent.isEmpty());
+            if (auto *check = toggle->findChild<FluentQt::CheckBox *>("hmiCheckBox")) {
+                QVERIFY(check->isChecked());
+                QVERIFY(!check->isTristate());
+                check->click();
+            } else {
+                auto *sw = toggle->findChild<FluentQt::SwitchButton *>("hmiToggleSwitch");
+                QVERIFY(sw->isChecked());
+                sw->setChecked(false);
+            }
+            QCOMPARE(link.sent, QList<QByteArray>{QByteArray("OFF\n")});
+        }
+        surface.context()->hub()->removeLink(&link);
+    }
+
+    void alarmFiltersKeepSelectionAndHistorySemantics()
+    {
+        QTemporaryDir dir;
+        Project project;
+        project.logic = {
+            {"points", QJsonArray{QJsonObject{{"name", "p"}, {"binding", QJsonObject{{"key", "p"}}}},
+                                   QJsonObject{{"name", "q"}, {"binding", QJsonObject{{"key", "q"}}}}}},
+            {"alarms", QJsonArray{QJsonObject{{"id", "heat"}, {"condition", "T['p'] > 0"}, {"level", 3}, {"text", "温度过高"}},
+                                   QJsonObject{{"id", "motor"}, {"condition", "T['q'] > 0"}, {"level", 1}, {"text", "电机故障"}}}}};
+        project.widgets = QJsonArray{QJsonObject{{"id", "alarms"}, {"type", "AlarmList"}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.context()->projectData()->configure(project.logic, dir.filePath("history.json"));
+        FakeLink link;
+        surface.context()->hub()->addLink(&link);
+        link.inject("p=1,q=1\n");
+        auto *list = surface.widgets().first();
+        auto *table = list->findChild<QTableWidget *>("alarmTable");
+        auto *keyword = list->findChild<QLineEdit *>("alarmFilterKeyword");
+        auto *level = list->findChild<FluentQt::ComboBox *>("alarmFilterLevel");
+        auto *state = list->findChild<FluentQt::ComboBox *>("alarmFilterState");
+        auto *mode = list->findChild<FluentQt::ComboBox *>("alarmMode");
+        auto *event = list->findChild<FluentQt::ComboBox *>("alarmFilterEvent");
+        auto *time = list->findChild<FluentQt::ComboBox *>("alarmFilterTimeRange");
+        auto *from = list->findChild<DateTimeInput *>("alarmFilterFrom");
+        auto *to = list->findChild<DateTimeInput *>("alarmFilterTo");
+        auto *ack = list->findChild<QPushButton *>("alarmAcknowledgeSelected");
+        auto *reset = list->findChild<QPushButton *>("alarmFilterReset");
+        auto *filter = list->findChild<QPushButton *>("alarmFilterToggle");
+        QVERIFY(table && keyword && level && state && mode && event && time && from && to && ack && reset && filter);
+        QVERIFY(list->findChild<QWidget *>("alarmFilterPanel")->isHidden());
+        QCOMPARE(table->rowCount(), 2);
+        level->setCurrentIndex(3);
+        QCOMPARE(table->rowCount(), 1);
+        QCOMPARE(table->item(0, 2)->text(), QStringLiteral("heat"));
+        table->selectRow(0);
+        QVERIFY(ack->isEnabled());
+        keyword->setText("motor");
+        QCOMPARE(table->rowCount(), 0);
+        QVERIFY(!ack->isEnabled());
+        reset->click();
+        QCOMPARE(table->rowCount(), 2);
+        QVERIFY(!ack->isEnabled()); // The previous row number must not confirm a different alarm.
+        keyword->setText(QStringLiteral("电机"));
+        table->selectRow(0);
+        ack->click();
+        link.inject("q=0\n");
+        QCOMPARE(table->rowCount(), 0);
+        reset->click();
+        state->setCurrentIndex(2);
+        QCOMPARE(table->rowCount(), 1);
+        QCOMPARE(table->item(0, 2)->text(), QStringLiteral("heat"));
+        filter->click();
+        time->setCurrentIndex(4);
+        const QDateTime now = QDateTime::currentDateTime();
+        from->setDateTime(now.addDays(-1));
+        to->setDateTime(now.addSecs(-3600));
+        QCOMPARE(table->rowCount(), 0);
+        from->setDateTime(now.addSecs(-60));
+        to->setDateTime(now.addSecs(60));
+        QCOMPARE(table->rowCount(), 1);
+        to->setDateTime(now.addSecs(-120));
+        QVERIFY(!list->findChild<QWidget *>("alarmFilterTimeProblem")->isHidden());
+        QCOMPARE(table->rowCount(), 0);
+        reset->click();
+        mode->setCurrentIndex(1);
+        QCOMPARE(table->rowCount(), 4); // Two raises, one confirmation and one recovery.
+        QVERIFY(!ack->isEnabled());
+        for (const char *name : {"alarmAcknowledgeSelected", "alarmAcknowledgeAll", "alarmSilence"}) {
+            auto *action = list->findChild<QPushButton *>(QLatin1String(name));
+            QVERIFY(action && action->isHidden() && !action->isEnabled());
+        }
+        QCOMPARE(table->horizontalHeaderItem(3)->text(), QStringLiteral("事件"));
+        QVERIFY(state->isHidden());
+        QVERIFY(!event->isHidden());
+        event->setCurrentIndex(3);
+        QCOMPARE(table->rowCount(), 1);
+        QCOMPARE(table->item(0, 2)->text(), QStringLiteral("motor"));
+        keyword->setText("HEAT");
+        QCOMPARE(table->rowCount(), 0);
+        event->setCurrentIndex(1);
+        time->setCurrentIndex(1);
+        QCOMPARE(table->rowCount(), 1);
+        filter->click();
+        QVERIFY(list->findChild<QWidget *>("alarmFilterPanel")->isHidden());
+        QVERIFY(filter->text().contains("3")); // Hidden filters remain explicit.
+        QCOMPARE(surface.context()->projectData()->history().size(), 4);
+        QCOMPARE(list->findChild<QPushButton *>("alarmExportAllHistory")->text(), QStringLiteral("导出全部历史"));
+        QVERIFY(!list->findChild<QPushButton *>("alarmExportFiltered")->isHidden());
+
+        // History can contain explicit offsets. An inclusive end of 12:00:00 includes all
+        // fractions of that second, but does not include the following second.
+        const QString timePath = dir.filePath("boundary.json");
+        const QDateTime lastSecond(QDate(2025, 1, 15), QTime(12, 0, 0, 983), QTimeZone::fromSecondsAheadOfUtc(8 * 3600));
+        const QJsonArray records{
+            QJsonObject{{"time", lastSecond.toString(Qt::ISODateWithMs)}, {"id", "inside"}, {"event", "raised"}},
+            QJsonObject{{"time", lastSecond.addMSecs(17).toString(Qt::ISODateWithMs)}, {"id", "outside"}, {"event", "raised"}}};
+        QFile timeFile(timePath);
+        QVERIFY(timeFile.open(QIODevice::WriteOnly));
+        QVERIFY(timeFile.write(QJsonDocument(records).toJson()) > 0);
+        timeFile.close();
+        surface.context()->projectData()->configure(project.logic, timePath);
+        reset->click();
+        time->setCurrentIndex(4);
+        from->setDateTime(lastSecond.addSecs(-60));
+        to->setDateTime(lastSecond);
+        QTRY_COMPARE(table->rowCount(), 1);
+        QCOMPARE(table->item(0, 2)->text(), QStringLiteral("inside"));
+
+        // Opening the same filter form on a compact canvas must preserve its authored geometry.
+        surface.show();
+        list->resize(480, 160);
+        filter->click();
+        QPointer<QDialog> compactFilter = surface.findChild<QDialog *>("alarmFilterDialog");
+        QVERIFY(compactFilter && compactFilter->isVisible());
+        QVERIFY(compactFilter->isAncestorOf(to));
+        QCOMPARE(list->size(), QSize(480, 160));
+        compactFilter->reject();
+        QTRY_VERIFY(compactFilter.isNull());
+        QVERIFY(!filter->isChecked());
+        QCOMPARE(table->rowCount(), 1);
+        surface.context()->hub()->removeLink(&link);
+    }
+
+    void dateTimeInputSharesKeyboardAndPickerValues()
+    {
+        DateTimeInput input;
+        input.setDateTime(QDateTime(QDate(2026, 11, 17), QTime(12, 34, 56, 750)));
+        QCOMPARE(input.dateTime().time(), QTime(12, 34, 56));
+        input.show();
+        QApplication::processEvents();
+        auto *date = input.findChild<QDateEdit *>("dateEdit");
+        auto *time = input.findChild<QTimeEdit *>("timeEdit");
+        auto *calendarButton = input.findChild<QToolButton *>("calendarButton");
+        auto *timeButton = input.findChild<QToolButton *>("timePickerButton");
+        QVERIFY(date && time && calendarButton && timeButton);
+        QSignalSpy changes(&input, &DateTimeInput::dateTimeChanged);
+        date->setFocus();
+        date->setSelectedSection(QDateTimeEdit::DaySection);
+        QTest::keyClicks(date, "19");
+        QTest::keyClick(date, Qt::Key_Return);
+        QCOMPARE(input.dateTime(), QDateTime(QDate(2026, 11, 19), QTime(12, 34, 56)));
+        QCOMPARE(changes.size(), 1);
+        time->setFocus();
+        time->setSelectedSection(QDateTimeEdit::SecondSection);
+        QTest::keyClicks(time, "42");
+        QTest::keyClick(time, Qt::Key_Return);
+        QCOMPARE(input.dateTime().time(), QTime(12, 34, 42));
+
+        calendarButton->click();
+        auto *calendar = input.findChild<FluentQt::CalendarView *>("dateCalendar");
+        QVERIFY(calendar);
+        QCOMPARE(calendar->date(), date->date());
+        for (auto *day : calendar->dayButtons()) {
+            if (!day->property("outOfMonth").toBool() && day->text() == QLatin1String("20")) {
+                day->click();
+                break;
+            }
+        }
+        QCOMPARE(input.dateTime(), QDateTime(QDate(2026, 11, 20), QTime(12, 34, 42)));
+        timeButton->click();
+        auto *panel = input.findChild<FluentQt::PickerPanel *>("timePickerPanel");
+        QVERIFY(panel);
+        QCOMPARE(panel->value(), QStringList({"12", "34", "42"}));
+        panel->setValue({"23", "59", "58"});
+        QCOMPARE(time->time(), QTime(12, 34, 42)); // Rolling is a draft until confirmed.
+        panel->yesButton()->click();
+        QCOMPARE(input.dateTime(), QDateTime(QDate(2026, 11, 20), QTime(23, 59, 58)));
+        timeButton->click();
+        panel = input.findChild<FluentQt::PickerPanel *>("timePickerPanel");
+        panel->setValue({"01", "02", "03"});
+        panel->cancelButton()->click();
+        QCOMPARE(time->time(), QTime(23, 59, 58));
+
+        for (QDateTimeEdit *edit : {static_cast<QDateTimeEdit *>(date), static_cast<QDateTimeEdit *>(time)}) {
+            auto *line = edit->findChild<QLineEdit *>();
+            QVERIFY(line);
+            const int textWidth = line->fontMetrics().horizontalAdvance(edit->text());
+            QVERIFY2(line->contentsRect().width() >= textWidth + 4, qPrintable(edit->text()));
+        }
+    }
+
+    void navigationStylesPreservePages()
+    {
+        const auto child = [](const char *id, int page, int x, int y) {
+            return QJsonObject{{"id", id},
+                               {"type", "Label"},
+                               {"tabIndex", page},
+                               {"properties", QJsonObject{{"text", id}}},
+                               {"geometry", QJsonObject{{"x", x}, {"y", y}, {"w", 100}, {"h", 30}}}};
+        };
+        const QJsonObject data{{"id", "pages"},
+                               {"type", "TabWidget"},
+                               {"geometry", QJsonObject{{"x", 10}, {"y", 10}, {"w", 480}, {"h", 300}}},
+                               {"properties", QJsonObject{{"tabNames", "A\nB\nC"}, {"_tabLayout_1", "垂直"}}},
+                               {"children", QJsonArray{child("freeA", 0, 23, 83), child("autoA", 1, 99, 155),
+                                                       child("autoB", 1, 179, 205), child("freeC", 2, 41, 105)}}};
+        std::unique_ptr<CanvasItem> item(CanvasItem::fromJson(data, QString()));
+        QVERIFY(item);
+        const auto children = item->containerChildren();
+        const qreal firstOffset = children.at(0)->y() - item->widget()->contentTop();
+        const qreal lastOffset = children.at(3)->y() - item->widget()->contentTop();
+        QVERIFY(!children.at(1)->isVisible());
+        for (const QString &style : {QStringLiteral("下划线导航"), QStringLiteral("分段导航"),
+                                     QStringLiteral("文档页签"), QStringLiteral("经典选项卡"), QString()}) {
+            item->setPropertyValue("navigationStyle",
+                                   style.isEmpty() ? QJsonValue(QJsonValue::Undefined) : QJsonValue(style));
+            const int top = item->widget()->contentTop();
+            QCOMPARE(children.at(0)->y() - top, firstOffset);
+            QCOMPARE(children.at(3)->y() - top, lastOffset);
+            QCOMPARE(children.at(0)->x(), 23.0);
+            QCOMPARE(children.at(3)->x(), 41.0);
+            // This page stays hidden while both rows are rearranged for the new navigation height.
+            QVERIFY(!children.at(1)->isVisible());
+            QCOMPARE(children.at(1)->pos(), QPointF(ContainerLayout::Padding, top));
+            QCOMPARE(children.at(2)->pos(), QPointF(ContainerLayout::Padding, top + 38));
+            QCOMPARE(children.at(1)->size().width(), 480.0 - 2 * ContainerLayout::Padding);
+
+            const QJsonObject saved = QJsonDocument::fromJson(QJsonDocument(item->toJson()).toJson()).object();
+            if (style.isEmpty())
+                QVERIFY(!saved.value("properties").toObject().contains("navigationStyle"));
+            Project project;
+            project.widgets = {saved};
+            RuntimeSurface runtime;
+            runtime.build(project);
+            runtime.show();
+            QApplication::processEvents();
+            QCOMPARE(runtime.widgets().size(), 5);
+            auto *container = dynamic_cast<TabContainerWidget *>(runtime.widgets().first());
+            QVERIFY(container);
+            QCOMPARE(container->pageCount(), 3);
+            auto *classic = container->findChild<QTabWidget *>("hmiTabs");
+            QVERIFY(classic);
+            QCOMPARE(classic->tabBar()->isVisible(), style.isEmpty() || style == QStringLiteral("经典选项卡"));
+            const auto savedChildren = saved.value("children").toArray();
+            for (int page : {2, 1, 0}) {
+                if (style == QStringLiteral("文档页签")) {
+                    auto *navigation = container->findChild<FluentQt::TabBar *>("hmiDocumentTabs");
+                    QVERIFY(navigation);
+                    QTest::mouseClick(navigation->tabItem(page), Qt::LeftButton);
+                } else if (style == QStringLiteral("下划线导航") || style == QStringLiteral("分段导航")) {
+                    auto *navigation = container->findChild<FluentQt::Pivot *>("hmiPageNavigation");
+                    QVERIFY(navigation);
+                    QCOMPARE(qobject_cast<FluentQt::SegmentedWidget *>(navigation) != nullptr,
+                             style == QStringLiteral("分段导航"));
+                    QTest::mouseClick(navigation->item(QString::number(page)), Qt::LeftButton);
+                } else {
+                    auto *tabs = container->findChild<QTabWidget *>("hmiTabs");
+                    QVERIFY(tabs);
+                    QTest::mouseClick(tabs->tabBar(), Qt::LeftButton, Qt::NoModifier,
+                                      tabs->tabBar()->tabRect(page).center());
+                }
+                QApplication::processEvents();
+                QCOMPARE(container->currentPage(), page);
+                for (int i = 0; i < savedChildren.size(); ++i) {
+                    const auto stored = savedChildren.at(i).toObject();
+                    auto *widget = runtime.widgets().at(i + 1);
+                    const int childPage = stored.value("tabIndex").toInt(0);
+                    const auto geometry = stored.value("geometry").toObject();
+                    QCOMPARE(widget->parentWidget(), container->childHost(childPage));
+                    QTRY_COMPARE(widget->mapTo(container, QPoint()),
+                                 QPoint(geometry.value("x").toInt(), geometry.value("y").toInt()));
+                    QCOMPARE(widget->isVisible(), childPage == page);
+                }
+            }
+            if (style == QStringLiteral("文档页签")) {
+                container->resize(150, 300);
+                classic->setCurrentIndex(2);
+                auto *navigation = container->findChild<FluentQt::TabBar *>("hmiDocumentTabs");
+                auto *scroll = navigation->findChild<QScrollArea *>();
+                QVERIFY(scroll);
+                QTRY_VERIFY(scroll->viewport()->rect().contains(
+                    navigation->currentTab()->mapTo(scroll->viewport(), navigation->currentTab()->rect().center())));
+                QCOMPARE(container->width(), 150);
+            }
+        }
+    }
+
+    void pageManagementKeepsContentAndUndo()
+    {
+        const auto child = [](const char *id, int page) {
+            return QJsonObject{{"id", id},
+                               {"type", "Label"},
+                               {"tabIndex", page},
+                               {"geometry", QJsonObject{{"x", 20}, {"y", 80}, {"w", 100}, {"h", 30}}}};
+        };
+        Project project;
+        project.widgets = {QJsonObject{{"id", "pages"},
+                                       {"type", "TabWidget"},
+                                       {"geometry", QJsonObject{{"x", 10}, {"y", 10}, {"w", 480}, {"h", 300}}},
+                                       {"properties", QJsonObject{{"tabNames", "A\nB\nC"},
+                                                                  {"currentTab", 1},
+                                                                  {"_tabLayout_0", "自由"},
+                                                                  {"_tabLayout_1", "垂直"},
+                                                                  {"_tabLayout_2", "水平"}}},
+                                       {"children", QJsonArray{child("a", 0), child("b", 1), child("c", 2)}}}};
+        QTemporaryDir directory;
+        QString error;
+        const QString path = directory.filePath("pages.uidp");
+        QVERIFY2(project.save(path, &error), qPrintable(error));
+        DesignerPage page;
+        QVERIFY(page.openProject(path));
+        page.resize(1200, 800);
+        page.show();
+        auto *scene = page.findChild<DesignScene *>();
+        auto *editor = page.findChild<PropertyEditor *>();
+        QVERIFY(scene && editor);
+        scene->selectIds({"pages"});
+        QApplication::processEvents();
+        const auto before = page.snapshot().toJson();
+        auto *editorPage = editor->findChild<FluentQt::ComboBox *>("tabPageSelector");
+        QVERIFY(editorPage);
+        editorPage->setCurrentIndex(2);
+        QApplication::processEvents();
+        QCOMPARE(scene->findItem("pages")->editorPage(), 2);
+        QCOMPARE(page.snapshot().toJson(), before); // Browsing must not write startup or move hidden children.
+        QVERIFY(!page.canUndo());
+        auto *startupPage = editor->findChild<FluentQt::ComboBox *>("tabStartupPage");
+        QVERIFY(startupPage);
+        startupPage->setCurrentIndex(0);
+        QCOMPARE(scene->findItem("pages")->propertyValue("currentTab").toInt(), 0);
+        QCOMPARE(scene->findItem("pages")->editorPage(), 2);
+        page.undo();
+        QApplication::processEvents();
+        QCOMPARE(page.snapshot().toJson(), before);
+        QCOMPARE(scene->findItem("pages")->editorPage(), 2);
+        editor->findChild<FluentQt::ComboBox *>("tabPageSelector")->setCurrentIndex(1);
+        QApplication::processEvents();
+        for (const char *action : {"removeTabPage", "moveTabPagePrevious", "moveTabPageNext"}) {
+            auto *button = editor->findChild<QToolButton *>(QLatin1String(action));
+            QVERIFY(button && button->isEnabled());
+            button->click();
+            QApplication::processEvents();
+            const auto *pages = scene->findItem("pages");
+            QCOMPARE(pages->containerChildren().size(), 3);
+            const bool removed = QByteArray(action) == "removeTabPage";
+            const bool earlier = QByteArray(action) == "moveTabPagePrevious";
+            QCOMPARE(pages->propertyValue("tabNames").toString(), removed   ? QStringLiteral("A\nC")
+                                                                  : earlier ? QStringLiteral("B\nA\nC")
+                                                                            : QStringLiteral("A\nC\nB"));
+            QCOMPARE(scene->findItem("a")->tabIndex(), earlier ? 1 : 0);
+            QCOMPARE(scene->findItem("b")->tabIndex(), earlier ? 0 : removed ? 1 : 2);
+            QCOMPARE(scene->findItem("c")->tabIndex(), removed || !earlier ? 1 : 2);
+            QCOMPARE(pages->propertyValue("_tabLayout_0").toString(),
+                     earlier ? QStringLiteral("垂直") : QStringLiteral("自由"));
+            QCOMPARE(pages->propertyValue("_tabLayout_1").toString(),
+                     earlier ? QStringLiteral("自由") : QStringLiteral("水平"));
+            if (removed)
+                QVERIFY(!pages->properties().contains("_tabLayout_2"));
+            else
+                QCOMPARE(pages->propertyValue("_tabLayout_2").toString(),
+                         earlier ? QStringLiteral("水平") : QStringLiteral("垂直"));
+            QVERIFY(page.canUndo());
+            page.undo();
+            QApplication::processEvents();
+            QCOMPARE(page.snapshot().toJson(), before);
+            QVERIFY(!page.canUndo());
+        }
+        for (int remaining : {2, 1}) {
+            auto *remove = editor->findChild<QToolButton *>("removeTabPage");
+            QVERIFY(remove && remove->isEnabled());
+            remove->click();
+            QApplication::processEvents();
+            QCOMPARE(tabNames(scene->findItem("pages")->propertyValue("tabNames").toString()).size(), remaining);
+            QCOMPARE(scene->findItem("pages")->containerChildren().size(), 3);
+        }
+        auto *remove = editor->findChild<QToolButton *>("removeTabPage");
+        QVERIFY(remove && !remove->isEnabled());
+        const auto lastPage = page.snapshot().toJson();
+        remove->click();
+        QCOMPARE(page.snapshot().toJson(), lastPage);
     }
 
     void buttonWritesSingleCoil()
@@ -1029,13 +2655,13 @@ class TestRuntime : public QObject
         hub->addLink(&utf8Link);
         const QByteArray gbk = QByteArray::fromHex("cec2b6c8") + ":25.3;"; // 温度:25.3;
         gbkLink.inject(gbk);
-        QCOMPARE(hub->rawEncoding(), QStringLiteral("gbk"));
-        QCOMPARE(hub->decodeRaw(gbk), QStringLiteral("温度:25.3;"));
+        QCOMPARE(gbkLink.dataSource().encoding, QStringLiteral("gbk"));
+        QCOMPARE(hub->decodeRaw(gbk, gbkLink.dataSource()), QStringLiteral("温度:25.3;"));
         auto *log = surface.findChild<QTextEdit *>();
         QVERIFY(log);
         QVERIFY(log->toPlainText().contains(QStringLiteral("温度:25.3;")));
         utf8Link.inject(QByteArray::fromStdString("湿度=60\n"));
-        QCOMPARE(hub->rawEncoding(), QStringLiteral("utf-8"));
+        QCOMPARE(utf8Link.dataSource().encoding, QStringLiteral("utf-8"));
         QVERIFY(log->toPlainText().contains(QStringLiteral("湿度=60")));
         hub->removeLink(&gbkLink);
         hub->removeLink(&utf8Link);
@@ -1377,7 +3003,7 @@ class TestRuntime : public QObject
     // Of the link cards whose links are connected and parse Modbus, the first in the document sets the
     // poller up. A card whose link is not connected does not count; one that parses lines neither counts nor
     // shows the poller's status.
-    void firstModbusLinkCardSetsUpThePoller()
+    void modbusLinkCardsKeepTheirOwnPollingSettings()
     {
         QTcpServer first, second, lines;
         for (QTcpServer *server : {&first, &second, &lines}) {
@@ -1424,7 +3050,7 @@ class TestRuntime : public QObject
 
         click(0, "连接");
         QTRY_COMPARE(poller->settings(), (ModbusPoller::Settings{300, 50, 7}));
-        QCOMPARE(poller->blocks(), (QList<ModbusBlock>{{7, 3, 100, 1, 300}}));
+        QCOMPARE(poller->blocks(), (QList<ModbusBlock>{{7, 3, 100, 1, 300}, {9, 3, 100, 1, 100}}));
         QVERIFY(labelShown(cards.at(0), connection(first) + QStringLiteral(" · 1 块 · 轮询中")));
         QVERIFY(labelShown(cards.at(1), connection(second) + QStringLiteral(" · 1 块 · 轮询中")));
         QVERIFY(labelShown(cards.at(2), connection(lines)));
@@ -1566,7 +3192,7 @@ class TestRuntime : public QObject
         for (const char *mode : {"完整", "简洁", "单行"}) {
             QTest::addRow("serial %s", mode) << QStringLiteral("SerialConfigCard") << QString::fromUtf8(mode);
         }
-        for (const char *type : {"TcpConfigCard", "MqttConfigCard", "UdpConfigCard"}) {
+        for (const char *type : {"TcpConfigCard", "MqttConfigCard", "UdpConfigCard", "CanConfigCard"}) {
             for (const char *mode : {"完整", "简洁"}) {
                 QTest::addRow("%s %s", type, mode) << QString::fromLatin1(type) << QString::fromUtf8(mode);
             }
@@ -1590,6 +3216,9 @@ class TestRuntime : public QObject
             QVERIFY2(minimum <= 48, qPrintable(QString::number(minimum))); // the strips of the examples: 48 and 50 px
         }
         QCOMPARE(card->minimumHeight(), minimum);
+        QCOMPARE(card->height(), std::max(card->meta().minHeight, minimum));
+        CanvasItem fresh(type, {{"displayMode", mode}}, QString());
+        QCOMPARE(fresh.size().height(), fresh.minimumHeight());
 
         QList<QPushButton *> buttons;
         for (QPushButton *button : card->findChildren<QPushButton *>()) {
@@ -1637,6 +3266,9 @@ class TestRuntime : public QObject
         card->layout()->activate();
         QMap<int, QRect> rows;
         for (int i = 0; i < grid->count(); ++i) {
+            if (grid->itemAt(i)->isEmpty()) {
+                continue; // CAN hides model-specific rows without removing them from the grid.
+            }
             int row = 0, column = 0, rowSpan = 0, columnSpan = 0;
             grid->getItemPosition(i, &row, &column, &rowSpan, &columnSpan);
             rows[row] |= grid->itemAt(i)->geometry();
@@ -1714,12 +3346,19 @@ class TestRuntime : public QObject
         mode->setCurrentText(QStringLiteral("简洁"));
         const qreal brief = tcp->minimumHeight();
         QVERIFY(brief < full);
-        QCOMPARE(tcp->size().height(), full);
+        QCOMPARE(tcp->size().height(), brief);
         QCOMPARE(height->minimum(), int(std::ceil(brief)));
         tcp->setSize(QSizeF(360, brief));
         mode->setCurrentText(QStringLiteral("完整"));
         QCOMPARE(tcp->size().height(), full);
         QCOMPARE(height->value(), int(std::ceil(full)));
+
+        tcp->setSize(QSizeF(360, 350));
+        tcp->setPropertyValue(QStringLiteral("title"), QStringLiteral("PLC"));
+        QCOMPARE(tcp->size().height(), 350.0); // ordinary edits keep the user's chosen height
+        QCOMPARE(tcp->widget()->height(), 350);
+        std::unique_ptr<CanvasItem> restored(CanvasItem::fromJson(tcp->toJson(), QString()));
+        QCOMPARE(restored->size().height(), 350.0);
 
         Project project;
         QVERIFY2(Project::load(QStringLiteral(FHMI_EXAMPLES_DIR "/tutorials/04-环境监测站.uidp"), &project, &error),
@@ -1734,6 +3373,45 @@ class TestRuntime : public QObject
             }
         }
         QVERIFY(found);
+    }
+
+    void canConnectionErrorsUseOneFlyoutWithoutGrowingTheCard()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        RuntimeContext context;
+        std::unique_ptr<HmiWidget> card(createHmiWidget(
+            "CanConfigCard", {{"defaultAdapter", "ZLG"}, {"zlgModel", "USBCAN-II"},
+                              {"dbcFile", directory.filePath(QString(120, QLatin1Char('x')) + ".dbc")}}));
+        card->attach(&context);
+        card->show();
+        QApplication::processEvents();
+        const int before = card->height();
+        QSignalSpy notifications(&context, &RuntimeContext::notificationRequested);
+        QPushButton *connectButton = nullptr;
+        for (auto *button : card->findChildren<QPushButton *>()) {
+            if (button->text() == QStringLiteral("连接")) {
+                connectButton = button;
+            }
+        }
+        QVERIFY(connectButton);
+        QTest::mouseClick(connectButton, Qt::LeftButton);
+        QCOMPARE(notifications.size(), 1);
+        const QString detail = notifications.first().at(1).toString();
+        QVERIFY(detail.contains(directory.path()));
+        bool failed = false;
+        for (auto *label : card->findChildren<QLabel *>()) {
+            QVERIFY(label->text() != detail);
+            if (label->text() == QStringLiteral("连接失败")) {
+                QCOMPARE(label->toolTip(), detail);
+                failed = true;
+            }
+        }
+        QVERIFY(failed);
+        QCOMPARE(card->height(), before);
+        QTest::mouseClick(connectButton, Qt::LeftButton);
+        QCOMPARE(notifications.size(), 1);
+        card->detach();
     }
 
     // A CAN card dropped since the project was last saved is on the page but not yet in the project's widget list:
@@ -1835,6 +3513,15 @@ class TestRuntime : public QObject
                                      serverMessages.at(1).first().value<Message>()};
         QVERIFY(records.contains(Message{{"a", 10LL}}));
         QVERIFY(records.contains(Message{{"b", 2LL}}));
+        const auto sourceA = serverRaw.first().at(1).value<DataSource>();
+        const auto source0 = serverMessages.at(0).at(1).value<DataSource>();
+        const auto source1 = serverMessages.at(1).at(1).value<DataSource>();
+        QVERIFY(source0.stream != source1.stream);
+        QVERIFY(source0.endpoint != source1.endpoint);
+        QVERIFY(server.send("ONLY_A", sourceA.endpoint));
+        QTRY_COMPARE(first.bytesAvailable(), 6);
+        QCOMPARE(first.readAll(), QByteArray("ONLY_A"));
+        QCOMPARE(second.bytesAvailable(), 0);
         // Peers that connect after a change of parser frame on silence, each with its own timer.
         serverRaw.clear();
         serverMessages.clear();
@@ -1851,6 +3538,20 @@ class TestRuntime : public QObject
         std::sort(units.begin(), units.end());
         QCOMPARE(units, (QList<QByteArray>{QByteArray::fromHex("7E03"), QByteArray::fromHex("7E04")}));
         server.close();
+
+        QVERIFY(server.setParser(QStringLiteral("modbus_tcp"), {}));
+        RuntimeContext context;
+        context.hub()->addLink(&server, QStringLiteral("Server"));
+        ModbusNeed offlineNeed;
+        offlineNeed.table = QStringLiteral("hr");
+        offlineNeed.route = {QStringLiteral("Server"), sourceA.endpoint};
+        context.setCurveNeeds(this, {offlineNeed});
+        context.setActive(true);
+        QSignalSpy errors(&server, &Link::errorOccurred);
+        QVERIFY(server.listen(QStringLiteral("127.0.0.1"), 0, &error));
+        context.modbusPoller()->poll();
+        QVERIFY(errors.isEmpty());
+        QVERIFY(context.modbusPoller()->isWaiting()); // the configured peer is gone, although TCP is listening.
     }
 
     // A HEX byte binding on a hex link gets whole frames: no header or footer to fill in, and
@@ -1954,6 +3655,9 @@ class TestRuntime : public QObject
         for (int row = 0; row < form->rowCount(); ++row) {
             QLayoutItem *caption = form->itemAt(row, QFormLayout::LabelRole);
             auto *text = caption ? qobject_cast<QLabel *>(caption->widget()) : nullptr;
+            if (!text && caption && caption->widget()) {
+                text = caption->widget()->findChild<QLabel *>(); // label with an adjacent help button
+            }
             if (text && text->isVisible()) {
                 labels << text->text();
             }
@@ -2049,8 +3753,8 @@ class TestRuntime : public QObject
     }
 
     // An item's rows follow its mode. A link card shows its own 帧格式 for the mode it picks,
-    // starting from the project's when the modes match, and its Modbus polling rows for a Modbus mode
-    // of its own only (on 项目设置 they are hidden, their values kept); a Modbus-mode control keeps its
+    // starting from the project's when the modes match, and its polling rows for an effective Modbus mode;
+    // a Modbus-mode control keeps its
     // Modbus rows in view with the send toggle off, since it sends either way.
     void editorShowsAnItemsRowsByItsMode()
     {
@@ -2093,12 +3797,15 @@ class TestRuntime : public QObject
         const auto pick = [&editor](const QString &parser) {
             auto *combo = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("默认解析模式")));
             QVERIFY(combo);
-            combo->setCurrentText(parser);
+            const int index = combo->findData(parser);
+            QVERIFY(index >= 0);
+            combo->setCurrentIndex(index);
             QApplication::processEvents(); // the form is rebuilt for the new mode
             QApplication::processEvents();
         };
         pick(QStringLiteral("modbus_tcp"));
         QVERIFY(pollingShown(true));
+        QVERIFY(!labelShown(&editor, QStringLiteral("帧格式")));
         for (const auto &[row, value, lo, hi] : {std::tuple{QStringLiteral("默认轮询(ms)"), 500, 10, 60000},
                                                  std::tuple{QStringLiteral("响应超时(ms)"), 1000, 10, 60000},
                                                  std::tuple{QStringLiteral("默认从站"), 1, 1, 247}}) {
@@ -2156,6 +3863,13 @@ class TestRuntime : public QObject
         QVERIFY(!labelShown(&editor, QStringLiteral("帧格式")));
         QVERIFY(pollingShown(false));
         QCOMPARE(item->propertyValue(QStringLiteral("modbusPeriod")).toInt(), 250); // kept, and still applies
+        project.serial.insert(QStringLiteral("parser"), QStringLiteral("modbus_tcp"));
+        editor.showItem(nullptr);
+        editor.showItem(item);
+        QApplication::processEvents();
+        QVERIFY(pollingShown(true));
+        QVERIFY(!labelShown(&editor, QStringLiteral("帧格式")));
+        QCOMPARE(qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("默认轮询(ms)")))->value(), 250);
 
         editor.showItem(scene.findItem(QStringLiteral("setpoint")));
         QApplication::processEvents();
@@ -2324,6 +4038,119 @@ class TestRuntime : public QObject
         const QJsonArray json = scene.widgetsJson();
         QCOMPARE(json.size(), 1);
         QCOMPARE(json.at(0).toObject().value("children").toArray().size(), 1);
+    }
+    void scaledCanvasMenusStayNativeAndAcceptInput()
+    {
+        Project project;
+        project.canvasWidth = 1000;
+        project.canvasHeight = 650;
+        project.widgets =
+            QJsonArray{QJsonObject{{"id", "chart"},
+                                   {"type", "RealtimeChart"},
+                                   {"geometry", QJsonObject{{"x", 400}, {"y", 330}, {"w", 590}, {"h", 300}}}}};
+        PlayerWindow window(project);
+        auto *plot = window.surface()->findChild<FluentQt::RealtimePlotWidget *>();
+        auto *view = window.findChild<QGraphicsView *>("canvasView");
+        QVERIFY(plot && view);
+        window.show();
+        QSize menuSize;
+        for (const QSize size : {QSize(720, 490), QSize(1100, 760)}) {
+            window.resize(size);
+            QApplication::processEvents();
+            plot->setXRange(10, 20);
+            plot->setYRange(20, 30);
+            const QPoint point(plot->width() - 60, plot->height() - 50);
+            QContextMenuEvent event(QContextMenuEvent::Mouse, point, plot->mapToGlobal(point));
+            QApplication::sendEvent(plot, &event);
+            QPointer<FluentQt::RoundMenu> menu;
+            for (auto *candidate : plot->findChildren<FluentQt::RoundMenu *>()) {
+                if (candidate->isVisible()) {
+                    menu = candidate;
+                    break;
+                }
+            }
+            QVERIFY(menu);
+            QVERIFY(!menu->graphicsProxyWidget());
+            QVERIFY(menu->windowFlags().testFlag(Qt::BypassGraphicsProxyWidget));
+            if (menuSize.isEmpty()) {
+                menuSize = menu->size();
+            } else {
+                QCOMPARE(menu->size(), menuSize);
+            }
+            QTest::qWait(250); // finish the existing popup animation before capture and click
+            auto *items = menu->view();
+            QVERIFY(items->count() > 0);
+            QTest::mouseClick(items->viewport(), Qt::LeftButton, Qt::NoModifier,
+                              items->visualItemRect(items->item(0)).center());
+            QTRY_VERIFY(!menu || !menu->isVisible());
+            QCOMPARE(plot->xMinimum(), 0.0);
+            QCOMPARE(plot->xMaximum(), 1.0);
+            QCOMPARE(plot->yMinimum(), -1.0);
+            QCOMPARE(plot->yMaximum(), 1.0);
+        }
+    }
+
+    void s7SavedGeometryMatchesRuntime()
+    {
+        for (const QSize requested : {QSize(900, 100), QSize(900, 240), QSize(380, 100)}) {
+            const QJsonObject data{{"id", "plc"}, {"type", "S7ConfigCard"},
+                                   {"geometry", QJsonObject{{"x", 20}, {"y", 20},
+                                                           {"w", requested.width()}, {"h", requested.height()}}}};
+            std::unique_ptr<CanvasItem> item(CanvasItem::fromJson(data, QString()));
+            if (requested.width() == 900) {
+                QCOMPARE(item->size().toSize(), requested);
+            }
+            Project project;
+            project.widgets = {item->toJson()};
+            RuntimeSurface surface;
+            surface.build(project);
+            surface.show();
+            QApplication::processEvents();
+            const auto *card = surface.widgets().first();
+            QCOMPARE(card->size(), item->size().toSize());
+            QVERIFY(card->height() >= card->minimumSizeHint().height());
+        }
+    }
+
+    void s7CardKeepsErrorsOutOfItsLayout()
+    {
+        RuntimeContext context;
+        QSignalSpy notices(&context, &RuntimeContext::notificationRequested);
+        std::unique_ptr<HmiWidget> card(createHmiWidget("S7ConfigCard", {{"host", "invalid-host"}}));
+        context.registerWidget("plc", card.get());
+        card->attach(&context);
+        card->show();
+        QApplication::processEvents();
+        auto *status = card->findChild<QLabel *>("s7Status");
+        QVERIFY(status);
+        QCOMPARE(status->text(), QStringLiteral("连接失败"));
+        QCOMPARE(notices.size(), 1);
+        QCOMPARE(notices.first().at(2).toString(), NotifyType::Error);
+        const int narrowHeight = card->minimumSizeHint().height();
+        card->resize(800, narrowHeight);
+        QApplication::processEvents();
+        const int wideHeight = card->minimumSizeHint().height();
+        QVERIFY(wideHeight < narrowHeight);
+        card->resize(380, wideHeight);
+        QApplication::processEvents();
+        QVERIFY(card->height() >= card->minimumSizeHint().height());
+        for (auto *spin : card->findChildren<QSpinBox *>()) {
+            auto *edit = spin->findChild<QLineEdit *>();
+            QVERIFY(edit);
+            QVERIFY2(
+                edit->width() >= edit->fontMetrics().horizontalAdvance(spin->text()),
+                qPrintable(QStringLiteral("%1 has only %2 px after resizing").arg(spin->text()).arg(edit->width())));
+        }
+        const int height = card->height();
+        const QString reason = QStringLiteral("S7 connection failed: ") + QString(300, QLatin1Char('x'));
+        emit context.s7Client()->errorOccurred("other", reason);
+        QCOMPARE(notices.size(), 1);
+        emit context.s7Client()->errorOccurred("plc", reason);
+        emit context.s7Client()->errorOccurred("plc", reason);
+        QCOMPARE(notices.size(), 2);
+        QCOMPARE(status->toolTip(), reason);
+        QCOMPARE(card->height(), height);
+        QCOMPARE(status->text(), QStringLiteral("连接失败"));
     }
 };
 

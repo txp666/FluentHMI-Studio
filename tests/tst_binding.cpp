@@ -21,6 +21,29 @@ class TestBinding : public QObject
     Q_OBJECT
 
   private slots:
+    void projectLogicDoesNotMaskKnownFaultsWithMissingInputs()
+    {
+        const auto resolve = [](const QString &name) -> QVariant {
+            if (name == QLatin1String("fault")) return 1;
+            if (name == QLatin1String("ok")) return 0;
+            return {};
+        };
+        for (const QString &condition : {QStringLiteral("T['missing'] or T['fault']"),
+                                         QStringLiteral("T['fault'] or T['missing']"),
+                                         QStringLiteral("T['missing'] > 80 or T['fault']"),
+                                         QStringLiteral("not T['missing'] or T['fault']")})
+            QCOMPARE(Expression::evaluate(condition, {}, resolve), QVariant(true));
+        for (const QString &condition : {QStringLiteral("T['missing'] and T['ok']"),
+                                         QStringLiteral("T['ok'] and T['missing']")})
+            QCOMPARE(Expression::evaluate(condition, {}, resolve), QVariant(false));
+        for (const QString &condition : {QStringLiteral("T['missing'] or T['ok']"),
+                                         QStringLiteral("T['ok'] or T['missing']"),
+                                         QStringLiteral("T['missing'] and T['fault']"),
+                                         QStringLiteral("T['missing'] + T['fault']"),
+                                         QStringLiteral("1 / 0 or T['fault']")})
+            QVERIFY(!Expression::evaluate(condition, {}, resolve).isValid());
+    }
+
     void chartSamplesRequireFiniteSources()
     {
         BindingEntry entry;

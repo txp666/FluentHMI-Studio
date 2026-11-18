@@ -2,6 +2,7 @@
 
 #include "core/project.h"
 
+#include <QtCore/QHash>
 #include <QtCore/QJsonObject>
 #include <QtCore/QList>
 #include <QtWidgets/QWidget>
@@ -60,6 +61,7 @@ class DesignerPage : public QWidget
     void recordChange(const QString &mergeKey = QString());
     void resetHistory();
     void restore(int index);
+    QHash<QString, int> editorPages() const;
     void updateEditActions();
     void applyProjectSettings();
     void zoomBy(qreal factor);
@@ -68,8 +70,13 @@ class DesignerPage : public QWidget
 
     Project m_project;
     bool m_modified = false;
-    // Undo steps: documents as Save writes them, oldest first, at most 100.
-    QList<QJsonObject> m_history;
+    // Each undo step remembers the design and the view of its tab containers.
+    struct HistoryStep
+    {
+        QJsonObject project;
+        QHash<QString, int> editorPages;
+    };
+    QList<HistoryStep> m_history;
     int m_historyIndex = 0;
     int m_savedIndex = 0; // -1 once the saved design has left the history
     QString m_lastMergeKey;

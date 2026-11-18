@@ -4,6 +4,7 @@
 #include "player/player_window.h"
 #include "runtime/appearance.h"
 #include "runtime/runtime_surface.h"
+#include "comm/can/can_diagnostics.h"
 
 #include <FluentQtWidgets/Config.h>
 #include <FluentQtWidgets/Dialogs/Dialog.h>
@@ -53,6 +54,10 @@ int main(int argc, char *argv[])
     app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("FluentHMI"));
     QCoreApplication::setApplicationVersion(QStringLiteral(FHMI_VERSION));
+#ifdef FHMI_CAN_DIAGNOSTICS
+    fhmi::CanDiagnostics::logFilePath();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, []() { fhmi::CanDiagnostics::flush(); });
+#endif
 
     const QString configFile = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
                                QStringLiteral("/FluentHMI/fluent.json");
@@ -125,7 +130,7 @@ int main(int argc, char *argv[])
     }
     QCoreApplication::setApplicationName(project.appName);
 
-    fhmi::PlayerWindow window(project);
+    fhmi::PlayerWindow window(project, nullptr, !check);
     // The project's icon for the whole application too: the Dock and the taskbar show it.
     if (!project.icon.isEmpty()) {
         QApplication::setWindowIcon(window.windowIcon());

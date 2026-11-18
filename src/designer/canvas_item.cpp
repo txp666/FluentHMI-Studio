@@ -52,13 +52,17 @@ CanvasItem::CanvasItem(const QString &typeName, const QJsonObject &properties, c
                         : id;
     // Only what the project stores; readers fall back to the metadata defaults, so a
     // loaded project saves back without growing every default property.
-    m_properties = normalizedRangeProperties(typeName, properties);
+    m_properties = normalizedWidgetProperties(typeName, properties);
+    if (typeName == QLatin1String("TabWidget"))
+        m_editorPage = clampTabIndex(propertyValue(QStringLiteral("currentTab")).toInt(0),
+                                    int(tabNames(propertyValue(QStringLiteral("tabNames")).toString()).size()));
     m_size = QSizeF(m_meta->defaultWidth, m_meta->defaultHeight);
 
     setFlags(ItemIsMovable | ItemIsSelectable | ItemSendsGeometryChanges);
     setAcceptHoverEvents(true);
 
     m_widget = createHmiWidget(typeName, m_properties, nullptr, assetBaseDir);
+    m_size = m_widget->size();
     m_widget->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     // Embedded widgets are windows, and Qt paints a window background behind them: a label
     // would hide the grid and, in the dark theme, show up as a box. At run time they sit on
@@ -96,11 +100,9 @@ CanvasItem *CanvasItem::fromJson(const QJsonObject &data, const QString &assetBa
     item->m_tabIndex = data.value(QStringLiteral("tabIndex")).toInt(0);
     const QJsonObject geo = data.value(QStringLiteral("geometry")).toObject();
     item->setPos(geo.value(QStringLiteral("x")).toDouble(0), geo.value(QStringLiteral("y")).toDouble(0));
-    const qreal height = geo.value(QStringLiteral("h")).toDouble(item->m_meta->defaultHeight);
-    // A link card saved shorter than its rows would show them on top of each other: it grows.
-    item->setSize(QSizeF(geo.value(QStringLiteral("w")).toDouble(item->m_meta->defaultWidth),
-                         item->isLinkCard() ? std::max(height, item->rowsHeight()) : height),
-                  false);
+    const qreal height = geo.value(QStringLiteral("h")).toDouble(item->m_size.height());
+    // Measure the rows at the saved width; a wide S7 card needs fewer rows than the default narrow one.
+    item->setSize(QSizeF(geo.value(QStringLiteral("w")).toDouble(item->m_meta->defaultWidth), height), false);
     for (const QJsonValue &value : data.value(QStringLiteral("children")).toArray()) {
         const QJsonObject childData = value.toObject();
         if (CanvasItem *child = fromJson(childData, assetBaseDir)) {
@@ -152,12 +154,22 @@ QJsonValue CanvasItem::propertyValue(const QString &name) const
 
 void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
 {
+    const bool fitHeight =
+        isLinkCard() && (name == QLatin1String("displayMode") || qAbs(m_size.height() - minimumHeight()) < 1);
+    const bool tabs = typeName() == QLatin1String("TabWidget");
+    const bool navigationChanged = tabs &&
+                                   name == QLatin1String("navigationStyle") && value != propertyValue(name);
+    const int oldContentTop = navigationChanged ? m_widget->contentTop() : 0;
     QJsonObject props = m_properties;
     props.insert(name, value);
-    if (typeName() == QLatin1String("TabWidget")) {
-        const int count = int(tabNames(props.value(QStringLiteral("tabNames")).toString()).size());
-        props.insert(QStringLiteral("currentTab"),
-                     clampTabIndex(props.value(QStringLiteral("currentTab")).toInt(0), count));
+    if (tabs) {
+        const QString names = props.value(QStringLiteral("tabNames"))
+                                  .toString(propertyValue(QStringLiteral("tabNames")).toString());
+        const int count = int(tabNames(names).size());
+        if (props.contains(QStringLiteral("currentTab")))
+            props.insert(QStringLiteral("currentTab"),
+                         clampTabIndex(props.value(QStringLiteral("currentTab")).toInt(0), count));
+        m_editorPage = clampTabIndex(m_editorPage, count);
         if (name == QLatin1String("tabNames")) {
             // Children on removed pages move to the last page.
             for (CanvasItem *child : std::as_const(m_children)) {
@@ -165,22 +177,187 @@ void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
             }
         }
     }
-    m_properties = normalizedRangeProperties(typeName(), props, name);
-    m_widget->setProperties(m_properties);
-    if (isContainer()) {
+    m_properties = normalizedWidgetProperties(typeName(), props, name);
+    applyWidgetProperties();
+    if (navigationChanged) {
+        const int offset = m_widget->contentTop() - oldContentTop;
+        for (CanvasItem *child : std::as_const(m_children)) {
+            const QString layout = m_properties.value(QStringLiteral("_tabLayout_%1").arg(child->m_tabIndex))
+                                       .toString(QStringLiteral("自由")); // i18n: value
+            if (layout == QStringLiteral("自由")) {                       // i18n: value
+                child->moveBy(0, offset);
+            }
+        }
+    }
+    if (navigationChanged || (tabs && name == QLatin1String("tabNames"))) {
+        relayoutPages();
+    } else if (isContainer() && !(tabs && name == QLatin1String("currentTab"))) {
         relayoutChildren();
     }
-    if (isLinkCard() && m_size.height() < minimumHeight()) {
-        setSize(QSizeF(m_size.width(), minimumHeight())); // more rows (displayMode) need more height
+    if (isLinkCard() && (fitHeight || m_size.height() < minimumHeight())) {
+        setSize(QSizeF(m_size.width(), minimumHeight()));
     }
     update();
 }
 
+void CanvasItem::applyWidgetProperties()
+{
+    QJsonObject view = m_properties;
+    if (typeName() == QLatin1String("TabWidget"))
+        view.insert(QStringLiteral("currentTab"), m_editorPage);
+    m_widget->setProperties(view);
+}
+
+void CanvasItem::setEditorPage(int index)
+{
+    if (typeName() != QLatin1String("TabWidget"))
+        return;
+    const int count = int(tabNames(propertyValue(QStringLiteral("tabNames")).toString()).size());
+    index = clampTabIndex(index, count);
+    if (m_editorPage == index)
+        return;
+    m_editorPage = index;
+    applyWidgetProperties();
+    updatePageVisibility();
+    emit editorPageChanged();
+}
+
+void CanvasItem::updatePages(const QStringList &names, int startup, int editor)
+{
+    m_properties.insert(QStringLiteral("tabNames"), names.join(QLatin1Char('\n')));
+    if (startup != 0 || m_properties.contains(QStringLiteral("currentTab")))
+        m_properties.insert(QStringLiteral("currentTab"), clampTabIndex(startup, int(names.size())));
+    m_editorPage = clampTabIndex(editor, int(names.size()));
+    applyWidgetProperties();
+    relayoutPages();
+    update();
+}
+
+void CanvasItem::relayoutPages()
+{
+    // Geometry edits affect all pages. Browsing only changes which children are visible.
+    updatePageVisibility();
+    const int count = int(tabNames(propertyValue(QStringLiteral("tabNames")).toString()).size());
+    for (int page = 0; page < count; ++page) {
+        QList<CanvasItem *> children;
+        for (CanvasItem *child : std::as_const(m_children)) {
+            if (child->m_tabIndex == page)
+                children.append(child);
+        }
+        arrangeChildren(children, m_properties.value(QStringLiteral("_tabLayout_%1").arg(page))
+                                      .toString(QStringLiteral("自由"))); // i18n: value
+    }
+}
+
+int CanvasItem::addPage(const QString &name)
+{
+    if (typeName() != QLatin1String("TabWidget") || name.contains(QLatin1Char('\n'))) {
+        return -1;
+    }
+    QStringList names = tabNames(propertyValue(QStringLiteral("tabNames")).toString());
+    names.append(name.trimmed().isEmpty() ? tr("页面%1").arg(names.size() + 1) : name.trimmed());
+    const int index = int(names.size()) - 1;
+    // A page added after an older bulk edit starts with its own default layout.
+    m_properties.remove(QStringLiteral("_tabLayout_%1").arg(index));
+    updatePages(names, propertyValue(QStringLiteral("currentTab")).toInt(0), index);
+    return index;
+}
+
+bool CanvasItem::removePage(int index)
+{
+    if (typeName() != QLatin1String("TabWidget")) {
+        return false;
+    }
+    QStringList names = tabNames(propertyValue(QStringLiteral("tabNames")).toString());
+    const int count = int(names.size());
+    if (count < 2 || index < 0 || index >= count) {
+        return false;
+    }
+    const int destination = std::min(index, count - 2);
+    for (CanvasItem *child : std::as_const(m_children)) {
+        if (child->m_tabIndex == index) {
+            child->m_tabIndex = destination;
+        } else if (child->m_tabIndex > index) {
+            --child->m_tabIndex;
+        }
+    }
+    for (int page = index; page < count - 1; ++page) {
+        const QString key = QStringLiteral("_tabLayout_%1").arg(page);
+        const QJsonValue next = m_properties.value(QStringLiteral("_tabLayout_%1").arg(page + 1));
+        if (next.isUndefined()) {
+            m_properties.remove(key);
+        } else {
+            m_properties.insert(key, next);
+        }
+    }
+    m_properties.remove(QStringLiteral("_tabLayout_%1").arg(count - 1));
+    const auto remainingIndex = [index, destination](int page) {
+        if (page == index)
+            return destination;
+        return page > index ? page - 1 : page;
+    };
+    names.removeAt(index);
+    updatePages(names, remainingIndex(propertyValue(QStringLiteral("currentTab")).toInt(0)),
+                remainingIndex(m_editorPage));
+    return true;
+}
+
+bool CanvasItem::movePage(int from, int to)
+{
+    if (typeName() != QLatin1String("TabWidget")) {
+        return false;
+    }
+    QStringList names = tabNames(propertyValue(QStringLiteral("tabNames")).toString());
+    const int count = int(names.size());
+    if (from < 0 || from >= count || to < 0 || to >= count || from == to) {
+        return false;
+    }
+    const auto movedIndex = [from, to](int index) {
+        if (index == from)
+            return to;
+        if (from < to && index > from && index <= to)
+            return index - 1;
+        if (to < from && index >= to && index < from)
+            return index + 1;
+        return index;
+    };
+    const QJsonObject previous = m_properties;
+    for (int page = 0; page < count; ++page) {
+        const QString key = QStringLiteral("_tabLayout_%1").arg(movedIndex(page));
+        const QJsonValue layout = previous.value(QStringLiteral("_tabLayout_%1").arg(page));
+        if (layout.isUndefined()) {
+            m_properties.remove(key);
+        } else {
+            m_properties.insert(key, layout);
+        }
+    }
+    for (CanvasItem *child : std::as_const(m_children)) {
+        child->m_tabIndex = movedIndex(child->m_tabIndex);
+    }
+    names.move(from, to);
+    updatePages(names, movedIndex(propertyValue(QStringLiteral("currentTab")).toInt(0)), movedIndex(m_editorPage));
+    return true;
+}
+
+bool CanvasItem::renamePage(int index, const QString &name)
+{
+    if (typeName() != QLatin1String("TabWidget")) {
+        return false;
+    }
+    QStringList names = tabNames(propertyValue(QStringLiteral("tabNames")).toString());
+    const QString trimmed = name.trimmed();
+    if (index < 0 || index >= names.size() || trimmed.isEmpty() || trimmed.contains(QLatin1Char('\n')) ||
+        trimmed == names.at(index)) {
+        return false;
+    }
+    names[index] = trimmed;
+    updatePages(names, propertyValue(QStringLiteral("currentTab")).toInt(0), m_editorPage);
+    return true;
+}
+
 bool CanvasItem::isLinkCard() const
 {
-    return typeName() == QLatin1String("SerialConfigCard") || typeName() == QLatin1String("TcpConfigCard") ||
-           typeName() == QLatin1String("MqttConfigCard") || typeName() == QLatin1String("UdpConfigCard") ||
-           typeName() == QLatin1String("CanConfigCard");
+    return m_widget->fitsContentHeight();
 }
 
 qreal CanvasItem::rowsHeight() const
@@ -196,16 +373,22 @@ qreal CanvasItem::minimumHeight() const
 
 void CanvasItem::setSize(const QSizeF &size, bool enforceMinimum)
 {
-    const QSizeF bounded = enforceMinimum ? QSizeF(std::max<qreal>(size.width(), m_meta->minWidth),
-                                                   std::max<qreal>(size.height(), minimumHeight()))
-                                          : QSizeF(std::max<qreal>(size.width(), 1), std::max<qreal>(size.height(), 1));
+    QSizeF bounded = enforceMinimum
+                         ? QSizeF(std::max<qreal>(size.width(), m_meta->minWidth),
+                                  std::max<qreal>(size.height(), m_meta->minHeight))
+                         : QSizeF(std::max<qreal>(size.width(), 1), std::max<qreal>(size.height(), 1));
+    if (isLinkCard()) {
+        bounded.setHeight(std::max<qreal>(bounded.height(), m_widget->sizeForGeometry(bounded.toSize()).height()));
+    }
     if (bounded == m_size) {
         return;
     }
     prepareGeometryChange();
     m_size = bounded;
     syncWidget();
-    if (isContainer()) {
+    if (typeName() == QLatin1String("TabWidget")) {
+        relayoutPages();
+    } else if (isContainer()) {
         relayoutChildren();
     }
 }
@@ -375,6 +558,11 @@ void CanvasItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
             m_containerParent->relayoutChildren();
         }
         emit changed(this);
+    } else if (!wasResizing && event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier &&
+               typeName() == QLatin1String("TabWidget")) {
+        const int page = static_cast<TabContainerWidget *>(m_widget)->navigationPageAt(event->pos().toPoint());
+        if (page >= 0)
+            setEditorPage(page);
     }
     m_moved = false;
 }
@@ -440,7 +628,7 @@ void CanvasItem::addChild(CanvasItem *child, int tabIndex, const QPointF *localP
     m_children.append(child);
     if (typeName() == QLatin1String("TabWidget")) {
         const int pages = int(tabNames(propertyValue(QStringLiteral("tabNames")).toString()).size());
-        child->m_tabIndex = clampTabIndex(tabIndex >= 0 ? tabIndex : m_widget->currentPage(), pages);
+        child->m_tabIndex = clampTabIndex(tabIndex >= 0 ? tabIndex : m_editorPage, pages);
     } else {
         child->m_tabIndex = 0;
     }
@@ -481,8 +669,7 @@ QString CanvasItem::layoutMode() const
         return propertyValue(QStringLiteral("layout")).toString(QStringLiteral("自由")); // i18n: value
     }
     if (type == QLatin1String("TabWidget")) {
-        const int page = propertyValue(QStringLiteral("currentTab")).toInt(0);
-        return m_properties.value(QStringLiteral("_tabLayout_%1").arg(page))
+        return m_properties.value(QStringLiteral("_tabLayout_%1").arg(m_editorPage))
             .toString(QStringLiteral("自由")); // i18n: value
     }
     return QStringLiteral("自由"); // i18n: value
@@ -498,24 +685,34 @@ void CanvasItem::fitWidth(qreal available)
     setSize(QSizeF(std::max<qreal>(m_meta->minWidth, available), m_size.height()));
 }
 
+void CanvasItem::updatePageVisibility()
+{
+    const bool free = isFreeLayout();
+    for (CanvasItem *child : std::as_const(m_children)) {
+        const bool shown = child->m_tabIndex == m_editorPage;
+        child->setVisible(shown);
+        if (shown)
+            child->setFlag(ItemIsMovable, free);
+    }
+}
+
 void CanvasItem::relayoutChildren()
 {
-    if (m_children.isEmpty()) {
-        return;
-    }
     const bool tabs = typeName() == QLatin1String("TabWidget");
-    const int page = tabs ? clampTabIndex(propertyValue(QStringLiteral("currentTab")).toInt(0),
-                                          int(tabNames(propertyValue(QStringLiteral("tabNames")).toString()).size()))
-                          : 0;
+    if (tabs)
+        updatePageVisibility();
     QList<CanvasItem *> visible;
     for (CanvasItem *child : std::as_const(m_children)) {
-        const bool shown = !tabs || child->m_tabIndex == page;
-        child->setVisible(shown);
-        if (shown) {
+        if (!tabs)
+            child->setVisible(true);
+        if (!tabs || child->m_tabIndex == m_editorPage)
             visible.append(child);
-        }
     }
-    const QString mode = layoutMode();
+    arrangeChildren(visible, layoutMode());
+}
+
+void CanvasItem::arrangeChildren(const QList<CanvasItem *> &visible, const QString &mode)
+{
     const bool free = mode == QStringLiteral("自由"); // i18n: value
     for (CanvasItem *child : std::as_const(visible)) {
         child->setFlag(ItemIsMovable, free);

@@ -11,122 +11,16 @@ namespace fhmi {
 
 namespace {
 
-// A block counts as due this much early, so a tick that arrives a moment before a block's time does
-// not leave it waiting; also how soon to look again while a control's write is on the line.
+// A block counts as due this much early, so a tick just before its time does not leave it waiting.
 constexpr qint64 kDueSlackMs = 10;
 
 } // namespace
-
-// ---------------------------------------------------------------------------
-// ModbusExchange
-// ---------------------------------------------------------------------------
-
-bool ModbusExchange::start(const Sender &send, ModbusSend how, Done done)
-{
-    // A request still on its way goes out all the same; only its result is no longer reported.
-    auto state = std::make_shared<State>();
-    state->done = std::move(done);
-    m_state = state;
-    QList<QPointer<ModbusMaster>> masters;
-    const std::weak_ptr<State> weak = state;
-    how.owner = state.get();
-    how.queuedOn = &masters;
-    how.done = [this, weak](const ModbusResult &result) {
-        if (const std::shared_ptr<State> alive = weak.lock()) {
-            report(alive, result);
-        }
-    };
-    if (!send(how)) {
-        if (m_state == state) {
-            m_state.reset();
-        }
-        return false;
-    }
-    if (m_state != state) {
-        return true; // done, or replaced, while it went out
-    }
-    if (masters.isEmpty()) {
-        m_state.reset(); // only links that do not parse Modbus took it: no reply to wait for
-        return true;
-    }
-    for (const QPointer<ModbusMaster> &master : std::as_const(masters)) {
-        if (!state->answered.contains(master.data())) {
-            state->waiting.append(master);
-        }
-    }
-    state->armed = true;
-    settle(state);
-    return true;
-}
-
-void ModbusExchange::report(const std::shared_ptr<State> &state, const ModbusResult &result)
-{
-    if (!state->result || (result.ok && !state->result->ok)) {
-        state->result = result;
-    }
-    if (!state->armed) {
-        state->answered.append(result.master.data());
-        return;
-    }
-    state->waiting.removeAll(result.master);
-    settle(state);
-}
-
-void ModbusExchange::settle()
-{
-    if (const std::shared_ptr<State> state = m_state) {
-        settle(state);
-    }
-}
-
-void ModbusExchange::settle(const std::shared_ptr<State> &state)
-{
-    if (!state->armed || state->finished) {
-        return;
-    }
-    state->waiting.removeIf([](const QPointer<ModbusMaster> &master) { return master.isNull(); });
-    if (!state->waiting.isEmpty()) {
-        return;
-    }
-    state->finished = true;
-    if (m_state == state) {
-        m_state.reset();
-    }
-    ModbusResult result;
-    if (state->result) {
-        result = *state->result;
-    } else { // every link it went to is gone
-        result.timedOut = true;
-        result.cancelled = true;
-    }
-    if (state->done) {
-        state->done(result);
-    }
-}
-
-void ModbusExchange::cancel()
-{
-    const std::shared_ptr<State> state = std::move(m_state);
-    m_state.reset();
-    if (!state) {
-        return;
-    }
-    for (const QPointer<ModbusMaster> &master : std::as_const(state->waiting)) {
-        if (master) {
-            master->cancelQueued(state.get());
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ModbusPoller
-// ---------------------------------------------------------------------------
 
 ModbusPoller::ModbusPoller(RuntimeContext *context) : QObject(context), m_context(context), m_timer(new QTimer(this))
 {
     m_timer->setTimerType(Qt::PreciseTimer); // a block's period is kept to the tick
     connect(m_timer, &QTimer::timeout, this, &ModbusPoller::poll);
-    // When the block due next falls between two ticks, or a control's write is on the line.
+    // When the block due next falls between two ticks.
     m_wake = new QTimer(this);
     m_wake->setSingleShot(true);
     m_wake->setTimerType(Qt::PreciseTimer);
@@ -135,55 +29,44 @@ ModbusPoller::ModbusPoller(RuntimeContext *context) : QObject(context), m_contex
     connect(context->hub(), &CommHub::linksChanged, this, &ModbusPoller::poll);
 }
 
-ModbusPoller::Settings ModbusPoller::settings() const
+ModbusPoller::Settings ModbusPoller::settings(Link *link) const
 {
     for (const LinkCard &entry : m_cards) {
-        if (entry.link && entry.link->isConnected() && entry.link->parsesModbus()) {
-            return entry.settings;
-        }
+        if (entry.link && (link ? entry.link == link : entry.link->isConnected() && entry.link->parsesModbus())) return entry.settings;
     }
-    return Settings{};
+    return {};
 }
 
 void ModbusPoller::setLinkCard(const QObject *card, Link *link, const Settings &settings)
 {
-    const Settings before = this->settings();
-    const auto known =
-        std::find_if(m_cards.begin(), m_cards.end(), [card](const LinkCard &entry) { return entry.card == card; });
-    if (known != m_cards.end()) {
-        known->link = link;
-        known->settings = settings;
-    } else {
-        m_cards.append({card, link, settings});
-    }
-    settingsChanged(before);
+    auto it = std::find_if(m_cards.begin(), m_cards.end(), [card](const LinkCard &entry) { return entry.card == card; });
+    if (it == m_cards.end()) m_cards.append({card, link, settings});
+    else *it = {card, link, settings};
+    poll();
 }
 
 void ModbusPoller::removeLinkCard(const QObject *card)
 {
-    const Settings before = settings();
     m_cards.removeIf([card](const LinkCard &entry) { return entry.card == card; });
-    settingsChanged(before);
-}
-
-void ModbusPoller::settingsChanged(const Settings &before)
-{
-    if (settings() != before) {
-        poll(); // the plan, the timer and the timeout follow at once
-    }
+    poll();
 }
 
 void ModbusPoller::setActive(bool active)
 {
-    if (active == m_active) {
-        return;
-    }
+    if (active == m_active) return;
     m_active = active;
     if (active) {
-        begin();
-    } else {
-        halt();
-    }
+        m_timer->start(std::max(1, settings().defaultPeriod));
+        poll();
+    } else halt();
+}
+
+void ModbusPoller::halt()
+{
+    m_timer->stop();
+    m_wake->stop();
+    m_channels.clear();
+    m_blocks.clear();
 }
 
 void ModbusPoller::reset()
@@ -196,217 +79,196 @@ void ModbusPoller::reset()
     m_toolTip.clear();
 }
 
-void ModbusPoller::begin()
+void ModbusPoller::replan(Channel &channel, const QList<ModbusNeed> &needs)
 {
-    m_read.cancel();
-    clearPlan();
-    m_timer->start(std::max(1, settings().defaultPeriod));
-    poll(); // the first block goes out right away
-}
-
-void ModbusPoller::halt()
-{
-    m_timer->stop();
-    m_wake->stop();
-    m_read.cancel(); // its reads still waiting in a queue never go out; one on the line gets its reply
-    clearPlan();
-}
-
-void ModbusPoller::clearPlan()
-{
-    m_blocks.clear();
-    m_due.clear();
-    m_results.clear();
-    ++m_plan;
-}
-
-QList<Link *> ModbusPoller::modbusLinks() const
-{
-    QList<Link *> links;
-    for (Link *link : m_context->hub()->connectedLinks()) {
-        if (link->parsesModbus() && link->canSend()) {
-            links.append(link);
-        }
+    QList<ModbusNeed> active;
+    const DataSource source{channel.link->connectionId(), 0, channel.endpoint};
+    for (ModbusNeed need : needs) {
+        auto route = need.route;
+        if (!channel.link->addressedModbusReplies()) route.endpoint.clear();
+        if (!need.visible || !route.accepts(source)) continue;
+        if (need.slave <= 0) need.slave = channel.settings.fallbackSlave;
+        if (need.slave < 1 || need.slave > 247 || need.address < 0 || need.address > 65535) continue;
+        const auto slaves = m_context->hub()->modbusSlaves(need.route);
+        if (std::any_of(slaves.cbegin(), slaves.cend(), [&need](const ModbusSlave *slave) { return slave->settings().slave == need.slave; })) continue;
+        need.period = std::max(0, need.period);
+        active.append(need);
     }
-    return links;
+    const auto blocks = planBlocks(active, std::max(1, channel.settings.defaultPeriod));
+    if (blocks == channel.blocks) {
+        if (blocks.isEmpty()) describe(channel, tr("没有 Modbus 绑定"));
+        return;
+    }
+    QList<qint64> due(blocks.size(), 0);
+    for (int i = 0; i < blocks.size(); ++i) {
+        const auto old = channel.blocks.indexOf(blocks.at(i));
+        if (old >= 0) due[i] = channel.due.at(old);
+    }
+    channel.blocks = blocks;
+    channel.due = due;
+    channel.results = QList<std::optional<ModbusResult>>(blocks.size());
+    ++channel.plan;
+    describe(channel, blocks.isEmpty() ? tr("没有 Modbus 绑定") : tr("%1 块 · 轮询中").arg(blocks.size()));
 }
 
 void ModbusPoller::poll()
 {
+    if (!m_active || m_polling) return;
+    m_polling = true;
     m_wake->stop();
-    if (!m_active) {
-        return;
-    }
-    m_read.settle(); // a link that went away never answers
-    const QList<Link *> links = modbusLinks();
-    m_waiting = links.isEmpty();
-    if (m_waiting) {
-        clearPlan(); // a link that comes back starts with a fresh plan
-        setStatus(tr("等待连接"));
-        return;
-    }
-    replan();
-    updateInterval();
-    if (m_blocks.isEmpty() || m_read.isActive()) {
-        return; // the read's reply polls again
-    }
+    const auto needs = m_context->modbusNeeds();
+    QSet<ModbusMaster *> current;
+    int interval = std::max(1, settings().defaultPeriod);
+    qint64 wake = interval;
     const qint64 now = m_context->now();
-    const qint64 due = *std::min_element(m_due.cbegin(), m_due.cend());
-    for (Link *link : links) {
-        if (link->modbusMaster()->busy()) {
-            // A control's write is on the line: look again once the next block is due, at the soonest.
-            m_wake->start(int(std::max(kDueSlackMs, due - now)));
-            return;
+    for (Link *link : m_context->hub()->connectedLinks()) {
+        if (!link->parsesModbus()) continue;
+        QStringList endpoints;
+        if (link->addressedModbusReplies()) {
+            if (link->canSend()) endpoints = link->sendEndpoints();
+            for (const auto &need : needs) {
+                if (need.visible && !need.route.endpoint.isEmpty() &&
+                    need.route.acceptsConnection(link->connectionId()) && link->canSendTo(need.route.endpoint))
+                    endpoints.append(need.route.endpoint);
+            }
+            endpoints.removeDuplicates();
+        } else if (link->canSendTo({})) {
+            // MQTT replies can come from a different topic than the polling destination.
+            endpoints.append(QString());
+        }
+        for (const QString &endpoint : endpoints) {
+            auto *master = link->modbusMaster(endpoint);
+            current.insert(master);
+            auto channel = m_channels.value(master);
+            if (!channel || channel->master != master) {
+                channel = std::make_shared<Channel>();
+                channel->link = link;
+                channel->master = master;
+                channel->endpoint = endpoint;
+                m_channels.insert(master, channel);
+                connect(master, &ModbusMaster::queueIdle, this, &ModbusPoller::poll, Qt::UniqueConnection);
+            }
+            channel->settings = settings(link);
+            replan(*channel, needs);
+            interval = std::min(interval, std::max(1, channel->settings.defaultPeriod));
+            for (const auto &block : channel->blocks) interval = std::min(interval, block.period);
+            if (channel->blocks.isEmpty()) continue;
+            if (master->busy() || master->pending())
+                continue;
+            const auto due = *std::min_element(channel->due.cbegin(), channel->due.cend());
+            int next = -1;
+            for (int i = 0; i < channel->blocks.size(); ++i) {
+                if (channel->due.at(i) <= now + kDueSlackMs && (next < 0 || channel->due.at(i) < channel->due.at(next))) next = i;
+            }
+            if (next < 0) {
+                wake = std::min(wake, due - now);
+                continue;
+            }
+            const auto block = channel->blocks.at(next);
+            channel->due[next] = now + block.period;
+            const ModbusRequest request{block.slave, block.fc, block.start, block.count, {}};
+            const int plan = channel->plan;
+            const std::weak_ptr<Channel> weak = channel;
+            const auto frame = master->enqueue(request, channel->settings.timeoutMs, ModbusMaster::Priority::Read,
+                                               [this, weak, next, plan](const ModbusResult &result) {
+                if (auto alive = weak.lock()) blockDone(alive, next, plan, result);
+            });
+            if (frame.isEmpty()) {
+                ModbusResult failed;
+                failed.problem = tr("发送失败");
+                blockDone(channel, next, plan, failed);
+            }
         }
     }
-    int next = -1;
-    for (int i = 0; i < int(m_blocks.size()); ++i) {
-        if (m_due.at(i) <= now + kDueSlackMs && (next < 0 || m_due.at(i) < m_due.at(next))) {
-            next = i;
-        }
-    }
-    if (next < 0) {
-        m_wake->start(int(due - now)); // when it is due, rather than at a later tick, up to a period late
-        return;
-    }
-    const ModbusBlock block = m_blocks.at(next);
-    m_due[next] = now + block.period;
-    const auto request = CommandEncoder::modbusRequest(block.slave, block.fc, block.start, block.count);
-    if (!request) {
-        return; // not reached: the planner keeps blocks within what a request can read
-    }
-    ModbusSend how;
-    how.timeoutMs = settings().timeoutMs;
-    how.priority = ModbusMaster::Priority::Read;
-    how.modbusLinksOnly = true;
-    CommHub *hub = m_context->hub();
-    const int plan = m_plan;
-    const bool sent =
-        m_read.start([hub, &request](const ModbusSend &queue) { return hub->sendModbus(*request, nullptr, queue) > 0; },
-                     how, [this, next, plan](const ModbusResult &result) { blockDone(next, plan, result); });
-    if (!sent) { // no link could write it: the block went without a reply this time
-        ModbusResult failed;
-        failed.problem = tr("发送失败");
-        blockDone(next, plan, failed);
-    }
+    m_channels.removeIf([&current](const auto &item) { return !current.contains(item.key()); });
+    m_waiting = current.isEmpty();
+    updateStatus();
+    m_timer->setInterval(std::max(1, interval));
+    m_polling = false;
+    if (!m_waiting && !m_wake->isActive()) m_wake->start(int(std::max<qint64>(1, wake)));
 }
 
-void ModbusPoller::replan()
+void ModbusPoller::blockDone(const std::shared_ptr<Channel> &channel, int block, int plan, const ModbusResult &result)
 {
-    const Settings current = settings();
-    const QList<ModbusSlave *> slaves = m_context->hub()->modbusSlaves();
-    QList<ModbusNeed> active;
-    for (ModbusNeed need : m_context->modbusNeeds()) {
-        if (!need.visible) {
-            continue; // on a tab page in the background, or hidden
+    if (!m_active || result.cancelled) return;
+    if (plan == channel->plan && block < channel->results.size()) {
+        if (!result.ok && channel->link) {
+            m_context->modbusReadFailed(*channel->link, channel->endpoint, channel->blocks.at(block),
+                                        channel->settings.fallbackSlave);
         }
-        if (need.slave <= 0) {
-            need.slave = current.fallbackSlave;
-        }
-        if (need.slave < 1 || need.slave > 247 || need.address < 0 || need.address > 65535) {
-            continue; // no request can read it
-        }
-        if (std::any_of(slaves.cbegin(), slaves.cend(),
-                        [&need](const ModbusSlave *slave) { return slave->settings().slave == need.slave; })) {
-            continue; // this program's own slave serves it from its table
-        }
-        need.period = std::max(0, need.period);
-        active.append(need);
-    }
-    const QList<ModbusBlock> blocks = planBlocks(active, current.defaultPeriod);
-    if (blocks == m_blocks) {
-        if (blocks.isEmpty()) {
-            setStatus(tr("没有 Modbus 绑定"));
-        }
-        return;
-    }
-    // A new plan starts a new round. A block that stays keeps its time; a new one is read right away.
-    QList<qint64> due(blocks.size(), 0);
-    for (int i = 0; i < int(blocks.size()); ++i) {
-        const qsizetype old = m_blocks.indexOf(blocks.at(i));
-        if (old >= 0) {
-            due[i] = m_due.at(old);
+        auto &slot = channel->results[block];
+        if (!slot || slot->ok) slot = result;
+        if (std::all_of(channel->results.cbegin(), channel->results.cend(), [](const auto &r) { return r.has_value(); })) {
+            QString status = tr("%1 块 · 正常").arg(channel->blocks.size());
+            for (int k = 0; k < channel->blocks.size(); ++k) {
+                const auto &r = *channel->results.at(k);
+                if (r.ok) continue;
+                const auto b = channel->blocks.at(k);
+                const QString exception = modbusException(r.message);
+                status = exception.isEmpty() ? tr("第 %1 块无响应（从站 %2 功能码 %3 地址 %4）").arg(k + 1).arg(b.slave).arg(b.fc).arg(b.start)
+                                             : tr("第 %1 块%2").arg(k + 1).arg(exception);
+                break;
+            }
+            channel->results = QList<std::optional<ModbusResult>>(channel->blocks.size());
+            describe(*channel, status);
         }
     }
-    m_blocks = blocks;
-    m_due = due;
-    m_results = QList<std::optional<ModbusResult>>(blocks.size());
-    ++m_plan;
-    setStatus(blocks.isEmpty() ? tr("没有 Modbus 绑定") : tr("%1 块 · 轮询中").arg(blocks.size()));
+    if (m_polling) m_wake->start(0);
+    else poll();
 }
 
-void ModbusPoller::updateInterval()
+void ModbusPoller::describe(Channel &channel, const QString &status)
 {
-    // Every block is looked at as often as the fastest of them, and the default period, needs.
-    int interval = settings().defaultPeriod;
-    for (const ModbusBlock &block : std::as_const(m_blocks)) {
-        interval = std::min(interval, block.period);
-    }
-    interval = std::max(1, interval);
-    if (m_timer->interval() != interval) {
-        m_timer->setInterval(interval);
-    }
-}
-
-void ModbusPoller::blockDone(int block, int plan, const ModbusResult &result)
-{
-    if (!m_active || result.cancelled) {
-        return; // a link that went down: a fresh plan follows once one can send again
-    }
-    if (plan == m_plan && block < int(m_results.size())) {
-        std::optional<ModbusResult> &slot = m_results[block];
-        if (!slot || slot->ok) { // a block that failed once in a round stays failed for that round
-            slot = result;
-        }
-        if (std::all_of(m_results.cbegin(), m_results.cend(),
-                        [](const std::optional<ModbusResult> &r) { return r.has_value(); })) {
-            roundDone();
-        }
-    }
-    poll(); // the next due block goes out right away
-}
-
-void ModbusPoller::roundDone()
-{
-    const int count = int(m_blocks.size());
-    QString status = tr("%1 块 · 正常").arg(count);
-    for (int k = 0; k < count; ++k) {
-        const ModbusResult &result = *m_results.at(k);
-        if (result.ok) {
-            continue;
-        }
-        const ModbusBlock &block = m_blocks.at(k);
-        const QString exception = modbusException(result.message);
-        status = exception.isEmpty() ? tr("第 %1 块无响应（从站 %2 功能码 %3 地址 %4）")
-                                           .arg(k + 1)
-                                           .arg(block.slave)
-                                           .arg(block.fc)
-                                           .arg(block.start)
-                                     : tr("第 %1 块%2").arg(k + 1).arg(exception);
-        break;
-    }
-    m_results = QList<std::optional<ModbusResult>>(count);
-    setStatus(status);
-}
-
-void ModbusPoller::setStatus(const QString &text)
-{
+    channel.status = status;
     QStringList lines;
-    for (const ModbusBlock &block : std::as_const(m_blocks)) {
-        lines << tr("从站 %1 · 功能码 %2 · 地址 %3–%4 · 周期 %5 ms")
-                     .arg(block.slave)
-                     .arg(block.fc)
-                     .arg(block.start)
-                     .arg(block.start + block.count - 1)
-                     .arg(block.period);
+    for (const auto &block : channel.blocks) {
+        lines << tr("从站 %1 · 功能码 %2 · 地址 %3–%4 · 周期 %5 ms").arg(block.slave).arg(block.fc).arg(block.start).arg(block.start + block.count - 1).arg(block.period);
     }
-    const QString tip = lines.isEmpty() ? text : lines.join(QLatin1Char('\n'));
-    if (text == m_status && tip == m_toolTip) {
-        return;
+    channel.tip = lines.isEmpty() ? status : lines.join(QLatin1Char('\n'));
+}
+
+QString ModbusPoller::status(const Link *link) const
+{
+    if (!link) return m_status;
+    QStringList lines;
+    const auto count = std::count_if(m_channels.cbegin(), m_channels.cend(), [link](const auto &channel) { return channel->link == link; });
+    for (const auto &channel : m_channels) if (channel->link == link) {
+        lines << ((channel->endpoint.isEmpty() || count == 1) ? channel->status : channel->endpoint + QStringLiteral(": ") + channel->status);
     }
-    m_status = text;
+    return lines.join(QLatin1Char('\n'));
+}
+
+QString ModbusPoller::toolTip(const Link *link) const
+{
+    if (!link) return m_toolTip;
+    QStringList lines;
+    for (const auto &channel : m_channels) if (channel->link == link) lines << channel->tip;
+    return lines.join(QLatin1Char('\n'));
+}
+
+void ModbusPoller::updateStatus()
+{
+    QStringList statuses, tips;
+    m_blocks.clear();
+    // Preserve card order even when the user connects B before A.
+    const auto connected = m_context->hub()->connectedLinks();
+    QList<Link *> ordered;
+    for (const auto &card : m_cards) if (card.link && connected.contains(card.link)) ordered.append(card.link);
+    for (auto *link : connected) if (!ordered.contains(link)) ordered.append(link);
+    for (Link *link : ordered) {
+        for (const auto &channel : m_channels) if (channel->link == link) {
+            const QString prefix = m_channels.size() > 1 ? link->connectionId() + (channel->endpoint.isEmpty() ? QString() : QLatin1Char('/') + channel->endpoint) + QStringLiteral(": ") : QString();
+            statuses << prefix + channel->status;
+            tips << prefix + channel->tip;
+            m_blocks += channel->blocks;
+        }
+    }
+    const QString status = m_waiting ? tr("等待连接") : statuses.join(QLatin1Char('\n'));
+    const QString tip = m_waiting ? status : tips.join(QLatin1Char('\n'));
+    if (status == m_status && tip == m_toolTip) return;
+    m_status = status;
     m_toolTip = tip;
-    emit statusChanged(m_status, m_toolTip);
+    emit statusChanged(status, tip);
 }
 
 } // namespace fhmi

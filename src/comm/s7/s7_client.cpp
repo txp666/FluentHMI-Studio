@@ -61,7 +61,7 @@ public:
         m_writes.enqueue(command); m_timer->start(0);
     }
 signals:
-    void state(quint64 life, quint64 epoch, bool connected, const QString &message);
+    void state(quint64 life, quint64 epoch, bool connected, const QString &message, bool error = false);
     void sample(quint64 life, const fhmi::S7::Sample &sample);
     void written(quint64 life, bool success, const QString &error);
 private:
@@ -77,7 +77,7 @@ private:
     }
     void lost(int code) {
         disconnectNative(); m_writes.clear(); m_retryAt=m_clock.elapsed()+m_config.reconnectInterval;
-        emit state(m_life,m_epoch,false,tr("S7 连接断开：%1").arg(problem(code)));
+        emit state(m_life,m_epoch,false,tr("S7 连接断开：%1").arg(problem(code)),true);
         for(const auto &read:m_reads) publish(read.point,{},QStringLiteral("disconnected"));
     }
     void step() {
@@ -175,13 +175,14 @@ S7Client::~S7Client() { clear(); }
 void S7Client::configure(const QString &id,const QJsonObject &properties) {
     if(d->sessions.count(id)) remove(id);
     QString error; const auto config=S7::config(properties,&error);
-    if(!config) { emit statusChanged(id,false,error);return; }
+    if(!config) { emit statusChanged(id,false,error);emit errorOccurred(id,error);return; }
     auto session=std::make_unique<Impl::Session>();auto *s=session.get();s->config=*config;
     s->worker=new S7Worker(s->activeLife,*config);s->worker->moveToThread(&s->thread);
     connect(&s->thread,&QThread::finished,s->worker,&QObject::deleteLater);
-    connect(s->worker,&S7Worker::state,this,[this,id](quint64 life,quint64 epoch,bool connected,const QString &message) {
+    connect(s->worker,&S7Worker::state,this,[this,id](quint64 life,quint64 epoch,bool connected,const QString &message,bool error) {
         const auto it=d->sessions.find(id);if(it==d->sessions.end()||life!=it->second->life)return;
         auto *s=it->second.get();s->epoch=epoch;s->connected=connected;emit statusChanged(id,connected,message);emit logMessage(id+QStringLiteral(": ")+message);
+        if(error)emit errorOccurred(id,message);
     });
     connect(s->worker,&S7Worker::sample,this,[this,id](quint64 life,const S7::Sample &sample) {
         const auto it=d->sessions.find(id);if(it!=d->sessions.end()&&life==it->second->life&&sample.sessionGeneration==it->second->epoch)emit sampleReceived(sample);

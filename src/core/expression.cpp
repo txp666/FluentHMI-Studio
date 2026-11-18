@@ -19,6 +19,7 @@ enum class Kind
     Int,
     Float,
     Bool,
+    Unknown,
     Error
 };
 
@@ -29,7 +30,7 @@ struct Value
     qint64 integer = 0;
     double real = 0.0;
 
-    bool isError() const { return kind == Kind::Error; }
+    bool isError() const { return kind == Kind::Error || kind == Kind::Unknown; }
     bool isInteger() const { return kind == Kind::Int || kind == Kind::Bool; } // an int to Python's operators
     double toReal() const { return kind == Kind::Float ? real : double(integer); }
     bool truthy() const { return kind == Kind::Float ? real != 0.0 : integer != 0; }
@@ -40,6 +41,23 @@ Value intValue(qint64 n) { return {Kind::Int, n, 0.0}; }
 Value boolValue(bool b) { return {Kind::Bool, b ? 1 : 0, 0.0}; }
 
 Value floatValue(double d) { return {Kind::Float, 0, d}; }
+
+// Project conditions aggregate truth, including disconnected inputs. A known fault is
+// sufficient for OR; a known false input is sufficient for AND. Calculation errors stay errors.
+Value projectLogical(const Value &a, const Value &b, bool isOr)
+{
+    if (a.kind == Kind::Error)
+        return a;
+    if (!a.isError() && a.truthy() == isOr)
+        return boolValue(isOr);
+    if (b.kind == Kind::Error)
+        return b;
+    if (!b.isError() && b.truthy() == isOr)
+        return boolValue(isOr);
+    if (a.isError() || b.isError())
+        return {Kind::Unknown};
+    return boolValue(!isOr);
+}
 
 enum class Op
 {
@@ -121,7 +139,7 @@ std::optional<qint64> integerPower(qint64 base, qint64 exponent)
 Value apply(Op op, const Value &a, const Value &b)
 {
     if (a.isError() || b.isError()) {
-        return {};
+        return a.kind == Kind::Error || b.kind == Kind::Error ? Value{} : Value{Kind::Unknown};
     }
     const bool integers = a.isInteger() && b.isInteger();
     const qint64 i = a.integer, j = b.integer;
@@ -287,13 +305,54 @@ bool isHex(QChar c)
            (c >= QLatin1Char('A') && c <= QLatin1Char('F'));
 }
 
+Value fromVariant(const QVariant &value)
+{
+    Value bound;
+    switch (value.typeId()) {
+    case QMetaType::Bool:
+        bound = boolValue(value.toBool());
+        break;
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::LongLong:
+        bound = intValue(value.toLongLong());
+        break;
+    case QMetaType::ULongLong:
+        if (value.toULongLong() > quint64(std::numeric_limits<qint64>::max())) {
+            return {};
+        }
+        bound = intValue(qint64(value.toULongLong()));
+        break;
+    case QMetaType::Double:
+    case QMetaType::Float:
+        bound = floatValue(value.toDouble());
+        break;
+    default:
+        return {};
+    }
+    return bound;
+}
+
+struct ReferenceSpan
+{
+    qsizetype start;
+    qsizetype length;
+    QString name;
+    QChar quote;
+};
+
 // Python's grammar, lowest precedence first: or, and, not, comparison, |, ^, &, shifts,
 // + -, * / // %, unary + - ~, **, atom. Parsing evaluates as it goes; a syntax error is
 // nullopt, an error at run time a Value of kind Error.
 class ExpressionParser
 {
   public:
-    ExpressionParser(const QString &text, Value value) : m_text(text), m_value(value) {}
+    ExpressionParser(const QString &text, Value value, const Expression::Resolver &resolve = {},
+                     QStringList *refs = nullptr, bool *usesValue = nullptr,
+                     QList<ReferenceSpan> *spans = nullptr)
+        : m_text(text), m_value(value), m_resolve(resolve), m_refs(refs), m_usesValue(usesValue), m_spans(spans)
+    {
+    }
 
     std::optional<Value> run()
     {
@@ -354,7 +413,9 @@ class ExpressionParser
             if (!right) {
                 return std::nullopt;
             }
-            if (!left->isError() && !left->truthy()) { // the first true operand, else the last one
+            if (m_resolve) {
+                left = projectLogical(*left, *right, true);
+            } else if (!left->isError() && !left->truthy()) { // the first true operand, else the last one
                 left = right;
             }
         }
@@ -369,7 +430,9 @@ class ExpressionParser
             if (!right) {
                 return std::nullopt;
             }
-            if (!left->isError() && left->truthy()) { // the first false operand, else the last one
+            if (m_resolve) {
+                left = projectLogical(*left, *right, false);
+            } else if (!left->isError() && left->truthy()) { // the first false operand, else the last one
                 left = right;
             }
         }
@@ -383,7 +446,7 @@ class ExpressionParser
             if (!operand) {
                 return std::nullopt;
             }
-            return operand->isError() ? Value{} : boolValue(!operand->truthy());
+            return operand->isError() ? *operand : boolValue(!operand->truthy());
         }
         return comparison();
     }
@@ -419,7 +482,8 @@ class ExpressionParser
                 continue;
             }
             if (previous.isError() || right->isError()) {
-                decided = Value{};
+                decided = previous.kind == Kind::Error || right->kind == Kind::Error ? Value{}
+                                                                                    : Value{Kind::Unknown};
             } else if (!holds(QLatin1String(op), compare(previous, *right))) {
                 decided = boolValue(false);
             }
@@ -485,7 +549,7 @@ class ExpressionParser
             }
             const Value &v = *operand;
             if (v.isError()) {
-                return Value{};
+                return v;
             }
             if (*sign == '~') { // ints and bools only; ~x is -x - 1
                 return v.isInteger() ? intValue(~v.integer) : Value{};
@@ -523,7 +587,39 @@ class ExpressionParser
             }
             return inner;
         }
+        if (acceptWord("T")) {
+            if (!accept("["))
+                return std::nullopt;
+            skipSpace();
+            const QChar quote = at(m_pos++);
+            if (quote != QLatin1Char('"') && quote != QLatin1Char('\''))
+                return std::nullopt;
+            const qsizetype start = m_pos;
+            QString name;
+            while (!at(m_pos).isNull() && at(m_pos) != quote) {
+                QChar ch = at(m_pos++);
+                if (ch == QLatin1Char('\\')) {
+                    ch = at(m_pos++);
+                    if (ch != quote && ch != QLatin1Char('\\'))
+                        return std::nullopt;
+                }
+                name.append(ch);
+            }
+            const qsizetype length = m_pos - start;
+            if (at(m_pos++) != quote || name.isEmpty() || !accept("]"))
+                return std::nullopt;
+            if (m_spans)
+                m_spans->append({start, length, name, quote});
+            if (m_refs && !m_refs->contains(name))
+                m_refs->append(name);
+            if (!m_resolve)
+                return Value{};
+            const QVariant value = m_resolve(name);
+            return value.isValid() && !value.isNull() ? fromVariant(value) : Value{Kind::Unknown};
+        }
         if (acceptWord("value")) {
+            if (m_usesValue)
+                *m_usesValue = true;
             return m_value;
         }
         if (acceptWord("True")) {
@@ -619,37 +715,48 @@ class ExpressionParser
 
     const QString &m_text;
     Value m_value;
+    Expression::Resolver m_resolve;
+    QStringList *m_refs;
+    bool *m_usesValue;
+    QList<ReferenceSpan> *m_spans;
     qsizetype m_pos = 0;
 };
 
 } // namespace
 
-QVariant Expression::evaluate(const QString &expression, const QVariant &value)
+QStringList Expression::references(const QString &expression, bool *valid, bool *usesValue)
 {
-    Value bound;
-    switch (value.typeId()) {
-    case QMetaType::Bool:
-        bound = boolValue(value.toBool());
-        break;
-    case QMetaType::Int:
-    case QMetaType::UInt:
-    case QMetaType::LongLong:
-        bound = intValue(value.toLongLong());
-        break;
-    case QMetaType::ULongLong:
-        if (value.toULongLong() > quint64(std::numeric_limits<qint64>::max())) {
-            return {};
-        }
-        bound = intValue(qint64(value.toULongLong()));
-        break;
-    case QMetaType::Double:
-    case QMetaType::Float:
-        bound = floatValue(value.toDouble());
-        break;
-    default:
-        return {};
+    QStringList refs;
+    if (usesValue)
+        *usesValue = false;
+    const auto parsed = ExpressionParser(expression, {}, {}, &refs, usesValue).run();
+    if (valid)
+        *valid = parsed.has_value();
+    return refs;
+}
+
+QString Expression::renameReference(const QString &expression, const QString &previous, const QString &current)
+{
+    QList<ReferenceSpan> spans;
+    if (!ExpressionParser(expression, {}, {}, nullptr, nullptr, &spans).run())
+        return expression;
+    QString renamed = expression;
+    for (auto it = spans.crbegin(); it != spans.crend(); ++it) {
+        if (it->name != previous)
+            continue;
+        QString escaped = current;
+        escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+        escaped.replace(it->quote, QString(QLatin1Char('\\')) + it->quote);
+        renamed.replace(it->start, it->length, escaped);
     }
-    const auto result = ExpressionParser(expression, bound).run();
+    return renamed;
+}
+
+QVariant Expression::evaluate(const QString &expression, const QVariant &value, const Resolver &resolve)
+{
+    if (!resolve && fromVariant(value).isError())
+        return {};
+    const auto result = ExpressionParser(expression, fromVariant(value), resolve).run();
     if (!result) {
         return {};
     }
@@ -661,6 +768,7 @@ QVariant Expression::evaluate(const QString &expression, const QVariant &value)
     case Kind::Float:
         return std::isfinite(result->real) ? QVariant(result->real) : QVariant();
     case Kind::Error:
+    case Kind::Unknown:
         break;
     }
     return {};

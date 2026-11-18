@@ -1,0 +1,527 @@
+{
+  "version": "1.0",
+  "appName": "分页与控件风格",
+  "canvas": {
+    "width": 1050,
+    "height": 700,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line",
+    "parserConfig": {
+      "separator": ","
+    }
+  },
+  "widgets": [
+    {
+      "type": "Label",
+      "id": "heading",
+      "geometry": {
+        "x": 20,
+        "y": 16,
+        "w": 1010,
+        "h": 36
+      },
+      "properties": {
+        "text": "分页与控件风格",
+        "fontSize": 22,
+        "bold": true
+      }
+    },
+    {
+      "type": "Label",
+      "id": "intro",
+      "geometry": {
+        "x": 20,
+        "y": 54,
+        "w": 1010,
+        "h": 28
+      },
+      "properties": {
+        "text": "无需连接设备。预览中点击导航切页，点击按钮查看本地通知；选中控件可在属性区修改风格。",
+        "fontSize": 12,
+        "bold": false
+      }
+    },
+    {
+      "type": "Label",
+      "id": "caption_classic",
+      "geometry": {
+        "x": 20,
+        "y": 88,
+        "w": 236,
+        "h": 26
+      },
+      "properties": {
+        "text": "经典选项卡",
+        "fontSize": 13,
+        "bold": true
+      }
+    },
+    {
+      "type": "TabWidget",
+      "id": "pages_classic",
+      "geometry": {
+        "x": 20,
+        "y": 120,
+        "w": 236,
+        "h": 234
+      },
+      "properties": {
+        "navigationStyle": "经典选项卡",
+        "tabNames": "总览\n参数",
+        "currentTab": 0
+      },
+      "children": [
+        {
+          "type": "NumericDisplay",
+          "id": "classic_overview",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "产线进度",
+            "value": "65",
+            "unit": "%",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 0
+        },
+        {
+          "type": "NumericDisplay",
+          "id": "classic_settings",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "速度设定",
+            "value": "900",
+            "unit": "rpm",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 1
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "id": "caption_pivot",
+      "geometry": {
+        "x": 278,
+        "y": 88,
+        "w": 236,
+        "h": 26
+      },
+      "properties": {
+        "text": "下划线导航",
+        "fontSize": 13,
+        "bold": true
+      }
+    },
+    {
+      "type": "TabWidget",
+      "id": "pages_pivot",
+      "geometry": {
+        "x": 278,
+        "y": 120,
+        "w": 236,
+        "h": 234
+      },
+      "properties": {
+        "navigationStyle": "下划线导航",
+        "tabNames": "总览\n参数",
+        "currentTab": 0
+      },
+      "children": [
+        {
+          "type": "NumericDisplay",
+          "id": "pivot_overview",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "产线进度",
+            "value": "65",
+            "unit": "%",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 0
+        },
+        {
+          "type": "NumericDisplay",
+          "id": "pivot_settings",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "速度设定",
+            "value": "900",
+            "unit": "rpm",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 1
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "id": "caption_segmented",
+      "geometry": {
+        "x": 536,
+        "y": 88,
+        "w": 236,
+        "h": 26
+      },
+      "properties": {
+        "text": "分段导航",
+        "fontSize": 13,
+        "bold": true
+      }
+    },
+    {
+      "type": "TabWidget",
+      "id": "pages_segmented",
+      "geometry": {
+        "x": 536,
+        "y": 120,
+        "w": 236,
+        "h": 234
+      },
+      "properties": {
+        "navigationStyle": "分段导航",
+        "tabNames": "总览\n参数",
+        "currentTab": 0
+      },
+      "children": [
+        {
+          "type": "NumericDisplay",
+          "id": "segmented_overview",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "产线进度",
+            "value": "65",
+            "unit": "%",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 0
+        },
+        {
+          "type": "NumericDisplay",
+          "id": "segmented_settings",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "速度设定",
+            "value": "900",
+            "unit": "rpm",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 1
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "id": "caption_document",
+      "geometry": {
+        "x": 794,
+        "y": 88,
+        "w": 236,
+        "h": 26
+      },
+      "properties": {
+        "text": "文档页签",
+        "fontSize": 13,
+        "bold": true
+      }
+    },
+    {
+      "type": "TabWidget",
+      "id": "pages_document",
+      "geometry": {
+        "x": 794,
+        "y": 120,
+        "w": 236,
+        "h": 234
+      },
+      "properties": {
+        "navigationStyle": "文档页签",
+        "tabNames": "总览\n参数",
+        "currentTab": 0
+      },
+      "children": [
+        {
+          "type": "NumericDisplay",
+          "id": "document_overview",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "产线进度",
+            "value": "65",
+            "unit": "%",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 0
+        },
+        {
+          "type": "NumericDisplay",
+          "id": "document_settings",
+          "geometry": {
+            "x": 18,
+            "y": 86,
+            "w": 200,
+            "h": 104
+          },
+          "properties": {
+            "title": "速度设定",
+            "value": "900",
+            "unit": "rpm",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          },
+          "tabIndex": 1
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "id": "button_heading",
+      "geometry": {
+        "x": 20,
+        "y": 374,
+        "w": 1010,
+        "h": 28
+      },
+      "properties": {
+        "text": "按钮风格 · 点击显示通知，不发送命令",
+        "fontSize": 14,
+        "bold": true
+      }
+    },
+    {
+      "type": "PushButton",
+      "id": "button_1",
+      "geometry": {
+        "x": 20,
+        "y": 414,
+        "w": 236,
+        "h": 42
+      },
+      "properties": {
+        "text": "标准按钮",
+        "buttonStyle": "标准",
+        "notify": true,
+        "notifyTitle": "风格演示",
+        "notifyContent": "标准按钮已按下 · 仅本地通知",
+        "notifyType": "信息",
+        "notifyDuration": 1800
+      }
+    },
+    {
+      "type": "PushButton",
+      "id": "button_2",
+      "geometry": {
+        "x": 278,
+        "y": 414,
+        "w": 236,
+        "h": 42
+      },
+      "properties": {
+        "text": "强调按钮",
+        "buttonStyle": "强调",
+        "notify": true,
+        "notifyTitle": "风格演示",
+        "notifyContent": "强调按钮已按下 · 仅本地通知",
+        "notifyType": "信息",
+        "notifyDuration": 1800
+      }
+    },
+    {
+      "type": "PushButton",
+      "id": "button_3",
+      "geometry": {
+        "x": 536,
+        "y": 414,
+        "w": 236,
+        "h": 42
+      },
+      "properties": {
+        "text": "轻量按钮",
+        "buttonStyle": "轻量",
+        "notify": true,
+        "notifyTitle": "风格演示",
+        "notifyContent": "轻量按钮已按下 · 仅本地通知",
+        "notifyType": "信息",
+        "notifyDuration": 1800
+      }
+    },
+    {
+      "type": "PushButton",
+      "id": "button_4",
+      "geometry": {
+        "x": 794,
+        "y": 414,
+        "w": 236,
+        "h": 42
+      },
+      "properties": {
+        "text": "描边按钮",
+        "buttonStyle": "描边",
+        "notify": true,
+        "notifyTitle": "风格演示",
+        "notifyContent": "描边按钮已按下 · 仅本地通知",
+        "notifyType": "信息",
+        "notifyDuration": 1800
+      }
+    },
+    {
+      "type": "Label",
+      "id": "card_heading",
+      "geometry": {
+        "x": 20,
+        "y": 478,
+        "w": 1010,
+        "h": 28
+      },
+      "properties": {
+        "text": "卡片与数值卡 · 容器和内部读数使用同一种风格",
+        "fontSize": 14,
+        "bold": true
+      }
+    },
+    {
+      "type": "CardContainer",
+      "id": "card_1",
+      "geometry": {
+        "x": 20,
+        "y": 518,
+        "w": 322,
+        "h": 154
+      },
+      "properties": {
+        "title": "标准卡片",
+        "cardStyle": "标准",
+        "layout": "自由"
+      },
+      "children": [
+        {
+          "type": "NumericDisplay",
+          "id": "reading_1",
+          "geometry": {
+            "x": 14,
+            "y": 42,
+            "w": 294,
+            "h": 96
+          },
+          "properties": {
+            "title": "设备温度",
+            "value": "23.5",
+            "unit": "°C",
+            "fontSize": 30,
+            "cardStyle": "标准"
+          }
+        }
+      ]
+    },
+    {
+      "type": "CardContainer",
+      "id": "card_2",
+      "geometry": {
+        "x": 364,
+        "y": 518,
+        "w": 322,
+        "h": 154
+      },
+      "properties": {
+        "title": "透明卡片",
+        "cardStyle": "透明",
+        "layout": "自由"
+      },
+      "children": [
+        {
+          "type": "NumericDisplay",
+          "id": "reading_2",
+          "geometry": {
+            "x": 14,
+            "y": 42,
+            "w": 294,
+            "h": 96
+          },
+          "properties": {
+            "title": "设备温度",
+            "value": "23.5",
+            "unit": "°C",
+            "fontSize": 30,
+            "cardStyle": "透明"
+          }
+        }
+      ]
+    },
+    {
+      "type": "CardContainer",
+      "id": "card_3",
+      "geometry": {
+        "x": 708,
+        "y": 518,
+        "w": 322,
+        "h": 154
+      },
+      "properties": {
+        "title": "描边卡片",
+        "cardStyle": "描边",
+        "layout": "自由"
+      },
+      "children": [
+        {
+          "type": "NumericDisplay",
+          "id": "reading_3",
+          "geometry": {
+            "x": 14,
+            "y": 42,
+            "w": 294,
+            "h": 96
+          },
+          "properties": {
+            "title": "设备温度",
+            "value": "23.5",
+            "unit": "°C",
+            "fontSize": 30,
+            "cardStyle": "描边"
+          }
+        }
+      ]
+    }
+  ]
+}

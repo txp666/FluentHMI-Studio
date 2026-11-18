@@ -1,4 +1,6 @@
 #include "runtime/hmi_widget.h"
+#include "runtime/ui_helpers.h"
+#include "runtime/widgets/alarm_widgets.h"
 #include "runtime/widgets/s7_config_card.h"
 
 #include "core/i18n.h"
@@ -27,11 +29,12 @@ namespace fhmi {
 HmiWidget::HmiWidget(const WidgetMeta &meta, QWidget *parent) : QWidget(parent), m_meta(&meta)
 {
     setAttribute(Qt::WA_StyledBackground, false);
+    fluentToolTip(this);
 }
 
 void HmiWidget::setProperties(const QJsonObject &props)
 {
-    m_props = normalizedRangeProperties(typeName(), props);
+    m_props = normalizedWidgetProperties(typeName(), props);
     apply();
 }
 
@@ -45,6 +48,40 @@ void HmiWidget::setAssetBaseDir(const QString &dir)
 }
 
 void HmiWidget::applyBoundValue(const QVariant &, const BindingEntry &) {}
+
+int HmiWidget::contentMinimumHeight(int width)
+{
+    arrangeForWidth(width);
+    layout()->invalidate();
+    layout()->activate();
+    return minimumSizeHint().height();
+}
+
+QSize HmiWidget::sizeForGeometry(const QSize &requested)
+{
+    if (!fitsContentHeight()) {
+        return requested;
+    }
+    const int minimum = contentMinimumHeight(requested.width());
+    if (maximumHeight() == QWIDGETSIZE_MAX) {
+        setMinimumHeight(minimum);
+    }
+    return QSize(requested.width(), std::max(requested.height(), minimum));
+}
+
+void HmiWidget::updateMinimumHeight()
+{
+    const bool fitted = minimumHeight() > 0 && height() == minimumHeight();
+    const int minimum = contentMinimumHeight(width());
+    // The design canvas owns fixed geometry; its next sizeForGeometry() call applies the new minimum.
+    if (maximumHeight() != QWIDGETSIZE_MAX) {
+        return;
+    }
+    setMinimumHeight(minimum);
+    if (fitted) {
+        resize(width(), minimum);
+    }
+}
 
 void HmiWidget::attach(RuntimeContext *context)
 {
@@ -160,6 +197,8 @@ const QHash<QString, Factory> &factories()
         {QStringLiteral("Slider"), make<SliderWidget>()},
         {QStringLiteral("SpinBox"), make<SpinBoxWidget>()},
         {QStringLiteral("LEDIndicator"), make<LedWidget>()},
+        {QStringLiteral("AlarmBanner"), make<AlarmBannerWidget>()},
+        {QStringLiteral("AlarmList"), make<AlarmListWidget>()},
         {QStringLiteral("NumericDisplay"), make<NumericDisplayWidget>()},
         {QStringLiteral("ProgressBar"), make<ProgressBarWidget>()},
         {QStringLiteral("ProgressRingDisplay"), make<ProgressRingWidget>()},
@@ -207,12 +246,14 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
         widget->setAssetBaseDir(assetBaseDir);
     }
     QJsonObject merged = meta->defaultProperties();
-    for (auto it = props.begin(); it != props.end(); ++it) {
+    const auto saved = normalizedWidgetProperties(typeName, props);
+    for (auto it = saved.begin(); it != saved.end(); ++it) {
         merged.insert(it.key(), it.value());
     }
     widget->setProperties(merged);
     widget->blockSignals(false);
-    widget->resize(meta->defaultWidth, meta->defaultHeight);
+    widget->resize(widget->sizeForGeometry(
+        QSize(meta->defaultWidth, widget->fitsContentHeight() ? meta->minHeight : meta->defaultHeight)));
     return widget;
 }
 

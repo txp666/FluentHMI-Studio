@@ -79,7 +79,9 @@ class DesignScene : public QGraphicsScene
     // A design change. Changes with the same non-empty key in a row (a run of arrow-key nudges) are one
     // undo step.
     void modified(const QString &mergeKey = QString());
+    void connectionRenamed(const QString &previous, const QString &current);
     void itemPropertiesChanged(fhmi::CanvasItem *item);
+    void editorPageChanged(fhmi::CanvasItem *item);
 
   protected:
     void drawBackground(QPainter *painter, const QRectF &rect) override;

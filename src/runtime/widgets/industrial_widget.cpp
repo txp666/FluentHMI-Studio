@@ -117,11 +117,9 @@ void IndustrialWidget::setReading(const QVariant &value)
 void IndustrialWidget::updateReadingDescription()
 {
     const QString description = readingText();
-    setToolTip(description);
-    if (typeName() == QLatin1String("PressureGauge")) {
-        setAccessibleName(text("title"));
-        setAccessibleDescription(description);
-    }
+    setToolTip(flag("showToolTip") ? description : QString());
+    setAccessibleName(text("title"));
+    setAccessibleDescription(description);
 }
 
 void IndustrialWidget::validateReading()
@@ -483,18 +481,26 @@ QByteArray IndustrialWidget::renderedSvg() const
         replace(it.key(), QString::number(from + (to - from) * drivers.value(spec.at(0).toString()), 'g', 12));
     }
     const bool dark = isDarkTheme();
-    const QHash<QString, QString> colors{{"ink", dark ? "#e8edf4" : "#273549"},
-                                         {"edge", dark ? "#718198" : "#708297"},
-                                         {"muted", dark ? "#a4b3c5" : "#64748b"},
-                                         {"body", dark ? "#39495e" : "#dbe4ed"},
-                                         {"surface", dark ? "#172332" : "#f4f7fa"},
-                                         {"accent", accentColor().name()},
-                                         {"liquid", "#29a9d6"},
-                                         {"warm", "#f49b38"},
-                                         {"danger", "#e55252"},
-                                         {"green", "#3dbd84"},
-                                         {"yellow", "#e8b643"},
-                                         {"grain", "#cfa568"}};
+    QHash<QString, QString> colors{{"ink", dark ? "#e8edf4" : "#273549"},
+                                   {"edge", dark ? "#718198" : "#708297"},
+                                   {"muted", dark ? "#a4b3c5" : "#64748b"},
+                                   {"body", dark ? "#39495e" : "#dbe4ed"},
+                                   {"surface", dark ? "#172332" : "#f4f7fa"},
+                                   {"accent", accentColor().name()},
+                                   {"liquid", "#29a9d6"},
+                                   {"warm", "#f49b38"},
+                                   {"danger", "#e55252"},
+                                   {"green", "#3dbd84"},
+                                   {"yellow", "#e8b643"},
+                                   {"grain", "#cfa568"}};
+    if (typeName() == QLatin1String("TractionBattery") && flag("chargeColors") && known) {
+        const char *key = value <= real("chargeLow")       ? "chargeLowColor"
+                          : value <= real("chargeWarning") ? "chargeWarningColor"
+                                                           : "chargeNormalColor";
+        const QColor color(text(key));
+        if (color.isValid())
+            colors[QStringLiteral("green")] = color.name();
+    }
     for (auto it = colors.begin(); it != colors.end(); ++it) {
         replace(it.key(), it.value());
     }
@@ -650,18 +656,41 @@ void IndustrialWidget::paintEvent(QPaintEvent *)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(isDarkTheme() ? QColor("#e8edf4") : QColor("#273549"));
-    painter.drawText(QRect(4, 3, width() - 8, 22), Qt::AlignCenter,
-                     text("title").isEmpty() ? m_definition.value(QStringLiteral("name")).toString() : text("title"));
+    const bool titleVisible = flag("showTitle");
+    const bool valueVisible = flag("showValue");
+    const bool centered = text("textLayout") == QStringLiteral("中心偏移"); // i18n: value
+    const qreal lineHeight = std::max(22, painter.fontMetrics().height());
+    const qreal gap = 2;
+    const qreal top = !centered && titleVisible ? lineHeight + gap : 0;
+    const qreal bottom = !centered && valueVisible ? lineHeight + gap : 0;
+    const QRectF available(4, 4 + top, width() - 8, std::max<qreal>(1, height() - 8 - top - bottom));
+    QRectF graphic = available;
     QSvgRenderer renderer(renderedSvg());
     if (renderer.isValid()) {
-        const QRectF available(4, 26, width() - 8, std::max(1, height() - 53));
         QSizeF size = renderer.viewBoxF().size();
         size.scale(available.size(), Qt::KeepAspectRatio);
-        renderer.render(&painter, QRectF(available.center() - QPointF(size.width() / 2, size.height() / 2), size));
+        graphic = QRectF(available.center() - QPointF(size.width() / 2, size.height() / 2), size);
+        renderer.render(&painter, graphic);
     }
-    const QString footer =
-        typeName() == QLatin1String("PressureGauge") && m_reading ? limitText(*m_reading) : readingText();
-    painter.drawText(QRect(4, height() - 25, width() - 8, 22), Qt::AlignCenter,
-                     painter.fontMetrics().elidedText(footer, Qt::ElideRight, width() - 8));
+    if (titleVisible) {
+        const QRectF titleRect =
+            centered ? QRectF(4 + integer("titleOffsetX"), height() / 2.0 + integer("titleOffsetY") - lineHeight / 2,
+                              width() - 8, lineHeight)
+                     : QRectF(4, graphic.top() - gap - lineHeight, width() - 8, lineHeight);
+        const QString title =
+            text("title").isEmpty() ? m_definition.value(QStringLiteral("name")).toString() : text("title");
+        painter.drawText(titleRect, Qt::AlignCenter,
+                         painter.fontMetrics().elidedText(title, Qt::ElideRight, int(titleRect.width())));
+    }
+    if (valueVisible) {
+        const QRectF valueRect =
+            centered ? QRectF(4 + integer("valueOffsetX"), height() / 2.0 + integer("valueOffsetY") - lineHeight / 2,
+                              width() - 8, lineHeight)
+                     : QRectF(4, graphic.bottom() + gap, width() - 8, lineHeight);
+        const QString footer =
+            typeName() == QLatin1String("PressureGauge") && m_reading ? limitText(*m_reading) : readingText();
+        painter.drawText(valueRect, Qt::AlignCenter,
+                         painter.fontMetrics().elidedText(footer, Qt::ElideRight, int(valueRect.width())));
+    }
 }
 } // namespace fhmi

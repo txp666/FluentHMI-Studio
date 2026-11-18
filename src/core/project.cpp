@@ -1,8 +1,11 @@
 #include "core/project.h"
-#include "core/s7.h"
 #include "core/bit_profile.h"
+#include "core/project_logic.h"
+#include "core/s7.h"
+#include "core/value_text.h"
 
 #include "core/binding.h"
+#include "core/data_source.h"
 #include "core/protocol_parser.h"
 #include "core/widget_meta.h"
 
@@ -168,6 +171,162 @@ bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, con
     return true;
 }
 
+bool usesV13Features(const QJsonArray &widgets)
+{
+    bool used = false;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const auto props = widget.value(QStringLiteral("properties")).toObject();
+        used |= widget.value(QStringLiteral("type")).toString().startsWith(QLatin1String("Alarm")) ||
+                widget.value(QStringLiteral("binding")).toObject().value(QStringLiteral("parseMode")).toString() ==
+                    ParseMode::DataPoint ||
+                props.value(QStringLiteral("displayFormat")).toString() == QStringLiteral("枚举") || // i18n: value
+                (widget.value(QStringLiteral("type")).toString() == QLatin1String("SpinBox") &&
+                 props.value(QStringLiteral("numberMode")).toString() == QStringLiteral("小数")) || // i18n: value
+                props.value(QStringLiteral("chargeColors")).toBool() ||
+                (props.value(QStringLiteral("autoSave")).toBool() && props.contains(QStringLiteral("autoSaveRows"))) ||
+                props.value(QStringLiteral("autoRecover")).toBool();
+        for (int i = 0; i < 8; ++i)
+            used |= props.value(QStringLiteral("_curve_%1_parseMode").arg(i)).toString() == ParseMode::DataPoint;
+        return true;
+    });
+    return used;
+}
+
+bool hasNewCanConfiguration(const QJsonArray &widgets)
+{
+    return !visitWidgets(widgets, [](const QJsonObject &widget) {
+        if (widget.value(QStringLiteral("type")).toString() != QLatin1String("CanConfigCard"))
+            return true;
+        const auto props = widget.value(QStringLiteral("properties")).toObject();
+        const QString sample = props.value(QStringLiteral("zlgSamplePoint")).toString();
+        return props.value(QStringLiteral("canTxInitialState")).toString().trimmed().isEmpty() &&
+               props.value(QStringLiteral("zlgCustomTiming")).toString().trimmed().isEmpty() &&
+               (sample.isEmpty() || sample == QStringLiteral("设备标准")); // i18n: value
+    });
+}
+
+// Before UIDP 1.2 the card IDs below belonged to S7 only, even if the old editor
+// kept the fields after a mode change. Keep references to other connection types
+// so a new route declared with the wrong file version is still rejected.
+QJsonArray migrateOldS7Fields(const QJsonArray &widgets, const QSet<QString> &otherCards)
+{
+    auto migrated = widgets;
+    const auto removeUnusedS7 = [&otherCards](QJsonObject &object, const QString &modeKey, const QString &idKey) {
+        if (object.value(modeKey).toString() != QLatin1String("S7") &&
+            !otherCards.contains(object.value(idKey).toString()))
+            object.remove(idKey);
+    };
+    for (qsizetype i = 0; i < widgets.size(); ++i) {
+        auto widget = widgets.at(i).toObject();
+        const QString type = widget.value(QStringLiteral("type")).toString();
+        auto props = widget.value(QStringLiteral("properties")).toObject();
+        if (widget.value(QStringLiteral("binding")).isObject()) {
+            auto binding = widget.value(QStringLiteral("binding")).toObject();
+            removeUnusedS7(binding, QStringLiteral("parseMode"), QStringLiteral("sourceCardId"));
+            widget.insert(QStringLiteral("binding"), binding);
+        }
+        removeUnusedS7(props, QStringLiteral("commandMode"), QStringLiteral("commandTargetId"));
+        if (type == QLatin1String("RealtimeChart")) {
+            for (int curve = 0; curve < 8; ++curve) {
+                const QString prefix = QStringLiteral("_curve_%1_").arg(curve);
+                removeUnusedS7(props, prefix + QStringLiteral("parseMode"), prefix + QStringLiteral("sourceCardId"));
+            }
+        }
+        if (props != widget.value(QStringLiteral("properties")).toObject())
+            widget.insert(QStringLiteral("properties"), props);
+        if (widget.value(QStringLiteral("children")).isArray())
+            widget.insert(QStringLiteral("children"),
+                          migrateOldS7Fields(widget.value(QStringLiteral("children")).toArray(), otherCards));
+        migrated[i] = widget;
+    }
+    return migrated;
+}
+
+// Routing is a format capability: an older runtime must reject it instead of silently broadcasting.
+bool usesRouting(const QJsonArray &widgets)
+{
+    const auto routed = [](const QJsonObject &object, const QString &mode, const QString &id, const QString &endpoint) {
+        // The connection ID is already part of the S7 format. Endpoints were introduced with routing.
+        return !object.value(endpoint).toString().isEmpty() ||
+               (object.value(mode).toString() != QLatin1String("S7") && !object.value(id).toString().isEmpty());
+    };
+    return !visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const auto binding = widget.value(QStringLiteral("binding")).toObject();
+        const auto props = widget.value(QStringLiteral("properties")).toObject();
+        if (routed(binding, QStringLiteral("parseMode"), QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint")) ||
+            !props.value(QStringLiteral("sourceCardId")).toString().isEmpty() ||
+            !props.value(QStringLiteral("sourceEndpoint")).toString().isEmpty() ||
+            props.value(QStringLiteral("autoSave")).toBool() ||
+            routed(props, QStringLiteral("commandMode"), QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint")))
+            return false;
+        for (int i = 0; i < 8; ++i) {
+            const QString prefix = QStringLiteral("_curve_%1_").arg(i);
+            if (routed(props, prefix + QStringLiteral("parseMode"), prefix + QStringLiteral("sourceCardId"),
+                       prefix + QStringLiteral("sourceEndpoint")))
+                return false;
+        }
+        return true;
+    });
+}
+
+bool validateRoutes(const QJsonArray &widgets, QString *error, bool allowExternal)
+{
+    QHash<QString, QString> cards;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const QString type = widget.value(QStringLiteral("type")).toString();
+        if (isConnectionCard(type))
+            cards.insert(widget.value(QStringLiteral("id")).toString(), type);
+        return true;
+    });
+    const auto check = [&](const QJsonObject &object, const QString &idKey, const QString &endpointKey,
+                           RouteTransport transport) {
+        for (const auto &key : {idKey, endpointKey}) {
+            const auto value = object.value(key);
+            if (!value.isUndefined() && !value.isString())
+                return fail(error, QCoreApplication::translate("fhmi", "连接和子通道必须是文本"));
+        }
+        const bool hasEndpoint = !object.value(endpointKey).toString().isEmpty();
+        if (hasEndpoint && !allowsRouteEndpoint(transport))
+            return fail(error, QCoreApplication::translate("fhmi", "当前模式不支持子通道"));
+        const QString id = object.value(idKey).toString();
+        if (id.isEmpty() || (allowExternal && !cards.contains(id)))
+            return true;
+        const QString type = cards.value(id);
+        if (type.isEmpty())
+            return fail(error, QCoreApplication::translate("fhmi", "连接引用不存在：%1").arg(id));
+        if (!supportsRouteTransport(type, transport) || (hasEndpoint && !supportsRouteEndpoint(type)))
+            return fail(error, QCoreApplication::translate("fhmi", "连接 %1 与收发模式不匹配").arg(id));
+        return true;
+    };
+    return visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const auto binding = widget.value(QStringLiteral("binding")).toObject();
+        const auto props = widget.value(QStringLiteral("properties")).toObject();
+        const QString type = widget.value(QStringLiteral("type")).toString();
+        const QString receiveMode = binding.value(QStringLiteral("parseMode")).toString();
+        if (receiveMode != ParseMode::DataPoint &&
+            !check(binding, QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"),
+                   bindingRouteTransport(receiveMode)))
+            return false;
+        if (!check(props, QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"), widgetReceiveTransport(type)))
+            return false;
+        const QString sendMode = props.value(QStringLiteral("commandMode")).toString();
+        if (!check(props, QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"),
+                   commandRouteTransport(sendMode, type)))
+            return false;
+        if (type == QLatin1String("RealtimeChart")) {
+            for (int i = 0; i < 8; ++i) {
+                const QString prefix = QStringLiteral("_curve_%1_").arg(i);
+                const QString mode = props.value(prefix + QStringLiteral("parseMode")).toString();
+                if (mode != ParseMode::DataPoint &&
+                    !check(props, prefix + QStringLiteral("sourceCardId"), prefix + QStringLiteral("sourceEndpoint"),
+                           bindingRouteTransport(mode)))
+                    return false;
+            }
+        }
+        return true;
+    });
+}
+
 } // namespace
 
 Project::Project()
@@ -182,18 +341,26 @@ Project::Project()
     };
 }
 
+QString Project::formatVersion(const QJsonArray &widgets, const QJsonObject &logic)
+{
+    if (!logic.isEmpty() || usesV13Features(widgets) || hasNewCanConfiguration(widgets))
+        return QStringLiteral("1.3");
+    return usesRouting(widgets) ? QStringLiteral("1.2") : S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0");
+}
+
 QJsonObject Project::toJson() const
 {
     QJsonObject document{
-        {QStringLiteral("version"), S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0")},
+        {QStringLiteral("version"), formatVersion(widgets, logic)},
         {QStringLiteral("appName"), appName},
-        {QStringLiteral("canvas"),
-         QJsonObject{{QStringLiteral("width"), canvasWidth},
-                     {QStringLiteral("height"), canvasHeight},
-                     {QStringLiteral("gridSize"), gridSize}}},
+        {QStringLiteral("canvas"), QJsonObject{{QStringLiteral("width"), canvasWidth},
+                                               {QStringLiteral("height"), canvasHeight},
+                                               {QStringLiteral("gridSize"), gridSize}}},
         {QStringLiteral("widgets"), widgets},
         {QStringLiteral("serial"), serial},
     };
+    if (!logic.isEmpty())
+        document.insert(QStringLiteral("logic"), logic);
     if (!bitProfiles.isEmpty()) document.insert(QStringLiteral("bitProfiles"), bitProfiles);
     if (!icon.isEmpty()) {
         document.insert(QStringLiteral("icon"), icon);
@@ -201,10 +368,13 @@ QJsonObject Project::toJson() const
     return document;
 }
 
-bool Project::validate(const QJsonObject &data, QString *error, bool allowExternalS7References)
+namespace {
+
+bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferences)
 {
     const QString version = data.value(QStringLiteral("version")).toString(QStringLiteral("1.0"));
-    if (version != QLatin1String("1.0") && version != QLatin1String("1.1")) {
+    if (version != QLatin1String("1.0") && version != QLatin1String("1.1") && version != QLatin1String("1.2") &&
+        version != QLatin1String("1.3")) {
         return fail(error, QCoreApplication::translate("fhmi", "不支持的项目版本"));
     }
     const QJsonValue appName = data.value(QStringLiteral("appName"));
@@ -247,17 +417,96 @@ bool Project::validate(const QJsonObject &data, QString *error, bool allowExtern
     }
     QSet<QString> ids;
     const QJsonValue widgetList = data.value(QStringLiteral("widgets"));
-    if (!widgetList.isUndefined() && !validateWidgets(widgetList, 0, ids, parser, error)) return false;
-    if (S7::usesS7(widgetList.toArray()) && version != QLatin1String("1.1"))
+    if (!widgetList.isUndefined() && !validateWidgets(widgetList, 0, ids, parser, error))
+        return false;
+    const bool legacy = version == QLatin1String("1.0") || version == QLatin1String("1.1");
+    QSet<QString> otherCards;
+    if (legacy) {
+        visitWidgets(widgetList.toArray(), [&](const QJsonObject &widget) {
+            const QString type = widget.value(QStringLiteral("type")).toString();
+            if (isConnectionCard(type) && type != QLatin1String("S7ConfigCard"))
+                otherCards.insert(widget.value(QStringLiteral("id")).toString());
+            return true;
+        });
+    }
+    const auto widgets = legacy ? migrateOldS7Fields(widgetList.toArray(), otherCards) : widgetList.toArray();
+    if (S7::usesS7(widgets) && version == QLatin1String("1.0"))
         return fail(error, QCoreApplication::translate("fhmi", "S7 工程需要使用 1.1 格式"));
-    return S7::validateWidgets(widgetList.toArray(), error, allowExternalS7References);
+    if (usesRouting(widgets) && legacy)
+        return fail(error, QCoreApplication::translate("fhmi", "多通道配置需要使用 1.2 格式"));
+    const auto logic = data.value(QStringLiteral("logic"));
+    if (!logic.isUndefined() && !logic.isObject())
+        return fail(error, QCoreApplication::translate("fhmi", "工程数据与报警配置必须是对象"));
+    if ((!logic.toObject().isEmpty() || usesV13Features(widgets)) && version != QLatin1String("1.3"))
+        return fail(error, QCoreApplication::translate("fhmi", "工程数据、报警、枚举显示或小数输入需要使用 1.3 格式"));
+    if (version != QLatin1String("1.3") && hasNewCanConfiguration(widgets))
+        return fail(error, QCoreApplication::translate("fhmi", "CAN 发送初值或 ZLG 自定义时序需要使用 1.3 格式"));
+    const auto logicProblem = projectLogicProblem(logic.toObject());
+    if (!logicProblem.isEmpty())
+        return fail(error, logicProblem);
+    QJsonArray withPoints = widgets;
+    QSet<QString> pointNames;
+    for (const auto &p : logic.toObject().value(QStringLiteral("points")).toArray()) {
+        const auto point = p.toObject();
+        pointNames.insert(point.value(QStringLiteral("name")).toString());
+        if (point.value(QStringLiteral("expression")).toString().trimmed().isEmpty())
+            withPoints.append(QJsonObject{
+                {QStringLiteral("id"), QStringLiteral("@data:") + point.value(QStringLiteral("name")).toString()},
+                {QStringLiteral("type"), QStringLiteral("NumericDisplay")},
+                {QStringLiteral("binding"), point.value(QStringLiteral("binding"))}});
+    }
+    if (!visitWidgets(widgets, [&](const QJsonObject &widget) {
+            const auto props = widget.value(QStringLiteral("properties")).toObject();
+            if (props.value(QStringLiteral("displayFormat")).toString() == QStringLiteral("枚举")) { // i18n: value
+                QString problem;
+                parseValueText(props.value(QStringLiteral("textList")).toString(), &problem);
+                if (!problem.isEmpty())
+                    return fail(error, problem);
+            }
+            if (props.value(QStringLiteral("chargeColors")).toBool() &&
+                !(props.value(QStringLiteral("chargeLow")).toDouble(20) >= 0 &&
+                  props.value(QStringLiteral("chargeWarning")).toDouble(40) <= 100 &&
+                  props.value(QStringLiteral("chargeLow")).toDouble(20) <=
+                      props.value(QStringLiteral("chargeWarning")).toDouble(40)))
+                return fail(error, QCoreApplication::translate("fhmi", "电量阈值必须满足 0 ≤ 低电量 ≤ 预警 ≤ 100"));
+            const QString widgetId = widget.value(QStringLiteral("id")).toString();
+            const auto checkPoint = [&](const QJsonObject &binding, int curve = -1) {
+                const QString key = binding.value(QStringLiteral("key")).toString();
+                if (binding.value(QStringLiteral("parseMode")).toString() != ParseMode::DataPoint || key.isEmpty() ||
+                    pointNames.contains(key) || allowExternalReferences)
+                    return true;
+                const auto location = curve < 0 ? widgetId : QCoreApplication::translate("fhmi", "%1 的曲线 %2").arg(widgetId).arg(curve + 1);
+                return fail(error, QCoreApplication::translate("fhmi", "%1 绑定的数据点不存在：%2").arg(location, key));
+            };
+            if (!checkPoint(widget.value(QStringLiteral("binding")).toObject()))
+                return false;
+            if (widget.value(QStringLiteral("type")).toString() == QLatin1String("RealtimeChart"))
+                for (int i = 0; i < 8; ++i)
+                    if (!checkPoint(chartCurveBinding(props, i), i))
+                        return false;
+            return true;
+        }))
+        return false;
+    if (!validateRoutes(withPoints, error, allowExternalReferences) ||
+        !S7::validateWidgets(withPoints, error, allowExternalReferences))
+        return false;
+    if (widgets != widgetList.toArray())
+        data.insert(QStringLiteral("widgets"), widgets);
+    return true;
+}
+} // namespace
+
+bool Project::validate(const QJsonObject &document, QString *error, bool allowExternalReferences)
+{
+    auto data = document;
+    return prepareProject(data, error, allowExternalReferences);
 }
 
-bool Project::fromJson(const QJsonObject &data, Project *out, QString *error)
+bool Project::fromJson(const QJsonObject &document, Project *out, QString *error, bool allowExternalReferences)
 {
-    if (!validate(data, error)) {
+    auto data = document;
+    if (!prepareProject(data, error, allowExternalReferences))
         return false;
-    }
     *out = fromTrustedJson(data);
     return true;
 }
@@ -272,6 +521,7 @@ Project Project::fromTrustedJson(const QJsonObject &data)
     project.canvasHeight = canvas.value(QStringLiteral("height")).toInt(800);
     project.gridSize = canvas.value(QStringLiteral("gridSize")).toInt(10);
     project.widgets = data.value(QStringLiteral("widgets")).toArray();
+    project.logic = data.value(QStringLiteral("logic")).toObject();
     project.bitProfiles = data.value(QStringLiteral("bitProfiles")).toObject();
     const QJsonObject serialObject = data.value(QStringLiteral("serial")).toObject();
     for (auto it = serialObject.begin(); it != serialObject.end(); ++it) {
