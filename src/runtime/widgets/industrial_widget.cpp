@@ -1,4 +1,5 @@
 #include "runtime/widgets/industrial_widget.h"
+#include "runtime/ui_helpers.h"
 
 #include "core/bit_profile.h"
 #include "core/i18n.h"
@@ -117,7 +118,10 @@ void IndustrialWidget::setReading(const QVariant &value)
 void IndustrialWidget::updateReadingDescription()
 {
     const QString description = readingText();
-    setToolTip(flag("showToolTip") ? description : QString());
+    if (flag("showToolTip"))
+        fluentToolTip(this, description);
+    else
+        setToolTip(QString());
     setAccessibleName(text("title"));
     setAccessibleDescription(description);
 }

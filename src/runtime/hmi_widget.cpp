@@ -1,5 +1,4 @@
 #include "runtime/hmi_widget.h"
-#include "runtime/ui_helpers.h"
 #include "runtime/widgets/alarm_widgets.h"
 #include "runtime/widgets/s7_config_card.h"
 
@@ -29,7 +28,6 @@ namespace fhmi {
 HmiWidget::HmiWidget(const WidgetMeta &meta, QWidget *parent) : QWidget(parent), m_meta(&meta)
 {
     setAttribute(Qt::WA_StyledBackground, false);
-    fluentToolTip(this);
 }
 
 void HmiWidget::setProperties(const QJsonObject &props)

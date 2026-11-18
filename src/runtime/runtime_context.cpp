@@ -5,6 +5,7 @@
 #include "comm/modbus_slave.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/modbus_poller.h"
+#include "runtime/ui_helpers.h"
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
@@ -59,8 +60,12 @@ RuntimeContext::RuntimeContext(QObject *parent) : QObject(parent), m_hub(new Com
             } else if (auto widget = m_widgets.value(binding.widgetId)) {
                 widget->setProperty("s7Quality",sample.quality);
                 widget->setProperty("s7Timestamp",sample.timestamp);
-                if(sample.quality!=QLatin1String("good")) widget->setToolTip(tr("S7 数据不可用：%1").arg(sample.quality));
-                else { widget->setToolTip(QString());push(binding,sample.value); }
+                if (sample.quality != QLatin1String("good")) {
+                    fluentToolTip(widget, tr("S7 数据不可用：%1").arg(sample.quality));
+                } else {
+                    widget->setToolTip(QString());
+                    push(binding, sample.value);
+                }
             }
         }
         m_data->evaluate();

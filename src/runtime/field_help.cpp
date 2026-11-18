@@ -1,7 +1,6 @@
 #include "runtime/field_help.h"
 
 #include "runtime/app_dialog.h"
-#include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/StyleSheet.h>
@@ -172,8 +171,10 @@ HelpContent contentFor(FieldHelpTopic topic)
              {tr("hex：字段表每行一个，省略字节序时使用大端"), QStringLiteral("temperature,0,2,uint16")}},
             {{tr("行文本何时更新"),
               tr("line 模式默认以换行结束一条文本记录，逗号分项、等号分隔键和值。设备没有发出行结束符时会继续等候。完整 JSON 对象或数组按括号边界解析，无需换行；MQTT 消息、UDP 数据报有自己的边界。")},
+             {tr("行结束符"), tr("输入 \\n 表示换行，\\r 表示回车，\\t 表示制表符，\\\\ 表示反斜杠。")},
              {tr("二进制帧如何结束"),
               tr("hex 模式至少配置帧尾、长度字段、固定帧长、空闲超时中的一种。固定帧长包含帧头和帧尾；长度字段偏移从整帧第 0 字节算起。空闲超时表示等到连续一段时间没有新字节才交付帧，并非固定刷新周期。")},
+             {tr("长度字段偏移"), tr("长度字段偏移为 -1 时跳过长度字段。固定帧长为 0 时，按其他结束条件分帧。")},
              {tr("字段偏移从哪里算"),
               tr("字段表格式为 名字,偏移,长度,类型[,字节序]，偏移从帧头之后的第 0 字节算起。帧头 AA55、帧尾 55AA、数据 AA55 00FD 55AA，配合上面的字段表得到 temperature=253；控件用「键值匹配」绑定 temperature。")},
              {tr("工程和卡片的设置关系"),
@@ -232,7 +233,8 @@ HelpContent contentFor(FieldHelpTopic topic)
                  {tr("自定义与下拉框"), tr("填写自定义后，以自定义参数为准，波特率和采样点下拉框停用；清空后恢复自动或设备标准设置。修改后点击连接才会配置硬件，连接期间参数锁定。")},
                  {tr("其他 ZLG 型号"),
                   tr("E-U 和 CAN FD 型号应从 ZCANPRO 中选择实际型号，再粘贴完整计算结果；不要套用 USBCAN-I/II 的 00,1C。USBCAN-4E-U 使用十进制 bps，其接口不提供独立采样点设置。")},
-                 {tr("保存计算结果"), tr("计算器的「应用到卡片」只回填当前运行卡片。要作为工程默认值，请复制到设计器的「ZLG 自定义位时序」属性并保存工程。")}}};
+                 {tr("保存计算结果"), tr("计算器的「应用到卡片」只回填当前运行卡片。要作为工程默认值，请复制到设计器的「ZLG 自定义位时序」属性并保存工程。")},
+                 {tr("设备与通道"), tr("设备编号和物理通道都从 0 开始。设备编号用于区分同型号的多块适配器。")}}};
     case FieldHelpTopic::CanReceiveFilter:
         return {
             tr("CAN 接收过滤"),
@@ -263,6 +265,7 @@ HelpContent contentFor(FieldHelpTopic topic)
              {tr("显示与保存行数"), tr("「显示行数」只限制表格保留记录；「每文件行数」决定自动保存的 CSV 分段大小，两者独立。新控件默认每文件 100000 行；0.8 之前版本保存的工程未设置此项时沿用原显示上限。修改每文件行数会写完当前尾段，再按新值记录；修改显示行数不影响保存。")},
              {tr("自动保存"), tr("勾选后先选择目录，后台保存所选来源连接的全部收发报文。每个 CSV 达到「每文件行数」就新建下一份，关闭保存、断开最后一个所选 CAN 连接或退出运行时，会保存不足一份的尾段。显示模式、ID 筛选、清空表格均不影响记录；再次连接会开始新一组文件。目录可在属性中预设，已有文件不会覆盖或自动删除。写盘失败会停止保存并提示，通信继续。")},
              {tr("保存目录"), tr("自动保存开启时，文件夹按钮可以打开或更换目录。更换目录后会写完旧目录的尾段，后续报文进入新目录。")},
+             {tr("估算负载"), tr("按连接卡实际采集的收发帧和位填充上限估算。能确定通道速率时显示估算值。表格筛选只影响可见报文。")},
              {tr("导出内容"),
               tr("CSV 导出当前筛选后的保留记录，滚动模式省略周期与次数。time 包含日期、毫秒和时区；timestamp_ms 保留原始整数时间。已清空或超出上限淘汰的记录不在导出范围内。")}}};
     }
@@ -399,7 +402,6 @@ QToolButton *createFieldHelpButton(FieldHelpTopic topic, QWidget *parent)
     FluentQt::FluentStyleSheet::setCustomStyleSheet(button, style, style);
     button->setFixedSize(24, 24);
     button->setAccessibleName(tr("查看%1的帮助").arg(contentFor(topic).title));
-    fluentToolTip(button, button->accessibleName());
     // The window owns the help, so rebuilding the property panel cannot leave a dangling callback.
     QObject::connect(button, &QToolButton::clicked, button,
                      [button, topic]() { showHelp(contentFor(topic), button->window()); });

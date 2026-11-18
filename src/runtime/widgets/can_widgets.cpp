@@ -108,8 +108,6 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_zlgModel = comboOf(this, enumOptions(meta, "zlgModel"));
     m_device = comboOf(this, numbers(15));
     m_zlgChannel = comboOf(this, numbers(7));
-    fluentToolTip(m_device, tr("同型号插了多个时的序号，从 0 开始"));
-    fluentToolTip(m_zlgChannel, tr("设备上的第几路 CAN，从 0 开始"));
     // A ZLG model sits beside the adapter, its device index and channel in the channel row: in one row the three
     // would not fit a 380 px card.
     for (FluentQt::ComboBox *combo : {m_adapter, m_zlgModel}) {
@@ -161,7 +159,6 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     fluentToolTip(m_customTiming);
     m_calculate = new FluentQt::PushButton(tr("计算"), this);
     m_calculate->setObjectName(QStringLiteral("canTimingCalculatorButton"));
-    fluentToolTip(m_calculate);
     auto *timingHelp = createFieldHelpButton(FieldHelpTopic::CanTiming, this);
     timingHelp->setObjectName(QStringLiteral("canTimingHelp"));
     m_customRow = row({{m_customTiming, 1}, {m_calculate, 0}, {timingHelp, 0}});
@@ -176,9 +173,6 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_counters = new FluentQt::CaptionLabel(this);
     m_counters->setObjectName(QStringLiteral("canCounters"));
     m_counters->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    // clang-format off
-    fluentToolTip(m_counters, tr("按本通道实际采集的收发帧和位填充上限估算；显示筛选不影响统计。未采集的错误帧、重发和其他流量不计入。自定义速率无法确定或由系统设置时不显示。"));
-    // clang-format on
     m_counters->hide();
     static_cast<QVBoxLayout *>(layout())->insertWidget(2, m_counters);
 
@@ -343,16 +337,13 @@ void CanConfigCardWidget::updateAdapterUi()
         const QByteArray name = configured.zlgModel.toLatin1();
         if (const zlg::Model *model = zlg::findModel(name.constData(), name.size())) {
             calculator = model->family == zlg::Family::Sja1000;
-            m_customTiming->setToolTip(zlg::customTimingHint(*model));
             m_customTiming->setPlaceholderText(zlg::customTimingPlaceholder(*model));
             QString error;
             const auto calculated = zlg::channelTiming(*model, configured, &error);
             m_customTiming->setError(!calculated && timing.nominal);
+            m_customTiming->setToolTip(error);
             if (calculator || timing.nominal || (compact && configured.fd))
                 summary = calculated ? calculated->description : tr("位时序无效");
-            if (!calculated) {
-                m_customTiming->setToolTip(error);
-            }
         }
     } else if (timing.nominal) {
         if (const auto custom = CanBitTiming::parseCustom(configured.customTiming)) {
@@ -375,7 +366,6 @@ void CanConfigCardWidget::updateAdapterUi()
     }
     m_calculate->setVisible(calculator);
     m_calculate->setEnabled(editable && calculator);
-    m_calculate->setToolTip(tr("计算位时序并回填到卡片"));
     m_hint->setText(summary);
     showRow(m_hint, m_hintCaption, !summary.isEmpty());
     if (m_hintCaption) {
@@ -540,7 +530,6 @@ void CanConfigCardWidget::onDetached()
         m_link = nullptr;
     }
     LinkCardBase::onDetached();
-    m_shownStatus.clear();
     m_connectionError.clear();
     showCounters(QString());
     setFieldsEnabled(true);
@@ -572,7 +561,6 @@ void CanConfigCardWidget::showFailure(const QString &reason)
 {
     m_connectionError = reason;
     setConnectedUi(false, tr("连接失败"), reason);
-    m_shownStatus.clear();
     showCounters(QString());
 }
 
@@ -591,8 +579,7 @@ void CanConfigCardWidget::showConnection()
     if (!m_link || !m_link->isConnected()) {
         return;
     }
-    // The header says connected (and how the bus is when not normally); the counters go below the fields. The
-    // adapter, channel and bitrate are in the fields; the tooltip has them with the rest.
+    // Connection state is in the header and live counts sit below the fields.
     QString state = tr("已连接");
     if (m_link->busState() != CanBusState::Normal) {
         state += QStringLiteral(" · ") + canBusStateText(m_link->busState());
@@ -601,12 +588,10 @@ void CanConfigCardWidget::showConnection()
                                                      tr("发 %1").arg(count(m_link->sentCount())));
     if (const auto load = m_link->busLoadPercent())
         counters += tr(" · 估算负载 %1%").arg(*load, 0, 'f', 1);
-    const QString tip = m_link->description() + QStringLiteral(" · ") + state + QStringLiteral(" · ") + counters;
-    if (tip != m_shownStatus) {
-        m_shownStatus = tip;
-        setConnectedUi(true, state, tip);
+    if (m_status->text() != state)
+        setConnectedUi(true, state);
+    if (m_counters->text() != counters)
         showCounters(counters);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -958,7 +943,7 @@ class CanMonitorModel : public QAbstractTableModel
             }
             return data(index, Qt::DisplayRole);
         }
-        if (role != Qt::DisplayRole && role != Qt::ToolTipRole) {
+        if (role != Qt::DisplayRole) {
             return QVariant();
         }
         switch (index.column()) {
@@ -1224,7 +1209,6 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     toolbar->addWidget(save);
     m_autoSave = new FluentQt::CheckBox(tr("自动保存"), this);
     m_autoSave->setObjectName(QStringLiteral("canAutoSave"));
-    fluentToolTip(m_autoSave, tr("完整记录所选连接的收发报文，按每文件行数分段；表格筛选和显示上限不影响保存"));
     toolbar->addWidget(m_autoSave);
     m_captureFolder = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Folder), this);
     m_captureFolder->setObjectName(QStringLiteral("canCaptureFolder"));

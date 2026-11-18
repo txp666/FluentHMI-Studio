@@ -28,7 +28,6 @@ FluentQt::PushSettingCard *createLinkCard(const QString &title, const QString &d
     auto *card = new FluentQt::PushSettingCard(SettingsPage::tr("打开"), icon, title, description, parent);
     card->setObjectName(objectName + QStringLiteral("Card"));
     card->setProperty("targetUrl", url);
-    fluentToolTip(card, url);
     card->button()->setObjectName(objectName + QStringLiteral("Button"));
     card->button()->setProperty("targetUrl", url);
     fluentToolTip(card->button(), url);

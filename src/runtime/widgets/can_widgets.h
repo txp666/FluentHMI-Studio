@@ -92,7 +92,6 @@ class CanConfigCardWidget : public LinkCardBase
     QPointer<QWidget> m_hintCaption; // its label in the grid, rebuilt by apply()
     QTimer *m_statusTimer = nullptr;
     CanLink *m_link = nullptr;
-    QString m_shownStatus;
     QString m_connectionError;
 };
 

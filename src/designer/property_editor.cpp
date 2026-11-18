@@ -842,9 +842,6 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
         edit->setPlainText(value.toString());
         edit->setFixedHeight(84);
         if (def.name == QLatin1String("tabNames")) {
-            // clang-format off
-            fluentToolTip(edit, tr("每行一个标签，离开输入框后应用，按序号保留页面。\n减少页数时，超出页的控件移至最后一页；名称为空时保留“标签1”。"));
-            // clang-format on
             edit->onFinished = [edit, commit]() { commit(edit->toPlainText()); };
         } else {
             connect(edit, &QPlainTextEdit::textChanged, this, [edit, commit]() { commit(edit->toPlainText()); });
@@ -1238,9 +1235,6 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
     };
     const auto row = [&](const char *key, const QString &label, QWidget *editor, const QString &helpKey = QString()) {
         addRow(form, prefix + QLatin1String(key), label, editor, helpKey);
-        if (!editor->toolTip().isEmpty()) { // the label explains the row too, as in PyQt UI Designer
-            fluentToolTip(m_rows.value(prefix + QLatin1String(key)).first, editor->toolTip());
-        }
     };
     const auto text = [&](const char *key, const QString &fallback) {
         auto *edit = new FluentQt::LineEdit(m_content);
@@ -1248,12 +1242,11 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
         connect(edit, &QLineEdit::textChanged, this, [store, key](const QString &t) { store(key, t); });
         return edit;
     };
-    const auto number = [&](const char *key, int lo, int hi, int fallback, const QString &tip) {
+    const auto number = [&](const char *key, int lo, int hi, int fallback) {
         auto *box = new FluentQt::SpinBox(m_content);
         box->setRange(lo, hi);
         box->setValue(config.value(QLatin1String(key)).toInt(fallback));
         box->setKeyboardTracking(false);
-        fluentToolTip(box, tip);
         connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [store, key](int v) { store(key, v); });
         return box;
     };
@@ -1280,7 +1273,6 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
         {QStringLiteral("\\n"), QStringLiteral("\\r\\n"), QStringLiteral("\\r"), QStringLiteral(";")});
     terminator->setCurrentText(
         escapedTerminator(config.value(QStringLiteral("terminator")).toString(QStringLiteral("\n"))));
-    fluentToolTip(terminator, tr("一条记录的结尾；\\n 换行，\\r 回车，\\t 制表符，\\\\ 反斜杠"));
     connect(terminator, &FluentQt::EditableComboBox::currentTextChanged, this, [store](const QString &t) {
         const QString value = unescapedTerminator(t);
         if (!value.isEmpty()) {
@@ -1292,7 +1284,7 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
     row("encoding", tr("编码"), choice("encoding", LineOptions::encodings()));
     row("header", tr("帧头(HEX)"), text("header", QStringLiteral("AA55")));
     row("footer", tr("帧尾(HEX)"), text("footer", QStringLiteral("55AA")));
-    row("lengthOffset", tr("长度字段偏移"), number("lengthOffset", -1, 65535, -1, tr("-1 = 没有长度字段")));
+    row("lengthOffset", tr("长度字段偏移"), number("lengthOffset", -1, 65535, -1));
     auto *lengthSize = new FluentQt::ComboBox(m_content);
     lengthSize->addItems({QStringLiteral("1"), QStringLiteral("2")});
     lengthSize->setCurrentIndex(config.value(QStringLiteral("lengthSize")).toInt(1) == 2 ? 1 : 0);
@@ -1301,11 +1293,11 @@ void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, cons
     row("lengthSize", tr("长度字节数"), lengthSize);
     row("lengthEndian", tr("长度字节序"), choice("lengthEndian", HexOptions::byteOrders()));
     row("lengthCovers", tr("长度含义"), choice("lengthCovers", HexOptions::lengthCovers()));
-    row("fixedLength", tr("固定帧长"), number("fixedLength", 0, 65536, 0, tr("0 = 不固定")));
+    row("fixedLength", tr("固定帧长"), number("fixedLength", 0, 65536, 0));
     row("checksum", tr("校验"), choice("checksum", HexOptions::checksums()));
-    row("checksumStart", tr("校验起点"), number("checksumStart", 0, 65535, 0, QString()));
+    row("checksumStart", tr("校验起点"), number("checksumStart", 0, 65535, 0));
     row("checksumEndian", tr("校验字节序"), choice("checksumEndian", HexOptions::byteOrders()));
-    row("idleTimeout", tr("空闲超时(ms)"), number("idleTimeout", 0, 60000, 0, QString()));
+    row("idleTimeout", tr("空闲超时(ms)"), number("idleTimeout", 0, 60000, 0));
 
     // The table is text; a line that is not a field shows its number and leaves the stored table alone.
     auto *fieldsBox = new QWidget(m_content);
@@ -1511,7 +1503,6 @@ void PropertyEditor::addPageRows(QFormLayout *form)
     });
     auto *remove = button(QStringLiteral("removeTabPage"), FluentQt::FluentIcon::Remove, tr("删除当前页面"));
     remove->setEnabled(names.size() > 1);
-    remove->setToolTip(tr("删除当前页面，页内控件移至相邻页面。至少保留一页。"));
     connect(remove, &QToolButton::clicked, this, [this, current, finish]() {
         if (m_item && m_item->removePage(current))
             finish();
@@ -1757,10 +1748,8 @@ void PropertyEditor::buildBindingForm()
     add("mbFcFilter", tr("功能码过滤"), spin(-1, 255, value("mbFcFilter", -1).toInt()));
     add("mbSlaveFilter", tr("从站过滤"), spin(-1, 247, value("mbSlaveFilter", -1).toInt()));
     auto *period = spin(0, 60000, value("mbPeriod", 0).toInt());
+    period->setSpecialValueText(tr("默认周期"));
     add("mbPeriod", tr("采集周期(ms)"), period);
-    const QString periodTip = tr("0 = 用默认周期（链路卡片的「默认轮询(ms)」，默认 500）");
-    fluentToolTip(period, periodTip);
-    fluentToolTip(m_rows.value(QStringLiteral("binding.mbPeriod")).first, periodTip);
     add("canId", tr("CAN ID"), line(value("canId", QString()).toString(), tr("如 18FF50E5")));
     add("canStartBit", tr("起始位"), spin(0, 511, value("canStartBit", 0).toInt()));
     add("canBitLength", tr("长度"), spin(1, 64, value("canBitLength", 8).toInt()));

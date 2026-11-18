@@ -1035,6 +1035,7 @@ class TestRuntime : public QObject
         QTRY_COMPARE(view->model()->rowCount(), 100);
         QCOMPARE(view->model()->index(0, 1).data(Qt::UserRole).toLongLong(), 1700000000050LL);
         QCOMPARE(view->model()->index(99, 6).data().toString(), QStringLiteral("95"));
+        QVERIFY(!view->model()->index(99, 6).data(Qt::ToolTipRole).isValid());
         for (int row = 0; row < 100; ++row) {
             QCOMPARE(view->model()->index(row, 0).data().toString(), QString::number(row + 51));
             QCOMPARE(view->model()->index(row, 0).data(Qt::UserRole).toULongLong(), quint64(row + 51));
@@ -1400,7 +1401,7 @@ class TestRuntime : public QObject
         QVERIFY(!dataRate->isVisible());
         QVERIFY(!dataSample->isVisible());
         QVERIFY(hint->text().contains(QStringLiteral("5Mbps(75%)")));
-        QVERIFY(custom->toolTip().contains(QStringLiteral("ZCANPRO")));
+        QVERIFY(custom->toolTip().isEmpty());
         custom->clear();
         QVERIFY(rate->isVisible());
         QVERIFY(dataRate->isVisible());
@@ -3145,7 +3146,7 @@ class TestRuntime : public QObject
         device.connectToHost(QHostAddress::LocalHost, port);
         const QString polling = listening + QStringLiteral(" · 1 台设备 · 没有 Modbus 绑定");
         QTRY_VERIFY(labelShown(card, polling));
-        QCOMPARE(labelWith(card, polling)->toolTip(), polling);
+        QVERIFY(labelWith(card, polling)->toolTip().isEmpty());
         device.disconnectFromHost();
         const QString left = listening + QStringLiteral(" · 0 台设备");
         QTRY_VERIFY(labelShown(card, left));
@@ -3942,7 +3943,8 @@ class TestRuntime : public QObject
         auto *period = qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("采集周期(ms)")));
         QVERIFY(period);
         QCOMPARE(period->maximum(), 60000);
-        QCOMPARE(period->toolTip(), QStringLiteral("0 = 用默认周期（链路卡片的「默认轮询(ms)」，默认 500）"));
+        QCOMPARE(period->value(), 0);
+        QCOMPARE(period->specialValueText(), QStringLiteral("默认周期"));
         period->setValue(250);
         QCOMPARE(scene.findItem(QStringLiteral("pv"))->binding().value("mbPeriod").toInt(), 250);
     }

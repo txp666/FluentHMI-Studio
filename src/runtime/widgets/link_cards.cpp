@@ -191,8 +191,11 @@ void LinkCardBase::showStatus()
             polling = true;
         } else if (link && link->isConnected() && link->parsesModbus() && link->canSend() &&
                    !poller->status(link).isEmpty() && !poller->isWaiting()) {
-            text += QStringLiteral(" · ") + poller->status(link);
-            toolTip = poller->blocks().isEmpty() ? text : poller->toolTip(link);
+            const QString pollStatus = poller->status(link);
+            text += QStringLiteral(" · ") + pollStatus;
+            toolTip = poller->toolTip(link);
+            if (toolTip == pollStatus)
+                toolTip.clear();
             polling = true;
         }
     }

@@ -61,7 +61,8 @@ void fluentToolTip(QWidget *widget, const QString &text)
     if (!text.isEmpty()) {
         widget->setToolTip(text);
     }
-    widget->installEventFilter(new FluentQt::ToolTipFilter(widget));
+    if (!widget->findChild<FluentQt::ToolTipFilter *>(Qt::FindDirectChildrenOnly))
+        widget->installEventFilter(new FluentQt::ToolTipFilter(widget));
 }
 
 QColor chooseColor(const QColor &initial, const QString &title, QWidget *parent)
