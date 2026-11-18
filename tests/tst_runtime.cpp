@@ -1194,6 +1194,47 @@ class TestRuntime : public QObject
         QVERIFY(!error.isEmpty());
     }
 
+    void canMonitorFollowsLogWhenReturningToItsTab()
+    {
+        Project project;
+        const QJsonObject monitorData{
+            {"id", "messages"}, {"type", "CanMonitor"}, {"tabIndex", 1},
+            {"geometry", QJsonObject{{"x", 8}, {"y", 40}, {"w", 720}, {"h", 260}}},
+            {"properties", QJsonObject{{"displayMode", "滚动日志"}, {"autoScroll", true}}}};
+        project.widgets = {QJsonObject{
+            {"id", "pages"}, {"type", "TabWidget"},
+            {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 750}, {"h", 320}}},
+            {"properties", QJsonObject{{"tabNames", "Controls\nCAN"}, {"currentTab", 1}}},
+            {"children", QJsonArray{monitorData}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.show();
+        auto *tabs = surface.findChild<QTabWidget *>("hmiTabs");
+        auto *view = surface.findChild<QTableView *>("canMessages");
+        QVERIFY(tabs && view && view->isVisible());
+        tabs->setCurrentIndex(0);
+        QVERIFY(!view->isVisible());
+
+        CanFrame classic;
+        classic.id = 0x321;
+        classic.data = QByteArray(8, '\0');
+        CanFrame fd = classic;
+        fd.fd = true;
+        fd.data = QByteArray(64, '\1');
+        QList<CanFrame> frames(64, classic);
+        frames.append(fd);
+        emit surface.context()->hub()->canFrames(nullptr, frames, false);
+        QTRY_COMPARE(view->model()->rowCount(), int(frames.size()));
+        QCOMPARE(view->verticalScrollBar()->value(), 0);
+
+        QTest::mouseClick(tabs->tabBar(), Qt::LeftButton, Qt::NoModifier, tabs->tabBar()->tabRect(1).center());
+        QVERIFY(view->isVisible());
+        QTRY_VERIFY(view->verticalScrollBar()->maximum() > 0);
+        QTRY_COMPARE(view->verticalScrollBar()->value(), view->verticalScrollBar()->maximum());
+        QTRY_VERIFY(view->rowHeight(int(frames.size()) - 1) > view->verticalHeader()->defaultSectionSize());
+        QCOMPARE(view->model()->index(int(frames.size()) - 1, 0).data().toInt(), int(frames.size()));
+    }
+
     void canSequenceSurvivesFilteringSortingAndSummaryUpdates()
     {
         RuntimeContext context;

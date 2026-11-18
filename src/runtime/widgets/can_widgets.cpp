@@ -176,6 +176,9 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_counters = new FluentQt::CaptionLabel(this);
     m_counters->setObjectName(QStringLiteral("canCounters"));
     m_counters->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // clang-format off
+    fluentToolTip(m_counters, tr("按本通道实际采集的收发帧和位填充上限估算；显示筛选不影响统计。未采集的错误帧、重发和其他流量不计入。自定义速率无法确定或由系统设置时不显示。"));
+    // clang-format on
     m_counters->hide();
     static_cast<QVBoxLayout *>(layout())->insertWidget(2, m_counters);
 
@@ -598,9 +601,6 @@ void CanConfigCardWidget::showConnection()
                                                      tr("发 %1").arg(count(m_link->sentCount())));
     if (const auto load = m_link->busLoadPercent())
         counters += tr(" · 估算负载 %1%").arg(*load, 0, 'f', 1);
-    // clang-format off
-    fluentToolTip(m_counters, tr("按本通道实际采集的收发帧和位填充上限估算；显示筛选不影响统计。未采集的错误帧、重发和其他流量不计入。自定义速率无法确定或由系统设置时不显示。"));
-    // clang-format on
     const QString tip = m_link->description() + QStringLiteral(" · ") + state + QStringLiteral(" · ") + counters;
     if (tip != m_shownStatus) {
         m_shownStatus = tip;
@@ -1266,11 +1266,7 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     connect(m_displayMode, &FluentQt::ComboBox::currentIndexChanged, this, [this]() { updateDisplayMode(); });
     connect(m_maxMessages, qOverload<int>(&QSpinBox::valueChanged), this,
             [this](int maximum) { m_model->setMaximumRows(maximum); });
-    connect(m_autoScroll, &QCheckBox::toggled, this, [this](bool checked) {
-        if (checked && m_displayMode->currentIndex() == 1) {
-            m_view->scrollToBottom();
-        }
-    });
+    connect(m_autoScroll, &QCheckBox::toggled, this, &CanMonitorWidget::scheduleViewLayout);
     connect(m_view, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         auto *menu = new FluentQt::RoundMenu(this);
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
@@ -1292,18 +1288,18 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
                                                          {"rows", m_model->rowCount()}});
         }
 #endif
-        if (changed && m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked()) {
-            m_view->scrollToBottom();
-        }
+        if (changed)
+            scheduleViewLayout();
     });
-    connect(m_view->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]() { fitRowHeights(); });
+    connect(m_view->verticalScrollBar(), &QScrollBar::valueChanged, this, &CanMonitorWidget::scheduleViewLayout);
+    connect(m_view->verticalScrollBar(), &QScrollBar::rangeChanged, this, &CanMonitorWidget::scheduleViewLayout);
     // Whatever moves or changes a row (a new one, a longer frame, a sort) can change which height it needs.
     for (auto signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
-        connect(m_sorted, signal, this, [this]() { fitRowHeights(); });
+        connect(m_sorted, signal, this, &CanMonitorWidget::scheduleViewLayout);
     }
-    connect(m_sorted, &QAbstractItemModel::dataChanged, this, [this]() { fitRowHeights(); });
-    connect(m_sorted, &QAbstractItemModel::layoutChanged, this, [this]() { fitRowHeights(); });
-    connect(m_sorted, &QAbstractItemModel::modelReset, this, [this]() { fitRowHeights(); });
+    connect(m_sorted, &QAbstractItemModel::dataChanged, this, &CanMonitorWidget::scheduleViewLayout);
+    connect(m_sorted, &QAbstractItemModel::layoutChanged, this, &CanMonitorWidget::scheduleViewLayout);
+    connect(m_sorted, &QAbstractItemModel::modelReset, this, &CanMonitorWidget::scheduleViewLayout);
 }
 
 CanMonitorWidget::~CanMonitorWidget() { m_recorder->stop(); }
@@ -1383,9 +1379,7 @@ void CanMonitorWidget::updateDisplayMode()
     m_sorted->sort(scrolling ? -1 : CanMonitorModel::Id, Qt::AscendingOrder);
     m_autoScroll->setEnabled(scrolling);
     m_autoScroll->setVisible(scrolling);
-    if (scrolling && m_autoScroll->isChecked()) {
-        m_view->scrollToBottom();
-    }
+    scheduleViewLayout();
 }
 
 bool CanMonitorWidget::saveCsv(const QString &path, QString *error)
@@ -1438,45 +1432,65 @@ void CanMonitorWidget::updateFilter()
     const std::optional<CanFilter> parsed = CanFilter::parse(m_idFilter->text(), &error);
     m_idFilter->setError(!parsed);
     m_idFilter->setToolTip(parsed ? QString() : error);
-    // Hiding rows removes and re-adds them in the proxy, which fitRowHeights() hears of like any other row change.
+    // Filtered rows change the set of row heights just like an insertion or removal.
     m_sorted->setFilter(parsed.value_or(CanFilter()), CanMonitorModel::TypeFilter(m_typeFilter->currentIndex()));
 }
 
-void CanMonitorWidget::fitRowHeights()
+void CanMonitorWidget::showEvent(QShowEvent *event)
 {
-    if (m_heightsQueued) {
+    HmiWidget::showEvent(event);
+    scheduleViewLayout();
+}
+
+void CanMonitorWidget::scheduleViewLayout()
+{
+    if (!isVisible() || m_viewLayoutPending)
         return;
-    }
-    m_heightsQueued = true;
+    m_viewLayoutPending = true;
+    // Let the tab finish showing its children before touching the table. The model and recorder
+    // still receive frames while the page is hidden.
     QTimer::singleShot(0, this, [this]() {
-        m_heightsQueued = false;
-        QHeaderView *header = m_view->verticalHeader();
-        const int base = header->defaultSectionSize();
-        QFont itemFont;
-        itemFont.setFamilies(FluentQt::FluentConfig::instance()->fontFamilies());
-        itemFont.setPixelSize(13);
-        const int lineHeight = QFontMetrics(itemFont).lineSpacing();
-        const int first = std::max(0, m_view->rowAt(0));
-        const int bottom = m_view->rowAt(m_view->viewport()->height() - 1);
-        const int last = bottom >= 0 ? bottom
-                                     : std::min(m_sorted->rowCount() - 1,
-                                                first + m_view->viewport()->height() / std::max(1, base) + 1);
-        for (int row = first; row <= last; ++row) {
-            const int lines = m_sorted->index(row, 0).data(CanMonitorModel::LinesRole).toInt();
-            // sizeHintForIndex() can omit multiline text when no cell width is supplied by the view.
-            const int height =
-                lines > 1
-                    ? std::max(base + (lines - 1) * lineHeight,
-                               m_view->sizeHintForIndex(m_sorted->index(row, CanMonitorModel::Data)).height())
-                    : base;
-            if (header->sectionSize(row) != height) {
-                header->resizeSection(row, height);
-            }
+        if (m_view->isVisible()) {
+            const bool follow = m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked();
+            if (follow)
+                m_view->scrollToBottom();
+            const bool resized = fitRowHeights();
+            if (follow && resized)
+                m_view->scrollToBottom();
         }
-        if (m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked()) {
-            m_view->scrollToBottom();
-        }
+        // Resizing and scrolling can emit signals synchronously. They belong to this same update.
+        m_viewLayoutPending = false;
     });
+}
+
+bool CanMonitorWidget::fitRowHeights()
+{
+    QHeaderView *header = m_view->verticalHeader();
+    const int base = header->defaultSectionSize();
+    QFont itemFont;
+    itemFont.setFamilies(FluentQt::FluentConfig::instance()->fontFamilies());
+    itemFont.setPixelSize(13);
+    const int lineHeight = QFontMetrics(itemFont).lineSpacing();
+    const int first = std::max(0, m_view->rowAt(0));
+    const int bottom = m_view->rowAt(m_view->viewport()->height() - 1);
+    const int last = bottom >= 0 ? bottom
+                                 : std::min(m_sorted->rowCount() - 1,
+                                            first + m_view->viewport()->height() / std::max(1, base) + 1);
+    bool resized = false;
+    for (int row = first; row <= last; ++row) {
+        const int lines = m_sorted->index(row, 0).data(CanMonitorModel::LinesRole).toInt();
+        // sizeHintForIndex() can omit multiline text when no cell width is supplied by the view.
+        const int height =
+            lines > 1
+                ? std::max(base + (lines - 1) * lineHeight,
+                           m_view->sizeHintForIndex(m_sorted->index(row, CanMonitorModel::Data)).height())
+                : base;
+        if (header->sectionSize(row) != height) {
+            header->resizeSection(row, height);
+            resized = true;
+        }
+    }
+    return resized;
 }
 
 void CanMonitorWidget::apply()

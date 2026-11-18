@@ -106,13 +106,15 @@ class CanMonitorWidget : public HmiWidget
     bool saveCsv(const QString &path, QString *error = nullptr);
 
   protected:
+    void showEvent(QShowEvent *event) override;
     void apply() override;
     void onAttached() override;
     void onDetached() override;
 
   private:
-    // A row is as tall as the lines of its data; only rows whose line count changed are resized.
-    void fitRowHeights();
+    void scheduleViewLayout();
+    // A row is as tall as the lines of its data. True when visible rows were resized.
+    bool fitRowHeights();
     // Reads the filter row into the proxy; a filter that does not parse filters nothing and says why.
     void updateFilter();
     void updateDisplayMode();
@@ -139,7 +141,7 @@ class CanMonitorWidget : public HmiWidget
     QPointer<QFileDialog> m_captureDialog;
     CanMonitorModel *m_model = nullptr;
     CanMonitorProxy *m_sorted = nullptr;
-    bool m_heightsQueued = false;
+    bool m_viewLayoutPending = false;
     QTimer *m_refresh = nullptr;
 };
 
