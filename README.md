@@ -17,7 +17,7 @@ Build a device interface by dragging widgets onto a canvas. Connect serial, TCP,
 
 To try several layouts on one link, open [17.10 Mixed receive templates](examples/tutorials/17.10-同连接多接收模板.uidp). Use the mixed-send button, change the input during periodic sending, and stop it from the task list.
 
-![Studio v0.9 Preview of lesson 17.10 with both TCP cards connected and three decoded readings](docs/images/v0.9/17.10-preview.png)
+![English preview of lesson 17.10 with both TCP cards connected and three decoded readings](docs/images/v0.9/17.10-preview-en.png)
 
 ## Learn and configure
 
