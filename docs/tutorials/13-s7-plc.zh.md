@@ -1,5 +1,7 @@
 # 第一次 S7 PLC 联调：读数、曲线与写入
 
+现在可以用 [Studio v0.9](../guide.zh.md#配置连接与收发方向) 完成同一组操作。下方的录像、截图和测试记录采用当时的版本。
+
 这是 S7 视频教程的配套实操说明。从已摆好控件的工程开始，连接本地 PLC 模拟器，读取 REAL/INT、绘制压力曲线，再写入 BOOL 启停位和 INT 转速。
 
 **版本对齐日期：2026-11-16。** FluentHMI Studio **0.7.0**、PyQt UI Designer **0.7.0**、FluentPLC Simulator **0.1.1**，工程格式 **UIDP 1.1**。本次在 macOS arm64 上通过真实的本机 S7 连接验证，不代表已验证物理西门子 PLC。
@@ -40,7 +42,7 @@ Windows 使用 `FluentPLCServer.exe`；macOS 的程序在模拟器应用的 `Con
 
 ## 2. 打开 HMI 并连接
 
-使用 [FluentHMI Studio 0.7.0](https://github.com/txp666/FluentHMI-Studio/releases/tag/v0.7.0) 或 [PyQt UI Designer 0.7.0](https://github.com/txp666/PyQt-UI-Designer/releases/tag/v0.7.0)。安装包随附原生 S7 库。
+用 FluentHMI Studio v0.9 打开示例。要对照录像中的界面，可使用 [FluentHMI Studio 0.7.0](https://github.com/txp666/FluentHMI-Studio/releases/tag/v0.7.0) 或 [PyQt UI Designer 0.7.0](https://github.com/txp666/PyQt-UI-Designer/releases/tag/v0.7.0)。安装包随附原生 S7 库。
 
 打开 `.uidp` 工程。连接卡片 ID 为 `lesson-plc`，显示标题可改，绑定依靠的是 ID。检查这些连接属性：
 
@@ -98,7 +100,7 @@ Windows 使用 `FluentPLCServer.exe`；macOS 的程序在模拟器应用的 `Con
 
 保存工程后，C++ 版可以直接导出独立运行时应用，无需现场编译；Py 版可导出可编辑源码或一键编译打包。S7 导出同时携带平台原生库和许可文件，按目标操作系统与架构导出或构建。
 
-含 S7 的工程使用 **UIDP 1.1**，须用 FluentHMI Studio 或 PyQt UI Designer **0.7.0 或更高版本**打开；0.7.0 之前的版本会拒绝读取。未使用 S7 的工程仍保存为 UIDP 1.0。
+含 S7 的工程使用 **UIDP 1.1**，须用 FluentHMI Studio 或 PyQt UI Designer **0.7.0 或更高版本**打开；0.7.0 之前的版本会拒绝读取。同时使用其他新功能的工程按实际设置使用 UIDP 1.2 或 1.3。[工程格式](../uidp-format.md)
 
 ## 排错与适用范围
 

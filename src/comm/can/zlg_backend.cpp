@@ -498,6 +498,21 @@ CanAdapterCaps ZlgBackend::caps(const QString &model)
     caps.fd = family == Family::CanFd;
     caps.autoRecover = true;
     caps.termination = found && found->termination;
+    if (found) {
+        caps.channelCount = found->channels;
+        const auto options = [](const auto &rates) {
+            QStringList result;
+            for (quint32 rate : rates)
+                result.prepend(CanAdapter::bitrateText(rate));
+            return result;
+        };
+        if (caps.fd) {
+            caps.nominalBitrates = options(kFdArbitrationRates);
+            caps.dataBitrates = options(kFdDataRates);
+        } else {
+            caps.nominalBitrates = options(kClassicRates);
+        }
+    }
 #ifndef Q_OS_WIN
     caps.supported = false;
 #endif

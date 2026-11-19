@@ -199,11 +199,11 @@ void UdpLink::receive(const QHostAddress &sender, quint16 senderPort, const QByt
     if (data.isEmpty()) {
         return;
     }
-    const bool firstSender = !m_hasLastSender;
+    const bool senderChanged = !m_hasLastSender || m_lastAddress != sender || m_lastPort != senderPort;
     m_hasLastSender = true;
     m_lastAddress = sender;
     m_lastPort = senderPort;
-    if (firstSender && m_remote.isNull()) {
+    if (senderChanged && m_remote.isNull()) {
         emit canSendChanged(); // commands can go to this sender now
     }
 
@@ -218,34 +218,7 @@ void UdpLink::receive(const QHostAddress &sender, quint16 senderPort, const QByt
         registerStream(it->parser.get(), endpoint);
     }
     const std::shared_ptr<Parser> parser = it->parser; // a slot may close the link and drop the streams
-    if (!parser) {
-        emit rawReceived(data, dataSource(parser.get()));
-        return;
-    }
-    const DataSource source = dataSource(parser.get());
-    // Each datagram is a whole record: a line parser gets its terminator if it is missing.
-    const QByteArray terminator = parserType() == QLatin1String("line") ? lineTerminator(parserConfig()) : QByteArray();
-    const auto report = [this, &parser, &terminator, source](const QList<QByteArray> &units) {
-        if (terminator.isEmpty()) {
-            deliverUnits(parser.get(), units);
-            return;
-        }
-        QList<QList<Message>> messages; // everything parsed before anything is emitted
-        for (const QByteArray &unit : units) {
-            messages.append(parser->parse(unit.endsWith(terminator) ? unit : unit + terminator));
-        }
-        for (int i = 0; i < units.size(); ++i) {
-            emit rawReceived(units.at(i), source);
-            for (const Message &message : messages.at(i)) {
-                emit messageReceived(message, source);
-            }
-        }
-    };
-    report(parser->frames(data));
-    // A datagram arrives whole, so a parser that frames on silence has its frame now.
-    if (parser->idleTimeout() > 0) {
-        report(parser->flush());
-    }
+    deliver(parser.get(), data, Boundary::Message);
 }
 
 void UdpLink::dropStreams()

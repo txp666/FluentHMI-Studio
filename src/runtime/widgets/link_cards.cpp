@@ -10,6 +10,8 @@
 #include "runtime/widgets/display_widgets.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
+#include "core/frame_templates.h"
+
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
@@ -28,6 +30,8 @@
 namespace fhmi {
 
 namespace {
+
+const QString kTemplateChoice = QStringLiteral("@frame-template");
 
 // A combo box of a property's options, .uidp values shown translated.
 FluentQt::ComboBox *comboOf(QWidget *parent, const QStringList &values)
@@ -100,12 +104,28 @@ void LinkCardBase::paintEvent(QPaintEvent *)
 
 void LinkCardBase::onAttached()
 {
-    showInheritedParser(m_parser, context()->hub()->defaultParserType());
-    if (text("modbusRole") == ModbusRole::Slave) {
+    CommHub *hub = context()->hub();
+    const QString projectParser = hub->defaultParserType();
+    showInheritedParser(m_parser, projectParser);
+    const auto templates = FrameTemplates::receiveIds(properties());
+    if (templates.size() > 1)
+        m_parser->addItem(tr("接收模板组 · %1 个").arg(templates.size()), QIcon(), kTemplateChoice);
+    else if (templates.size() == 1)
+        if (const auto entry = FrameTemplates::find(frameTemplates(), templates.first()))
+            m_parser->addItem(tr("模板 · %1").arg(entry->name), QIcon(), kTemplateChoice);
+    resetParserSelection();
+    const bool slave = text("modbusRole") == ModbusRole::Slave &&
+                       templates.isEmpty() &&
+                       LinkParser::supportsModbusSlave(LinkParser::effectiveType(text("defaultParser"), projectParser));
+    for (int index = 0; index < m_parser->count(); ++index) {
+        const QString type = LinkParser::effectiveType(m_parser->itemData(index).toString(), projectParser);
+        m_parser->setItemEnabled(index, !slave || LinkParser::supportsModbusSlave(type));
+    }
+    if (slave) {
         // The table lives while the project runs, through every connection.
         m_slave = new ModbusSlave(ModbusSlave::settingsFromProperties(properties()),
                                   ModbusSlaveStore::fromProperties(properties()), this);
-        context()->hub()->addModbusSlave(m_slave, property("fhmiWidgetId").toString());
+        hub->addModbusSlave(m_slave, property("fhmiWidgetId").toString());
         connect(m_slave, &ModbusSlave::statusChanged, this, [this]() { showStatus(); });
     }
     live(connect(context()->modbusPoller(), &ModbusPoller::statusChanged, this, [this]() { showStatus(); }));
@@ -114,6 +134,9 @@ void LinkCardBase::onAttached()
 
 void LinkCardBase::onDetached()
 {
+    const int index = m_parser->findData(kTemplateChoice);
+    if (index >= 0)
+        m_parser->removeItem(index);
     context()->modbusPoller()->removeLinkCard(this);
     delete m_slave; // its links are gone already
     m_slave = nullptr;
@@ -142,24 +165,27 @@ bool LinkCardBase::configureParser(Link *link)
 {
     CommHub *hub = context()->hub();
     const QString selection = selectedValue(m_parser);
-    const QString type = LinkParser::effectiveType(selection, hub->defaultParserType());
-    // The card's own frame format applies once it picks its own mode; left empty, a card on
-    // the project's mode still uses the project's format.
-    const QJsonObject own = prop("parserConfig").toObject();
-    const QJsonObject config = LinkParser::inheritsProject(selection) ||
-                                      (own.isEmpty() && type == hub->defaultParserType())
-                                  ? hub->defaultParserConfig() : own;
+    const auto ids = selection == kTemplateChoice ? FrameTemplates::receiveIds(properties()) : QStringList{};
+    const auto format = FrameTemplates::linkFormat(frameTemplates(), ids, selection, prop("parserConfig").toObject(),
+                                                    {hub->defaultParserType(), hub->defaultParserConfig()});
     // A slave's counts start again with each connection.
     link->setModbusSlave(m_slave);
     if (m_slave) {
         m_slave->resetCounts();
     }
     QString error;
-    if (!link->setParser(type, config, &error)) {
+    if (!link->setParser(format.type, format.settings, &error)) {
         notifyError(tr("解析模式无效"), error);
         return false;
     }
     return true;
+}
+
+void LinkCardBase::resetParserSelection()
+{
+    if (!FrameTemplates::receiveIds(properties()).isEmpty() && selectValue(m_parser, kTemplateChoice))
+        return;
+    selectValue(m_parser, text("defaultParser"));
 }
 
 void LinkCardBase::setConnectedUi(bool connected, const QString &status, const QString &toolTip)
@@ -191,8 +217,11 @@ void LinkCardBase::showStatus()
             polling = true;
         } else if (link && link->isConnected() && link->parsesModbus() && link->canSend() &&
                    !poller->status(link).isEmpty() && !poller->isWaiting()) {
-            text += QStringLiteral(" · ") + poller->status(link);
-            toolTip = poller->blocks().isEmpty() ? text : poller->toolTip(link);
+            const QString pollStatus = poller->status(link);
+            text += QStringLiteral(" · ") + pollStatus;
+            toolTip = poller->toolTip(link);
+            if (toolTip == pollStatus)
+                toolTip.clear();
             polling = true;
         }
     }
@@ -282,6 +311,7 @@ SerialConfigCardWidget::SerialConfigCardWidget(const WidgetMeta &meta, QWidget *
     portLayout->setContentsMargins(0, 0, 0, 0);
     portLayout->setSpacing(4);
     m_port = new FluentQt::ComboBox(m_portRow);
+    m_port->setObjectName(QStringLiteral("serialPort"));
     m_port->setPlaceholderText(tr("选择串口"));
     m_refresh = new FluentQt::ToolButton(m_portRow);
     m_refresh->setIcon(FluentQt::icon(FluentQt::FluentIcon::Sync));
@@ -312,6 +342,9 @@ SerialConfigCardWidget::SerialConfigCardWidget(const WidgetMeta &meta, QWidget *
     m_paramsRow->hide();
     m_flow = comboOf(this, enumOptions(meta, "defaultFlow"));
     connect(m_refresh, &QToolButton::clicked, this, &SerialConfigCardWidget::refreshPorts);
+    connect(m_port, &FluentQt::ComboBox::currentIndexChanged, this, [this] {
+        setFieldsEnabled(!m_link || !m_link->isConnected());
+    });
 }
 
 SerialConfigCardWidget::~SerialConfigCardWidget()
@@ -322,12 +355,20 @@ SerialConfigCardWidget::~SerialConfigCardWidget()
 void SerialConfigCardWidget::apply()
 {
     m_title->setText(text("title"));
+    if (!m_link) {
+        m_port->clear();
+        const auto port = text("defaultPortName");
+        if (!port.isEmpty()) {
+            m_port->addItem(SerialLink::portLabel(port), {}, port);
+            m_port->setCurrentIndex(0);
+        }
+    }
     selectValue(m_baud, text("defaultBaud"));
     selectValue(m_dataBits, text("defaultDatabits"));
     selectValue(m_parity, text("defaultParity"));
     selectValue(m_stopBits, text("defaultStopbits"));
     selectValue(m_flow, text("defaultFlow"));
-    selectValue(m_parser, text("defaultParser"));
+    resetParserSelection();
     updatePolling(); // modbusPeriod and the like apply at once
 
     clearFields();
@@ -371,25 +412,35 @@ void SerialConfigCardWidget::apply()
 
 void SerialConfigCardWidget::refreshPorts()
 {
-    const QString current = m_port->currentText();
+    QString port = selectedValue(m_port);
+    if (port.isEmpty())
+        port = text("defaultPortName");
     m_port->clear();
-    m_port->addItems(SerialLink::availablePorts());
-    const int index = m_port->findText(current);
-    if (index >= 0) {
-        m_port->setCurrentIndex(index);
-    }
+    for (const auto &name : SerialLink::selectablePorts())
+        m_port->addItem(SerialLink::portLabel(name), {}, name);
+    if (!selectValue(m_port, port))
+        m_port->setCurrentIndex(-1);
+    setFieldsEnabled(!m_link || !m_link->isConnected());
+}
+
+void SerialConfigCardWidget::refreshConnection()
+{
+    const bool connected = m_link && m_link->isConnected();
+    QString status = tr("未连接");
+    if (connected)
+        status = m_link->canSend() ? m_link->description() : tr("等待另一端");
+    setConnectedUi(connected, status);
+    setFieldsEnabled(!connected);
 }
 
 void SerialConfigCardWidget::onAttached()
 {
-    m_link = new SerialLink(this);
+    m_link = new SerialLink(this, context()->hub()->virtualSerialPair());
     context()->hub()->addLink(m_link, property("fhmiWidgetId").toString());
     refreshPorts();
     live(connect(m_connect, &QPushButton::clicked, this, &SerialConfigCardWidget::toggleConnection));
-    live(connect(m_link, &Link::connectedChanged, this, [this](bool connected) {
-        setConnectedUi(connected, connected ? m_link->description() : tr("未连接"));
-        setFieldsEnabled(!connected);
-    }));
+    live(connect(m_link, &Link::connectedChanged, this, &SerialConfigCardWidget::refreshConnection));
+    live(connect(m_link, &Link::canSendChanged, this, &SerialConfigCardWidget::refreshConnection));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
         notifyError(tr("串口错误"), message);
     }));
@@ -404,11 +455,13 @@ Link *SerialConfigCardWidget::currentLink() const
 void SerialConfigCardWidget::setFieldsEnabled(bool enabled)
 {
     for (QWidget *w : {static_cast<QWidget *>(m_port), static_cast<QWidget *>(m_refresh),
-                       static_cast<QWidget *>(m_baud), static_cast<QWidget *>(m_dataBits),
-                       static_cast<QWidget *>(m_parity), static_cast<QWidget *>(m_stopBits),
-                       static_cast<QWidget *>(m_flow), static_cast<QWidget *>(m_parser)}) {
+                       static_cast<QWidget *>(m_parser)}) {
         w->setEnabled(enabled);
     }
+    const bool hardware = enabled && !SerialLink::isVirtualPort(selectedValue(m_port));
+    m_baud->setEnabled(hardware);
+    m_paramsRow->setEnabled(hardware);
+    m_flow->setEnabled(hardware);
 }
 
 void SerialConfigCardWidget::onDetached()
@@ -430,7 +483,7 @@ void SerialConfigCardWidget::toggleConnection()
         return;
     }
     SerialSettings settings;
-    settings.portName = m_port->currentText();
+    settings.portName = selectedValue(m_port);
     if (settings.portName.isEmpty()) {
         context()->notify(tr("提示"), tr("请先选择串口"), NotifyType::Warning);
         return;
@@ -475,7 +528,7 @@ void TcpConfigCardWidget::apply()
     selectValue(m_mode, text("defaultMode"));
     m_host->setText(text("defaultHost"));
     m_port->setValue(integer("defaultPort"));
-    selectValue(m_parser, text("defaultParser"));
+    resetParserSelection();
     updatePolling();
     clearFields();
     m_parser->hide();
@@ -641,7 +694,7 @@ void MqttConfigCardWidget::apply()
     m_publish->setText(text("defaultPublish"));
     selectValue(m_qos, text("defaultQos"));
     m_tls->setChecked(flag("defaultTls"));
-    selectValue(m_parser, text("defaultParser"));
+    resetParserSelection();
     updatePolling();
 
     clearFields();
@@ -667,6 +720,14 @@ void MqttConfigCardWidget::onAttached()
 {
     m_link = new MqttLink(this);
     context()->hub()->addLink(m_link, property("fhmiWidgetId").toString());
+    const auto session = context()->hub()->mqttTopicSession();
+    if (m_subscribe->text().contains(Mqtt::SessionTopicLevel)) {
+        auto filters = Mqtt::topics(m_subscribe->text());
+        for (auto &filter : filters)
+            filter = Mqtt::expandTopicSession(filter, session);
+        m_subscribe->setText(filters.join(QStringLiteral(", ")));
+    }
+    m_publish->setText(Mqtt::expandTopicSession(m_publish->text(), session));
     live(connect(m_connect, &QPushButton::clicked, this, &MqttConfigCardWidget::toggleConnection));
     live(connect(m_link, &Link::connectedChanged, this, &MqttConfigCardWidget::refreshState));
     live(connect(m_link, &Link::errorOccurred, this, [this](const QString &message) {
@@ -714,6 +775,7 @@ void MqttConfigCardWidget::toggleConnection()
     settings.publishTopic = m_publish->text();
     settings.qos = selectedValue(m_qos).toInt();
     settings.tls = m_tls->isChecked();
+    settings.topicSession = context()->hub()->mqttTopicSession();
     QString error;
     if (!m_link->connectTo(settings, &error)) {
         notifyError(tr("MQTT"), error);
@@ -725,10 +787,11 @@ void MqttConfigCardWidget::refreshState()
 {
     const bool active = m_link && m_link->isActive();
     const bool connected = m_link && m_link->isConnected();
+    m_subscribe->setReadOnly(active);
+    m_publish->setReadOnly(active);
     for (QWidget *w : {static_cast<QWidget *>(m_host), static_cast<QWidget *>(m_port),
                        static_cast<QWidget *>(m_clientId), static_cast<QWidget *>(m_username),
-                       static_cast<QWidget *>(m_password), static_cast<QWidget *>(m_subscribe),
-                       static_cast<QWidget *>(m_publish), static_cast<QWidget *>(m_qos),
+                       static_cast<QWidget *>(m_password), static_cast<QWidget *>(m_qos),
                        static_cast<QWidget *>(m_tls), static_cast<QWidget *>(m_parser)}) {
         w->setEnabled(!active);
     }
@@ -779,7 +842,7 @@ void UdpConfigCardWidget::apply()
     m_localPort->setValue(integer("defaultLocalPort"));
     m_host->setText(text("defaultHost"));
     m_port->setValue(integer("defaultPort"));
-    selectValue(m_parser, text("defaultParser"));
+    resetParserSelection();
     updatePolling();
     clearFields();
     m_parser->hide();

@@ -2,6 +2,7 @@
 
 #include "core/expression.h"
 #include "core/hex_utils.h"
+#include "core/industrial_catalog.h"
 #include "core/widget_meta.h"
 
 #include <QtCore/QCoreApplication>
@@ -12,6 +13,7 @@
 #include <QtCore/QLocale>
 #include <QtCore/QtEndian>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -125,19 +127,15 @@ QString padded(const QString &digits, int width)
     return digits.size() >= width ? digits : QString(width - digits.size(), QLatin1Char('0')) + digits;
 }
 
-// A CAN信号 binding's ID and its signal as DBC describes one, or nullopt with the reason in *error when the ID
-// does not parse, the byte order is unknown or the signal is not valid.
-std::optional<std::pair<CanId, CanSignalDef>> canSignalOf(const QJsonObject &binding, QString *error = nullptr)
+} // namespace
+
+std::optional<CanSignalDef> canBitField(const QJsonObject &binding, QString *error)
 {
-    const auto id = Can::parseId(binding.value(QStringLiteral("canId")).toString(), error);
-    if (!id) {
-        return std::nullopt;
-    }
     CanSignalDef signal;
     signal.start = binding.value(QStringLiteral("canStartBit")).toInt(0);
     signal.length = binding.value(QStringLiteral("canBitLength")).toInt(0);
-    // validate() names the signal in its messages: here it is the ID and the start|length the user typed.
-    signal.name = QStringLiteral("%1 %2|%3").arg(Can::idText(*id)).arg(signal.start).arg(signal.length);
+    signal.name = QStringLiteral("%1 %2|%3").arg(binding.value(QStringLiteral("canId")).toString())
+                      .arg(signal.start).arg(signal.length).trimmed();
     const QString order = binding.value(QStringLiteral("canByteOrder")).toString(CanByteOrder::Intel);
     if (order == CanByteOrder::MotorolaLsb) {
         const auto msb = motorolaMsbStart(signal.start, signal.length);
@@ -168,7 +166,18 @@ std::optional<std::pair<CanId, CanSignalDef>> canSignalOf(const QJsonObject &bin
     if (!signal.validate(error)) {
         return std::nullopt;
     }
-    return std::pair{*id, signal};
+    return signal;
+}
+
+namespace {
+
+std::optional<std::pair<CanId, CanSignalDef>> canSignalOf(const QJsonObject &binding, QString *error = nullptr)
+{
+    const auto id = Can::parseId(binding.value(QStringLiteral("canId")).toString(), error);
+    if (id)
+        if (const auto signal = canBitField(binding, error))
+            return std::pair{*id, *signal};
+    return std::nullopt;
 }
 
 } // namespace
@@ -179,6 +188,24 @@ QString canSignalProblem(const QJsonObject &binding)
     return canSignalOf(binding, &error) ? QString() : error;
 }
 
+QString chartCurveName(const QJsonObject &props, int curve)
+{
+    const QString prefix = QStringLiteral("_curve_%1_").arg(curve);
+    const QString name = props.value(prefix + QLatin1String("name")).toString();
+    if (!name.isEmpty())
+        return name;
+    if (TimingSource::usesChannels(props)) {
+        const QString key = props.value(prefix + QLatin1String("key")).toString();
+        const QString mode = props.value(prefix + QLatin1String("parseMode")).toString();
+        if (!key.isEmpty() && mode == ParseMode::CanField)
+            return key.section(QLatin1Char('.'), -1);
+        if (!key.isEmpty() && mode == ParseMode::DataPoint)
+            return key;
+        return QCoreApplication::translate("fhmi", "通道 %1").arg(curve + 1);
+    }
+    return QCoreApplication::translate("fhmi", "曲线%1").arg(curve + 1);
+}
+
 QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
 {
     const auto field = [&props, curve](const char *name, const QJsonValue &fallback) {
@@ -186,7 +213,7 @@ QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
         return value.isUndefined() || value.isNull() ? fallback : value;
     };
     QJsonObject binding{
-        {QStringLiteral("parseMode"), field("parseMode", ParseMode::KeyValue)},
+        {QStringLiteral("parseMode"), field("parseMode", TimingSource::usesChannels(props) ? ParseMode::None : ParseMode::KeyValue)},
         {QStringLiteral("sourceCardId"), field("sourceCardId", QString())},
         {QStringLiteral("sourceEndpoint"), field("sourceEndpoint", QString())},
         {QStringLiteral("s7"), field("s7", QJsonObject())},
@@ -203,6 +230,7 @@ QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
         {QStringLiteral("mbRegOrder"), field("mbRegOrder", QStringLiteral("大端(AB CD)"))}, // i18n: value
         {QStringLiteral("mbFcFilter"), field("mbFcFilter", -1)},
         {QStringLiteral("mbSlaveFilter"), field("mbSlaveFilter", -1)},
+        {QStringLiteral("mbPeriod"), field("mbPeriod", 0)},
         {QStringLiteral("mbArea"), field("mbArea", ModbusArea::HoldingRegisters)},
         {QStringLiteral("canId"), field("canId", QString())},
         {QStringLiteral("canStartBit"), field("canStartBit", 0)},
@@ -312,6 +340,12 @@ QVariant bindingDecimals(const QVariant &value, const QString &places)
 // BindingEntry
 // ---------------------------------------------------------------------------
 
+bool supportsBindingMode(const QString &typeName, QStringView mode)
+{
+    return !industrialCapabilities(typeName).structuredInput || mode == ParseMode::None ||
+           mode == ParseMode::KeyValue || mode == ParseMode::JsonPath || mode == ParseMode::DataPoint;
+}
+
 std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
 {
     const QJsonObject binding = widget.value(QStringLiteral("binding")).toObject();
@@ -319,11 +353,14 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
         return std::nullopt;
     }
     const QString mode = binding.value(QStringLiteral("parseMode")).toString(ParseMode::KeyValue);
+    const QString type = widget.value(QStringLiteral("type")).toString();
+    if (!supportsBindingMode(type, mode))
+        return std::nullopt;
     const QString key = binding.value(QStringLiteral("key")).toString();
     const QString jsonPath = binding.value(QStringLiteral("jsonPath")).toString();
     const auto can = mode == ParseMode::CanSignal ? canSignalOf(binding) : std::nullopt;
     const bool configured =
-        ((mode == ParseMode::KeyValue || mode == ParseMode::DataPoint) && !key.isEmpty()) ||
+        ((mode == ParseMode::KeyValue || mode == ParseMode::DataPoint || mode == ParseMode::CanField) && !key.isEmpty()) ||
         (mode == ParseMode::JsonPath && !jsonPath.isEmpty()) || mode == ParseMode::HexBytes ||
         mode == ParseMode::Modbus ||
         (mode == ParseMode::S7 && S7::point(binding.value(QStringLiteral("s7")).toObject()).has_value()) ||
@@ -333,7 +370,6 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
         return std::nullopt;
     }
 
-    const QString type = widget.value(QStringLiteral("type")).toString();
     const WidgetMeta *meta = WidgetRegistry::instance().find(type);
     const QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
 
@@ -384,7 +420,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
 
 QVariant BindingEntry::extractFromParsed(const Message &data) const
 {
-    if (parseMode == ParseMode::KeyValue || parseMode == ParseMode::DataPoint) {
+    if (parseMode == ParseMode::KeyValue || parseMode == ParseMode::DataPoint || parseMode == ParseMode::CanField) {
         return data.value(key);
     }
     if (parseMode == ParseMode::JsonPath) {
@@ -475,57 +511,54 @@ QVariant BindingEntry::extractModbus(const Message &data) const
     return qlonglong(*r0);
 }
 
-std::optional<QByteArray> BindingEntry::stripFrame(const QByteArray &raw) const
+const QStringList &rawBindingDataTypes()
 {
-    QByteArray data = raw;
+    static const QStringList types{QStringLiteral("uint8"), QStringLiteral("int8"), QStringLiteral("uint16"),
+        QStringLiteral("int16"), QStringLiteral("uint32"), QStringLiteral("int32"), QStringLiteral("float32"),
+        QStringLiteral("ASCII")};
+    return types;
+}
+
+std::optional<BindingByteRange> BindingEntry::rawByteRange(const QByteArray &raw) const
+{
+    if (parseMode != ParseMode::HexBytes || byteOffset < 0)
+        return std::nullopt;
+    qsizetype start = 0;
+    qsizetype end = raw.size();
     if (!frameHeader.isEmpty()) {
-        const int idx = data.indexOf(frameHeader);
-        if (idx < 0) {
+        const auto index = raw.indexOf(frameHeader);
+        if (index < 0)
             return std::nullopt;
-        }
-        data = data.mid(idx + frameHeader.size());
+        start = index + frameHeader.size();
     }
     if (!frameTail.isEmpty()) {
-        const int idx = data.indexOf(frameTail);
-        if (idx < 0) {
+        end = raw.indexOf(frameTail, start);
+        if (end < 0)
             return std::nullopt;
-        }
-        data = data.left(idx);
     }
-    return data;
+    if (byteOffset > end - start)
+        return std::nullopt;
+    start += byteOffset;
+    if (dataType == QLatin1String("ASCII")) {
+        const auto terminator = raw.indexOf('\0', start);
+        if (terminator >= 0)
+            end = std::min(end, terminator);
+        return BindingByteRange{start, end - start};
+    }
+    const auto size = rawBindingDataTypes().contains(dataType) ? HexOptions::fieldSize(dataType) : 0;
+    if (size == 0 || size > end - start)
+        return std::nullopt;
+    return BindingByteRange{start, size};
 }
 
 QVariant BindingEntry::extractFromRaw(const QByteArray &raw) const
 {
-    if (parseMode != ParseMode::HexBytes) {
+    const auto range = rawByteRange(raw);
+    if (!range)
         return {};
-    }
-    const auto stripped = stripFrame(raw);
-    if (!stripped) {
-        return {};
-    }
-    const QByteArray &payload = *stripped;
-
-    if (dataType == QLatin1String("ASCII")) {
-        if (byteOffset < 0 || byteOffset > payload.size()) {
-            return {};
-        }
-        int end = payload.indexOf('\0', byteOffset);
-        if (end < 0) {
-            end = payload.size();
-        }
-        return QString::fromLatin1(payload.mid(byteOffset, end - byteOffset));
-    }
-
-    static const QHash<QString, int> sizes = {
-        {QStringLiteral("uint8"), 1},  {QStringLiteral("int8"), 1},  {QStringLiteral("uint16"), 2},
-        {QStringLiteral("int16"), 2},  {QStringLiteral("uint32"), 4}, {QStringLiteral("int32"), 4},
-        {QStringLiteral("float32"), 4}};
-    const int size = sizes.value(dataType, 0);
-    if (!size || byteOffset < 0 || byteOffset + size > payload.size()) {
-        return {};
-    }
-    const auto *bytes = reinterpret_cast<const uchar *>(payload.constData() + byteOffset);
+    if (dataType == QLatin1String("ASCII"))
+        return QString::fromLatin1(raw.constData() + range->offset, range->size);
+    const auto *bytes = reinterpret_cast<const uchar *>(raw.constData() + range->offset);
     const bool be = byteOrder == QStringLiteral("大端(BE)"); // i18n: value
     if (dataType == QLatin1String("uint8")) {
         return qlonglong(bytes[0]);
@@ -619,7 +652,13 @@ QVariant BindingEntry::resolvePath(const QVariant &root, const QString &path, bo
 
 QVariant BindingEntry::evaluate(const QVariant &raw) const
 {
-    if (expression.trimmed().isEmpty()) {
+    const QVariant result = evaluateStrict(raw);
+    return result.isValid() ? result : raw; // Preserve the display conversion on direct bindings.
+}
+
+QVariant BindingEntry::evaluateStrict(const QVariant &raw) const
+{
+    if (!raw.isValid() || raw.isNull() || expression.trimmed().isEmpty()) {
         return raw;
     }
     // `value` has the raw value's kind: a bool, an int, or a float (numeric text included).
@@ -627,12 +666,11 @@ QVariant BindingEntry::evaluate(const QVariant &raw) const
     if (raw.typeId() != QMetaType::Bool && !isIntegral(raw)) {
         const auto number = toReal(raw);
         if (!number) {
-            return raw;
+            return {};
         }
         value = *number;
     }
-    const QVariant result = Expression::evaluate(expression, value);
-    return result.isValid() ? result : raw; // where Python's eval raises, the raw value
+    return Expression::evaluate(expression, value);
 }
 
 std::optional<double> BindingEntry::chartSample(const QVariant &raw) const
@@ -656,7 +694,12 @@ QVariant BindingEntry::formatValue(const QVariant &value) const
     if (propName != QLatin1String("text") && propName != QLatin1String("value")) {
         return value;
     }
-    if (displayFormat == QStringLiteral("自动")) { // i18n: value
+    return formatDisplayValue(value, displayFormat, decimals);
+}
+
+QVariant formatDisplayValue(const QVariant &value, const QString &format, const QString &decimals)
+{
+    if (format == QStringLiteral("自动")) { // i18n: value
         return bindingDecimals(value, decimals);
     }
     std::optional<qint64> num;
@@ -671,13 +714,13 @@ QVariant BindingEntry::formatValue(const QVariant &value) const
     const qint64 n = *num;
     const quint64 magnitude = n < 0 ? quint64(-(n + 1)) + 1 : quint64(n);
     const QString sign = n < 0 ? QStringLiteral("-") : QString();
-    if (displayFormat == QStringLiteral("十六进制(HEX)")) { // i18n: value
+    if (format == QStringLiteral("十六进制(HEX)")) { // i18n: value
         return sign + QStringLiteral("0x") + padded(QString::number(magnitude, 16).toUpper(), 2);
     }
-    if (displayFormat == QStringLiteral("二进制(BIN)")) { // i18n: value
+    if (format == QStringLiteral("二进制(BIN)")) { // i18n: value
         return sign + QStringLiteral("0b") + padded(QString::number(magnitude, 2), 8);
     }
-    if (displayFormat == QStringLiteral("十进制")) { // i18n: value
+    if (format == QStringLiteral("十进制")) { // i18n: value
         return QString::number(n);
     }
     return value;

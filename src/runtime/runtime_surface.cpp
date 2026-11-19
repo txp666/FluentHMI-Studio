@@ -61,7 +61,10 @@ void RuntimeSurface::build(const Project &project, bool startRuntime)
     m_context->setBitProfiles(project.bitProfiles);
     if (startRuntime) {
         m_context->configureData(project);
-        m_context->hub()->configure(project.serial);
+        auto serial = project.serial;
+        serial.insert(QStringLiteral("parser"), project.parserType());
+        serial.insert(QStringLiteral("parserConfig"), project.parserConfig());
+        m_context->hub()->configure(serial);
     }
     setFixedSize(project.canvasWidth, project.canvasHeight);
     for (const QJsonValue &value : project.widgets) {
@@ -107,8 +110,10 @@ void RuntimeSurface::buildWidget(const QJsonObject &data, HmiWidget *container)
 
     const QString id = data.value(QStringLiteral("id")).toString();
     m_context->registerWidget(id, widget);
-    if (auto binding = BindingEntry::fromWidget(data)) {
-        m_context->addBinding(std::move(*binding));
+    if (widgetReadsStoredBinding(widget->meta(), widget->properties())) {
+        if (auto binding = BindingEntry::fromWidget(data)) {
+            m_context->addBinding(std::move(*binding));
+        }
     }
     for (const QJsonValue &child : data.value(QStringLiteral("children")).toArray()) {
         buildWidget(child.toObject(), widget);

@@ -1,7 +1,11 @@
 #include "core/chart_file.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDataStream>
 #include <QtCore/QIODevice>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QLocale>
 #include <QtCore/QSet>
 #include <QtCore/QStringDecoder>
@@ -276,12 +280,16 @@ QList<QStringList> csvRows(const QString &text)
     return rows;
 }
 
+QList<QStringList> csvRowsWithUniversalNewlines(QString text)
+{
+    text.replace(QStringLiteral("\r\n"), QStringLiteral("\n")).replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    return csvRows(text);
+}
+
 bool readCsv(const QString &content, QStringList *names, QList<QList<double>> *values, QString *error)
 {
     // Python opens the file in text mode: "\r\n" and a lone "\r" both end a line.
-    QString text = content;
-    text.replace(QStringLiteral("\r\n"), QStringLiteral("\n")).replace(QLatin1Char('\r'), QLatin1Char('\n'));
-    const QList<QStringList> rows = csvRows(text);
+    const auto rows = csvRowsWithUniversalNewlines(content);
     const QStringList header = rows.value(0);
     QList<QList<double>> columns(header.size());
     for (qsizetype r = 1; r < rows.size(); ++r) {
@@ -692,6 +700,14 @@ QString csvField(const QString &field, bool alone)
     return field;
 }
 
+QString csvRow(const QStringList &fields)
+{
+    QStringList quoted;
+    for (const QString &field : fields)
+        quoted.append(csvField(field, fields.size() == 1));
+    return quoted.join(QLatin1Char(',')) + QStringLiteral("\r\n");
+}
+
 // Text written in pieces, so a long recording never sits in memory as a whole.
 class ChunkedWriter
 {
@@ -777,14 +793,7 @@ bool writeChartFile(QIODevice *out, ChartFileFormat format, const QStringList &n
         }
         writer.add(repeated ? QStringLiteral("]") : QStringLiteral("}"));
     } else {
-        const auto row = [&writer](const QStringList &fields) {
-            QStringList quoted;
-            for (const QString &field : fields) {
-                quoted.append(csvField(field, fields.size() == 1));
-            }
-            writer.add(quoted.join(QLatin1Char(',')) + QStringLiteral("\r\n"));
-        };
-        row(names);
+        writer.add(csvRow(names));
         // zip_longest: a row per sample number until every curve has run out, blank cells for those that have.
         QList<bool> done(names.size(), false);
         for (;;) {
@@ -798,7 +807,7 @@ bool writeChartFile(QIODevice *out, ChartFileFormat format, const QStringList &n
             if (!any) {
                 break;
             }
-            row(cells);
+            writer.add(csvRow(cells));
         }
     }
     return writer.flush() || fail(error, out->errorString());
@@ -921,6 +930,211 @@ void ChartHistory::clear()
     m_cache.clear();
     m_count = 0;
     m_readSinceWrite = false;
+}
+
+std::optional<bool> TimingLevels::level(quint16 mask) const
+{
+    return valid & mask ? std::optional<bool>((high & mask) != 0) : std::nullopt;
+}
+
+void TimingLevels::setLevel(int index, std::optional<bool> value)
+{
+    const quint16 mask = quint16(1u << index);
+    high &= ~mask;
+    valid &= ~mask;
+    if (value) {
+        valid |= mask;
+        if (*value)
+            high |= mask;
+    }
+}
+
+namespace {
+
+constexpr qint64 kTimingRecordBytes = sizeof(double) + 2 * sizeof(quint16);
+
+QStringList timingColumns(const QStringList &names)
+{
+    return QStringList{QStringLiteral("time_s")} + names;
+}
+
+QStringList timingFields(const TimingSample &sample, qsizetype channels, const QString &missing = {})
+{
+    QStringList fields{QString::number(sample.seconds, 'f', 6)};
+    for (qsizetype i = 0; i < channels; ++i) {
+        const auto level = sample.levels.level(quint16(1u << i));
+        fields.append(level ? QString::number(*level) : missing);
+    }
+    return fields;
+}
+
+} // namespace
+
+QByteArray timingCsvHeader(const QStringList &names)
+{
+    return QByteArray("\xef\xbb\xbf", 3) + csvRow(timingColumns(names)).toUtf8();
+}
+
+QByteArray timingCsvRow(const TimingSample &sample, qsizetype channels)
+{
+    return timingFields(sample, channels).join(QLatin1Char(',')).toUtf8() + "\r\n";
+}
+
+std::optional<TimingRecording> readTimingRecording(const QByteArray &content, ChartFileFormat format, QString *error)
+{
+    const auto invalid = [error](const QString &message) {
+        fail(error, message);
+        return std::nullopt;
+    };
+    const auto invalidRow = [&invalid](qsizetype row) {
+        return invalid(QCoreApplication::translate("fhmi", "时序数据第 %1 行无效：检查时间、列数和 0/1 状态").arg(row));
+    };
+    TimingRecording recording;
+    const auto setHeader = [&recording](QStringList columns) {
+        if (columns.size() < 2 || columns.size() > 17 || columns.first() != QLatin1String("time_s"))
+            return false;
+        columns.removeFirst();
+        recording.names = std::move(columns);
+        return true;
+    };
+    const auto badHeader = [&invalid] {
+        return invalid(QCoreApplication::translate("fhmi", "时序文件首列须为 time_s，并包含 1–16 个通道"));
+    };
+    const auto addSample = [&recording](TimingSample sample) {
+        if (!std::isfinite(sample.seconds) || sample.seconds < 0 ||
+            (!recording.samples.empty() && sample.seconds < recording.samples.back().seconds))
+            return false;
+        recording.samples.push_back(sample);
+        return true;
+    };
+    if (format == ChartFileFormat::Json) {
+        QJsonParseError parseError;
+        const auto document = QJsonDocument::fromJson(content, &parseError);
+        if (parseError.error != QJsonParseError::NoError)
+            return invalid(parseError.errorString());
+        const auto object = document.object();
+        QStringList columns;
+        for (const auto &column : object.value(QStringLiteral("columns")).toArray()) {
+            if (!column.isString())
+                return badHeader();
+            columns.append(column.toString());
+        }
+        if (!setHeader(std::move(columns)) || !object.value(QStringLiteral("rows")).isArray())
+            return badHeader();
+        const auto rows = object.value(QStringLiteral("rows")).toArray();
+        for (qsizetype i = 0; i < rows.size(); ++i) {
+            const auto cells = rows.at(i).toArray();
+            if (cells.size() != recording.names.size() + 1 || !cells.first().isDouble())
+                return invalidRow(i + 1);
+            TimingSample sample{cells.first().toDouble(), {}};
+            for (int c = 1; c < cells.size(); ++c) {
+                const auto cell = cells.at(c);
+                if (cell.isNull())
+                    continue;
+                const double level = cell.toDouble(-1);
+                if (level != 0 && level != 1)
+                    return invalidRow(i + 1);
+                sample.levels.setLevel(c - 1, level == 1);
+            }
+            if (!addSample(sample))
+                return invalidRow(i + 1);
+        }
+    } else {
+        QStringDecoder decoder(QStringDecoder::Utf8);
+        const QString decoded = decoder(content);
+        if (decoder.hasError())
+            return invalid(QCoreApplication::translate("fhmi", "文件不是 UTF-8 文本"));
+        const auto rows = csvRowsWithUniversalNewlines(decoded);
+        if (!setHeader(rows.value(0)))
+            return badHeader();
+        for (qsizetype i = 1; i < rows.size(); ++i) {
+            const auto &cells = rows.at(i);
+            if (cells.isEmpty())
+                continue;
+            bool ok = false;
+            TimingSample sample{cells.first().toDouble(&ok), {}};
+            if (!ok || cells.size() != recording.names.size() + 1)
+                return invalidRow(i);
+            for (int c = 1; c < cells.size(); ++c) {
+                const QString level = cells.at(c).trimmed();
+                if (level.isEmpty())
+                    continue;
+                if (level != QLatin1String("0") && level != QLatin1String("1"))
+                    return invalidRow(i);
+                sample.levels.setLevel(c - 1, level == QLatin1String("1"));
+            }
+            if (!addSample(sample))
+                return invalidRow(i);
+        }
+    }
+    if (recording.samples.empty())
+        return invalid(QCoreApplication::translate("fhmi", "文件没有时序样本"));
+    return recording;
+}
+
+TimingChartHistory::TimingChartHistory() = default;
+TimingChartHistory::~TimingChartHistory() = default;
+
+bool TimingChartHistory::append(const TimingSample &sample, QString *error)
+{
+    if (!m_file) {
+        auto file = std::make_unique<QTemporaryFile>();
+        if (!file->open())
+            return fail(error, file->errorString());
+        m_file = std::move(file);
+    }
+    if (const qint64 end = m_count * kTimingRecordBytes; m_file->pos() != end && !m_file->seek(end))
+        return fail(error, m_file->errorString());
+    QDataStream stream(m_file.get());
+    stream << sample.seconds << sample.levels.high << sample.levels.valid;
+    if (stream.status() != QDataStream::Ok)
+        return fail(error, m_file->errorString());
+    ++m_count;
+    return true;
+}
+
+bool TimingChartHistory::write(QIODevice *out, ChartFileFormat format, const QStringList &names, double end,
+                               QString *error) const
+{
+    if (isEmpty())
+        return fail(error, QCoreApplication::translate("fhmi", "暂无可导出的时序数据"));
+    if (!m_file->flush() || !m_file->seek(0))
+        return fail(error, m_file->errorString());
+    ChunkedWriter writer(out);
+    const bool json = format == ChartFileFormat::Json;
+    if (json) {
+        QStringList columns;
+        for (const auto &name : timingColumns(names))
+            columns.append(pyJsonString(name));
+        writer.add(QStringLiteral("{\"columns\":[") + columns.join(QLatin1Char(',')) + QStringLiteral("],\"rows\":["));
+    } else {
+        writer.add(QString(QChar(0xfeff)) + csvRow(timingColumns(names)));
+    }
+    const auto row = [&](const TimingSample &sample, bool first) {
+        const auto fields = timingFields(sample, names.size(), json ? QStringLiteral("null") : QString());
+        const auto values = fields.join(QLatin1Char(','));
+        writer.add(json ? (first ? QStringLiteral("[") : QStringLiteral(",[")) + values + QLatin1Char(']')
+                        : values + QStringLiteral("\r\n"));
+    };
+    QDataStream stream(m_file.get());
+    TimingSample sample;
+    for (qint64 i = 0; i < m_count; ++i) {
+        stream >> sample.seconds >> sample.levels.high >> sample.levels.valid;
+        if (stream.status() != QDataStream::Ok)
+            return fail(error, QCoreApplication::translate("fhmi", "无法读取曲线历史"));
+        row(sample, i == 0);
+    }
+    if (end > sample.seconds)
+        row({end, sample.levels}, false);
+    if (json)
+        writer.add(QStringLiteral("]}"));
+    return writer.flush() || fail(error, out->errorString());
+}
+
+void TimingChartHistory::clear()
+{
+    m_file.reset();
+    m_count = 0;
 }
 
 } // namespace fhmi

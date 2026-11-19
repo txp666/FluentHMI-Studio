@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     FluentHMIStudio
-    VERSION 0.8
+    VERSION 0.9.0
     DESCRIPTION "Visual HMI designer for hardware engineers, built on FluentQtWidgets"
     HOMEPAGE_URL "https://github.com/txp666/FluentHMI-Studio"
     LANGUAGES CXX
@@ -86,6 +86,9 @@ add_library(fhmi_core STATIC
     src/core/chart_file.h
     src/core/command_encoder.cpp
     src/core/command_encoder.h
+    src/core/frame_templates.cpp
+    src/core/frame_templates.h
+    src/core/manual_command.h
     src/core/dbc.cpp
     src/core/dbc.h
     src/core/value_text.cpp
@@ -194,6 +197,12 @@ add_library(fhmi_runtime STATIC
     src/runtime/date_time_input.h
     src/runtime/field_help.cpp
     src/runtime/field_help.h
+    src/runtime/bit_map_view.cpp
+    src/runtime/bit_map_view.h
+    src/runtime/frame_bytes_view.cpp
+    src/runtime/frame_bytes_view.h
+    src/runtime/receive_frame_preview.cpp
+    src/runtime/receive_frame_preview.h
     src/runtime/hmi_widget.cpp
     src/runtime/hmi_widget.h
     src/runtime/modbus_poller.cpp
@@ -202,8 +211,14 @@ add_library(fhmi_runtime STATIC
     src/runtime/can_recorder.h
     src/runtime/project_data.cpp
     src/runtime/project_data.h
+    src/runtime/project_data_view.cpp
+    src/runtime/project_data_view.h
     src/runtime/runtime_context.cpp
     src/runtime/runtime_context.h
+    src/runtime/periodic_sender.cpp
+    src/runtime/periodic_sender.h
+    src/runtime/periodic_task_view.cpp
+    src/runtime/periodic_task_view.h
     src/runtime/runtime_surface.cpp
     src/runtime/runtime_surface.h
     src/runtime/ui_helpers.cpp
@@ -216,8 +231,12 @@ add_library(fhmi_runtime STATIC
     src/runtime/widgets/can_timing_dialog.h
     src/runtime/widgets/container_widgets.cpp
     src/runtime/widgets/container_widgets.h
+    src/runtime/widgets/chart_viewport.cpp
+    src/runtime/widgets/chart_viewport.h
     src/runtime/widgets/data_widgets.cpp
     src/runtime/widgets/data_widgets.h
+    src/runtime/widgets/digital_timing_widget.cpp
+    src/runtime/widgets/digital_timing_widget.h
     src/runtime/widgets/alarm_widgets.cpp
     src/runtime/widgets/alarm_widgets.h
     src/runtime/widgets/display_widgets.cpp
@@ -233,12 +252,34 @@ target_link_libraries(fhmi_runtime PUBLIC fhmi_comm Qt6::Widgets Qt6::Svg Fluent
 add_library(fhmi_designer STATIC
     src/designer/canvas_item.cpp
     src/designer/canvas_item.h
+    src/designer/command_preview.cpp
+    src/designer/command_preview.h
+    src/designer/connection_source_edit.cpp
+    src/designer/connection_source_edit.h
+    src/designer/command_inputs_editor.cpp
+    src/designer/command_inputs_editor.h
+    src/designer/frame_template_editor.cpp
+    src/designer/frame_template_editor.h
     src/designer/design_scene.cpp
     src/designer/design_scene.h
     src/designer/project_logic_dialog.cpp
     src/designer/project_logic_dialog.h
+    src/designer/project_can_signals.cpp
+    src/designer/project_can_signals.h
+    src/designer/project_frame_templates.cpp
+    src/designer/project_frame_templates.h
+    src/designer/reference_impact_dialog.cpp
+    src/designer/reference_impact_dialog.h
+    src/designer/receive_frame_fields.cpp
+    src/designer/receive_frame_fields.h
+    src/designer/receive_frame_editor.cpp
+    src/designer/receive_frame_editor.h
+    src/designer/transmit_frame_editor.cpp
+    src/designer/transmit_frame_editor.h
     src/designer/property_editor.cpp
     src/designer/property_editor.h
+    src/designer/can_signal_editor.cpp
+    src/designer/can_signal_editor.h
     src/designer/widget_palette.cpp
     src/designer/widget_palette.h
 )

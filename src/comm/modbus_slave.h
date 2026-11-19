@@ -103,7 +103,7 @@ class ModbusRtuRequestFramer : public Parser
     QList<QByteArray> frames(const QByteArray &data) override;
     QList<QByteArray> flush() override;
     int idleTimeout() const override { return 50; }
-    QList<Message> parse(const QByteArray &) override { return {}; }
+    QList<DecodedRecord> decodeRecords(const QByteArray &) override { return {}; }
     void reset() override { m_buf.clear(); }
 
   private:
@@ -121,7 +121,7 @@ class ModbusTcpRequestFramer : public Parser
 {
   public:
     QList<QByteArray> frames(const QByteArray &data) override;
-    QList<Message> parse(const QByteArray &) override { return {}; }
+    QList<DecodedRecord> decodeRecords(const QByteArray &) override { return {}; }
     void reset() override { m_buf.clear(); }
 
   private:
@@ -154,8 +154,8 @@ class ModbusSlave : public QObject
 
     // A request a link framed: answered now, its writes made and reported, its receipt logged. The link sends
     // the reply, if any, and then calls replied().
-    ModbusSlaveAnswer request(ModbusFraming framing, const QByteArray &frame);
-    void replied(const ModbusSlaveAnswer &answer);
+    ModbusSlaveAnswer request(ModbusFraming framing, const QByteArray &frame, const QString &endpoint = {});
+    void replied(const ModbusSlaveAnswer &answer, const QString &endpoint = {});
 
     // Writes `values` from `address` on and reports the change; false (nothing written) unless the addresses are
     // all in the area.
@@ -164,6 +164,7 @@ class ModbusSlave : public QObject
     // take the value as `dataType` in `regOrder`, clamped to the type's range, the way a Modbus command packs it.
     bool writeValue(const QString &table, int address, double value, const QString &dataType, const QString &regOrder);
     // A Modbus command: FC 05 writes the coil (1 for any value but 0), FC 06 and 16 the registers; reads do nothing.
+    bool acceptsCommand(const ModbusRequest &request) const;
     bool execute(const ModbusRequest &request);
 
     QList<Message> startMessages() const { return m_store.startMessages(m_settings.slave); }
@@ -174,7 +175,7 @@ class ModbusSlave : public QObject
 
   signals:
     void changed(const fhmi::Message &message);
-    void logged(const QString &text, const QString &level);
+    void logged(const QString &text, const QString &level, const QString &endpoint);
     void statusChanged();
 
   private:

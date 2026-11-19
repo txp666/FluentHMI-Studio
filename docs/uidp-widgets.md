@@ -1,6 +1,8 @@
 # .uidp 控件参考
 
-[uidp-format.md](uidp-format.md) 的附录：每个控件的类型名、属性名、默认值、取值范围和可选项，由程序的控件注册表生成，和程序完全一致。字符串按 JSON 里的写法列出。改了控件之后，在源码目录运行构建出来的 `uidp_reference docs`，更新这份文件和 uidp-format.md 末尾的「控件一览」；没更新时 `docs` 测试会失败。
+这份 v0.9 属性参考由控件注册表生成，列出类型、属性名、默认值、范围和选项。使用 JSON 中的原始属性名和枚举值。先看 [UIDP 工程格式](uidp-format.md) 了解布局和绑定。
+
+修改控件元数据后，从源码根目录运行 `uidp_reference docs`。生成器同时更新本页和工程格式文档末尾的控件索引，`docs` 测试会校验两处内容。
 
 <!-- 以下由 uidp_reference（tools/uidp_reference.cpp）从控件注册表生成，不要手改 -->
 
@@ -24,6 +26,8 @@
 - `commandTargetId`（发送连接，文本）默认 `""`
 - `commandEndpoint`（发送子通道，文本）默认 `""`
 - `s7Command`（S7 写入，对象）默认 `{"address":"DB1.DBD4","dataType":"REAL","offValue":"0","onValue":"1","value":"1"}`
+- `confirmBeforeSend`（下发前确认，true/false）默认 `false`
+- `showSendConfirmationDetails`（确认时显示详情，true/false）默认 `false`
 
 <a id="link-properties"></a>
 
@@ -48,18 +52,20 @@
 - `text`（文本，文本）默认 `"按钮"`
 - `buttonStyle`（按钮风格，选项）默认 `"标准"`，可选 `"标准"` `"强调"` `"轻量"` `"描边"`
 - `enabled`（启用，true/false）默认 `true`
+- `commandInputs`（输入列表，数组）默认 `[]`
 - `command`（发送内容，命令）默认 `""`
-- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `"HEX字符串"` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
+- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `""` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbFunc`（功能码，选项）默认 `"03 读保持寄存器"`，可选 `"01 读线圈"` `"02 读离散输入"` `"03 读保持寄存器"` `"04 读输入寄存器"` `"05 写单线圈"` `"06 写单寄存器"` `"16 写多个寄存器"`
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
-- `mbValue`（值/数量，整数）默认 `1`，范围 -2147483648–2147483647
+- `mbValue`（Modbus 参数，文本）默认 `"1"`
 - `notify`（按下通知，true/false）默认 `false`
 - `notifyTitle`（通知标题，文本）默认 `"提示"`
 - `notifyContent`（通知内容，文本）默认 `"按钮已按下"`
 - `notifyType`（通知类型，选项）默认 `"成功"`，可选 `"成功"` `"信息"` `"警告"` `"错误"`
 - `notifyDuration`（通知时长(ms)，整数）默认 `3000`，范围 500–30000
+- `sendIntervalMs`（发送间隔，整数）默认 `0`，范围 0–60000
 
 #### `Label` 标签
 
@@ -74,15 +80,16 @@
 
 #### `LineEdit` 输入框
 
-默认尺寸 200×36，最小 30×20；绑定数据时写入 `text`
+默认尺寸 200×36，最小 30×20
 
 另见[命令控件共有属性](#command-properties)。
 
+- `title`（标题，文本）默认 `""`
 - `placeholderText`（占位文本，文本）默认 `"请输入..."`
+- `parameterName`（工程参数，文本）默认 `""`
 - `text`（默认值，文本）默认 `""`
-- `readOnly`（只读，true/false）默认 `false`
-- `sendOnEnter`（回车发送，true/false）默认 `false`
-- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `"HEX字符串"` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
+- `inputOnly`（仅输入，true/false）默认 `false`
+- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `""` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbFunc`（功能码，选项）默认 `"06 写单寄存器"`，可选 `"03 读保持寄存器"` `"04 读输入寄存器"` `"05 写单线圈"` `"06 写单寄存器"` `"16 写多个寄存器"`
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
@@ -95,16 +102,14 @@
 另见[命令控件共有属性](#command-properties)。
 
 - `selectionStyle`（选择样式，选项）默认 `"下拉框"`，可选 `"下拉框"` `"分段"` `"单选组"`
-- `items`（选项，多行文本）默认 `"选项1\n选项2\n选项3"`
+- `options`（选项与发送值，数组）默认 `[{"label":"选项1","value":""},{"label":"选项2","value":""},{"label":"选项3","value":""}]`
 - `currentIndex`（默认选项，整数）默认 `0`，范围 0–99
 - `sendOnSelect`（选中发送，true/false）默认 `false`
-- `commands`（发送命令表，多行文本）默认 `""`
-- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `"HEX字符串"` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
+- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `""` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbFunc`（功能码，选项）默认 `"06 写单寄存器"`，可选 `"03 读保持寄存器"` `"04 读输入寄存器"` `"05 写单线圈"` `"06 写单寄存器"` `"16 写多个寄存器"`
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
 - `mbDataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbRegOrder`（寄存器序，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
-- `mbValue`（值/数量，整数）默认 `1`，范围 -2147483648–2147483647
 
 #### `ToggleSwitch` 开关
 
@@ -115,13 +120,14 @@
 - `switchStyle`（开关样式，选项）默认 `"开关"`，可选 `"开关"` `"复选框"`
 - `label`（标签，文本）默认 `"开关"`
 - `checked`（默认开启，true/false）默认 `false`
-- `onCondition`（开启判定，选项）默认 `"非零为开"`，可选 `"非零为开"` `"等于指定值"`
-- `onValue`（判定值，文本）默认 `"1"`
+- `onCondition`（状态判定，选项）默认 `"非零为开"`，可选 `"非零为开"` `"等于指定值"`
+- `onValue`（开启判定值，文本）默认 `"1"`
+- `offFeedbackValue`（关闭判定值，文本）默认 `""`
 - `onCommand`（开启命令，命令）默认 `""`
 - `offCommand`（关闭命令，命令）默认 `""`
-- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `"HEX字符串"` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
-- `mbArea`（地址类型，选项）默认 `"线圈"`，可选 `"线圈"` `"保持寄存器"`
-- `mbAddress`（线圈/寄存器地址，整数）默认 `0`，范围 0–65535
+- `dataType`（数据类型，选项）默认 `"HEX字符串"`，可选 `""` `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
+- `mbArea`（写入区，选项）默认 `"线圈"`，可选 `"线圈"` `"保持寄存器"`
+- `mbAddress`（写入地址，整数）默认 `0`，范围 0–65535
 - `notify`（切换通知，true/false）默认 `false`
 - `notifyTitle`（通知标题，文本）默认 `"提示"`
 - `notifyContent`（通知内容，文本）默认 `"开关已切换"`
@@ -138,7 +144,7 @@
 - `maximum`（最大值，整数）默认 `100`，范围 -99999–99999
 - `value`（默认值，整数）默认 `50`，范围 -99999–99999
 - `showRange`（显示上下限，true/false）默认 `false`，在滑块两端显示最小值和最大值
-- `sendOnChange`（变化发送，true/false）默认 `false`
+- `sendOnChange`（变化时向设备下发，true/false）默认 `false`
 - `dataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbFunc`（功能码，选项）默认 `"06 写单寄存器"`，可选 `"05 写单线圈"` `"06 写单寄存器"` `"16 写多个寄存器"`
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
@@ -158,7 +164,7 @@
 - `value`（默认值，小数）默认 `0`，范围 -99999–99999
 - `singleStep`（步长，小数）默认 `1`，范围 1e-06–99999
 - `suffix`（后缀，文本）默认 `""`
-- `sendOnChange`（变化发送，true/false）默认 `false`
+- `sendOnChange`（变化时向设备下发，true/false）默认 `false`
 - `dataType`（数据类型，选项）默认 `"uint16"`，可选 `"uint8"` `"int8"` `"uint16"` `"int16"` `"uint32"` `"int32"` `"float32"`
 - `mbFunc`（功能码，选项）默认 `"06 写单寄存器"`，可选 `"05 写单线圈"` `"06 写单寄存器"` `"16 写多个寄存器"`
 - `mbAddress`（寄存器地址，整数）默认 `0`，范围 0–65535
@@ -261,7 +267,7 @@
 
 默认尺寸 250×20，最小 30×10；绑定数据时写入 `value`
 
-- `value`（当前值，整数）默认 `50`，范围 0–100
+- `value`（当前值，整数）默认 `50`，范围 0–99999
 - `maximum`（最大值，整数）默认 `100`，范围 1–99999
 
 #### `ProgressRingDisplay` 进度环
@@ -269,7 +275,7 @@
 默认尺寸 120×130，最小 80×80；绑定数据时写入 `value`
 
 - `label`（标签，文本）默认 `"进度"`
-- `value`（当前值，整数）默认 `0`，范围 0–100
+- `value`（当前值，整数）默认 `0`，范围 0–99999
 - `maximum`（最大值，整数）默认 `100`，范围 1–99999
 
 #### `ImageDisplay` 图片显示
@@ -293,7 +299,7 @@
 - `curveCount`（曲线数量，整数）默认 `1`，范围 1–8
 - `currentCurve`（当前编辑曲线，整数）默认 `0`，范围 0–7
 - `curveName`（曲线名称，文本）默认 `"曲线1"`
-- `curveParseMode`（解析模式，选项）默认 `"键值匹配"`，可选 `"工程数据点"` `"键值匹配"` `"JSON路径"` `"HEX字节提取"` `"Modbus"` `"CAN信号"` `"S7"`
+- `curveParseMode`（解析模式，选项）默认 `"键值匹配"`，可选 `"未绑定"` `"工程数据点"` `"键值匹配"` `"JSON路径"` `"HEX字节提取"` `"Modbus"` `"CAN 信号名称"` `"CAN信号"` `"S7"`
 - `curveSourceCardId`（来源连接，文本）默认 `""`
 - `curveSourceEndpoint`（来源子通道，文本）默认 `""`
 - `curveS7`（S7 采集，对象）默认 `{"address":"DB1.DBD4","dataType":"REAL","period":0}`
@@ -310,6 +316,7 @@
 - `curveMbRegOrder`（寄存器序(MB)，选项）默认 `"大端(AB CD)"`，可选 `"大端(AB CD)"` `"小端(CD AB)"`
 - `curveMbFcFilter`（功能码过滤，整数）默认 `-1`，范围 -1–255
 - `curveMbSlaveFilter`（从站过滤，整数）默认 `-1`，范围 -1–255
+- `curveMbPeriod`（采集周期(ms)，整数）默认 `0`，范围 0–60000
 - `curveCanId`（CAN ID，文本）默认 `""`
 - `curveCanStartBit`（起始位，整数）默认 `0`，范围 0–511
 - `curveCanBitLength`（长度，整数）默认 `8`，范围 1–64
@@ -335,8 +342,11 @@
 
 - `sourceCardId`（来源连接，文本）默认 `""`
 - `sourceEndpoint`（来源子通道，文本）默认 `""`
-- `columns`（列名，多行文本）默认 `"字段\n值"`
-- `recordMode`（记录方式，选项）默认 `"最新值"`，可选 `"最新值"` `"逐行记录"`
+- `recordColumns`（记录列，数组）默认 `[]`
+- `recordMode`（记录方式，选项）默认 `"最新一帧"`，可选 `"最新一帧"` `"逐行记录"`
+- `recordSource`（记录来源，选项）默认 `"messages"`，可选 `"messages"` `"points"`
+- `recordIntervalMs`（记录间隔(ms)，整数）默认 `0`，范围 0–86400000
+- `recordTriggerPoint`（触发点，文本）默认 `""`
 - `maxRows`（最大行数，整数）默认 `500`，范围 10–50000
 
 ### 通信控件
@@ -364,6 +374,7 @@
 另见[Modbus 轮询链路卡片共有属性](#link-properties)。
 
 - `title`（标题，文本）默认 `"串口配置"`
+- `defaultPortName`（默认串口，文本）默认 `""`
 - `displayMode`（显示模式，选项）默认 `"完整"`，可选 `"完整"` `"简洁"` `"单行"`
 - `modbusRole`（Modbus 角色，选项）默认 `"主站"`，可选 `"主站"` `"从站"`，从站：解析模式为 modbus 或 modbus_tcp 时应答外部主站
 - `modbusDelay`（响应延时(ms)，整数）默认 `0`，范围 0–5000
@@ -455,7 +466,7 @@
 
 - `title`（标题，文本）默认 `"CAN 连接"`
 - `displayMode`（显示模式，选项）默认 `"完整"`，可选 `"完整"` `"简洁"`
-- `defaultAdapter`（默认适配器，选项）默认 `"PCAN"`，可选 `"PCAN"` `"ZLG"` `"SocketCAN"` `"slcan"`，PCAN：Windows、macOS；ZLG：Windows；SocketCAN：Linux；slcan：所有系统
+- `defaultAdapter`（默认适配器，选项）默认 `"PCAN"`，可选 `"PCAN"` `"ZLG"` `"SocketCAN"` `"slcan"` `"虚拟 CAN"`，PCAN：Windows、macOS；ZLG：Windows；SocketCAN：Linux；slcan：所有系统
 - `zlgModel`（ZLG 型号，选项）默认 `"USBCANFD-200U"`，可选 `"USBCAN-I"` `"USBCAN-I+"` `"USBCAN-I-mini"` `"USBCAN-II"` `"USBCAN-II+"` `"USBCAN-E-U"` `"USBCAN-E-mini"` `"USBCAN-2E-U"` `"USBCAN-4E-U"` `"USBCAN-8E-U"` `"USBCANFD-100U-mini"` `"USBCANFD-100U"` `"USBCANFD-200U"` `"USBCANFD-400U"` `"USBCANFD-800U"`
 - `defaultDeviceIndex`（ZLG 设备索引，整数）默认 `0`，范围 0–15，同型号插了多个时的序号，从 0 开始
 - `defaultChannel`（ZLG 通道，整数）默认 `0`，范围 0–7，设备上的第几路 CAN，从 0 开始
@@ -483,8 +494,13 @@
 
 - `title`（标题，文本）默认 `"数据发送"`
 - `placeholder`（提示文字，文本）默认 `"输入要发送的数据..."`
+- `commandMode`（数据格式，选项）默认 `"文本"`，可选 `"文本"` `"HEX"` `"CAN"`
+- `commandNewline`（换行符，选项）默认 `"\\r\\n"`，可选 `"无"` `"\\r\\n"` `"\\n"` `"\\r"`
 - `commandTargetId`（发送连接，文本）默认 `""`
 - `commandEndpoint`（发送子通道，文本）默认 `""`
+- `sendIntervalMs`（发送间隔，整数）默认 `0`，范围 0–60000
+- `confirmBeforeSend`（下发前确认，true/false）默认 `false`
+- `showSendConfirmationDetails`（确认时显示详情，true/false）默认 `false`
 
 #### `DataRecvCard` 数据接收卡片
 

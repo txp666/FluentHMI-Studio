@@ -213,7 +213,11 @@ void S7Client::remove(const QString &id) {
     it->second->worker->disconnect(this);d->sessions.erase(it);
 }
 void S7Client::clear() { while(!d->sessions.empty()) remove(d->sessions.begin()->first); }
-bool S7Client::connected(const QString &id) const {const auto it=d->sessions.find(id);return it!=d->sessions.end()&&it->second->connected;}
+bool S7Client::connected(const QString &id) const { return sendSession(id) != 0; }
+quint64 S7Client::sendSession(const QString &id) const {
+    const auto it = d->sessions.find(id);
+    return it != d->sessions.end() && it->second->connected ? it->second->epoch : 0;
+}
 void S7Client::setNeeds(const QList<S7::Need> &needs) {
     for(const auto &entry:d->sessions) {
         QList<S7::Point> points;

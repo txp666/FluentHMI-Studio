@@ -1,5 +1,7 @@
 #include "runtime/widgets/basic_widgets.h"
 
+#include "core/frame_templates.h"
+#include "core/project_logic.h"
 #include "runtime/runtime_context.h"
 
 #include <FluentQtWidgets/Navigation/SegmentedWidget.h>
@@ -14,6 +16,7 @@
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
 
 #include <QtCore/QLocale>
+#include <QtCore/QScopedValueRollback>
 #include <QtCore/QSignalBlocker>
 #include <QtGui/QMouseEvent>
 #include <QtWidgets/QButtonGroup>
@@ -34,17 +37,6 @@ QHBoxLayout *fill(QWidget *owner, QWidget *child, const QMargins &margins = {})
     layout->setSpacing(0);
     layout->addWidget(child);
     return layout;
-}
-
-QStringList nonEmptyLines(const QString &text)
-{
-    QStringList out;
-    for (const QString &line : text.split(QLatin1Char('\n'))) {
-        if (!line.trimmed().isEmpty()) {
-            out.append(line.trimmed());
-        }
-    }
-    return out;
 }
 
 Qt::Alignment alignment(const QString &name)
@@ -111,39 +103,52 @@ void PushButtonWidget::setButtonStyle(const QString &style)
 void PushButtonWidget::apply()
 {
     setButtonStyle(text("buttonStyle"));
-    m_button->setText(text("text"));
+    m_caption = text("text");
+    periodicSendChanged(isPeriodicSending());
     m_button->setEnabled(flag("enabled"));
 }
 
 void PushButtonWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    const QSignalBlocker blocker(m_button);
-    m_button->setText(displayString(value));
+    m_caption = displayString(value);
+    periodicSendChanged(isPeriodicSending());
+}
+
+void PushButtonWidget::periodicSendChanged(bool running)
+{
+    m_button->setText(running ? (isPeriodicStarting() ? tr("取消启动") : tr("停止周期发送")) : m_caption);
 }
 
 void PushButtonWidget::sendCommand()
 {
-    if (!context()) {
+    if (!context() || stopPeriodicSend()) {
         return;
     }
-    QJsonObject props = properties();
-    if (text("commandMode") == QLatin1String("S7")) {
-        context()->send(CommandEncoder::s7FromProperties(props));
-    } else if (text("commandMode") == QLatin1String("Modbus")) {
-        // A button reads by default: its function code falls back to FC03.
-        if (!props.contains(QStringLiteral("mbFunc"))) {
-            props.insert(QStringLiteral("mbFunc"), QStringLiteral("03 读保持寄存器")); // i18n: value
-        }
-        if (CommandEncoder::functionCode(text("mbFunc")) == 0x05 && text("mbValue").toLongLong() == 1) {
-            props.insert(QStringLiteral("mbValue"), 0xFF00);
-        }
-        context()->send(CommandEncoder::modbusFromProperties(props));
-    } else if (const QString command = text("command").trimmed(); !command.isEmpty()) {
-        context()->send(CommandEncoder::encode(props, command));
+    const auto encode = [this, props = properties()] {
+        return CommandEncoder::buttonFromProperties(props,
+            [this](const QString &id) { return context()->inputValue(id); }, nullptr, frameTemplates());
+    };
+    const auto command = encode();
+    const auto notify = [this] {
+        if (flag("notify"))
+            context()->notify(text("notifyTitle"), text("notifyContent"), text("notifyType"), integer("notifyDuration"));
+    };
+    if (const int interval = CommandEncoder::periodicSendInterval(properties()); interval > 0) {
+        CommandReader readInputs;
+        if (CommandEncoder::supportsPeriodicInputs(properties()))
+            readInputs = encode;
+        requestSend(command.command || !command.error.isEmpty() ? command : CommandResult::failure(tr("请配置发送内容")),
+                    notify, {}, interval, std::move(readInputs));
+        return;
     }
-    if (flag("notify")) {
-        context()->notify(text("notifyTitle"), text("notifyContent"), text("notifyType"), integer("notifyDuration"));
+    if (command.command || !command.error.isEmpty()) {
+        if (confirmsSend() || CommandEncoder::usesFrameFields(properties()) || !CommandEncoder::commandInputs(properties()).isEmpty()) {
+            requestSend(command, notify);
+            return;
+        }
+        requestSend(command);
     }
+    notify();
 }
 
 // ---------------------------------------------------------------------------
@@ -177,35 +182,83 @@ void LabelWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 
 LineEditWidget::LineEditWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {
+    m_title = new FluentQt::BodyLabel(this);
+    m_title->setObjectName(QStringLiteral("hmiInputTitle"));
+    m_title->setTextFormat(Qt::PlainText);
     m_edit = new FluentQt::LineEdit(this);
-    fill(this, m_edit);
+    m_title->setBuddy(m_edit);
+    auto *row = new QHBoxLayout(this);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(8);
+    row->addWidget(m_title, 0, Qt::AlignVCenter);
+    row->addWidget(m_edit, 1);
 }
 
 void LineEditWidget::apply()
 {
+    const QString title = text("title").trimmed();
+    m_title->setText(title);
+    m_title->setVisible(!title.isEmpty());
+    m_edit->setAccessibleName(title);
     m_edit->setPlaceholderText(text("placeholderText"));
     m_edit->setText(text("text"));
-    m_edit->setReadOnly(flag("readOnly"));
+    m_edit->setReadOnly(flag("inputOnly") && flag("readOnly"));
 }
 
 void LineEditWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if(m_edit->hasFocus() && !m_edit->isReadOnly())return;
     const QSignalBlocker blocker(m_edit);
     m_edit->setText(displayString(value));
 }
 
+std::optional<QVariant> LineEditWidget::inputValue() const
+{
+    const QString parameter = text("parameterName");
+    if (context() && !parameter.isEmpty()) {
+        const auto shared = context()->inputValue(pointInputId(parameter));
+        return shared ? std::optional<QVariant>(shared->value) : std::nullopt;
+    }
+    return m_edit->text();
+}
+
 void LineEditWidget::onAttached()
 {
-    const bool modbus = text("commandMode") == QLatin1String("Modbus") || text("commandMode") == QLatin1String("S7");
-    if (!flag("sendOnEnter") && !modbus) {
+    const QString parameter = text("parameterName");
+    if (!parameter.isEmpty()) {
+        auto *data = context()->projectData();
+        const auto sync = [this, data, parameter] {
+            const auto sample = data->sample(parameter);
+            const bool valid = sample.quality == DataQuality::Current;
+            m_edit->setError(!valid);
+            if (valid && (!m_edit->hasFocus() || !m_edit->isModified()))
+                m_edit->setText(displayString(sample.value));
+        };
+        sync();
+        live(connect(data, &ProjectData::valuesChanged, this, [parameter, sync](const Message &changes) {
+            if (changes.contains(parameter))
+                sync();
+        }));
+        live(connect(m_edit, &QLineEdit::editingFinished, this, [this, data, parameter, sync] {
+            if (m_edit->isModified() && data->setParameter(parameter, m_edit->text(), true)) {
+                m_edit->setModified(false);
+                sync();
+            }
+        }));
         return;
     }
-    live(connect(m_edit, &QLineEdit::returnPressed, this, [this, modbus]() {
+    live(connect(m_edit, &QLineEdit::returnPressed, this, [this]() {
+        if (!widgetSendsCommands(typeName(), properties()))
+            return;
         const QString value = m_edit->text().trimmed();
-        if (!value.isEmpty() || modbus) {
-            context()->send(CommandEncoder::encode(properties(), value));
+        const QString mode = text("commandMode");
+        const auto props = properties();
+        if (value.isEmpty() && mode != QLatin1String("Modbus") && mode != QLatin1String("S7")) {
+            const auto field = props.value(FrameTemplates::SendValueField).toString();
+            const auto settings = FrameTemplates::sendSettings(frameTemplates(), props);
+            if (field.isEmpty() || !settings || !FrameTemplates::requiredFields(*settings).contains(field))
+                return;
         }
+        requestSend(CommandEncoder::encode(props, value, nullptr, frameTemplates()));
     }));
 }
 
@@ -221,7 +274,7 @@ ComboBoxWidget::ComboBoxWidget(const WidgetMeta &meta, QWidget *parent) : HmiWid
     rebuildSelection(QStringLiteral("下拉框"), {}); // i18n: value
 }
 
-void ComboBoxWidget::rebuildSelection(const QString &style, const QStringList &items)
+void ComboBoxWidget::rebuildSelection(const QString &style, const QList<CommandEncoder::SelectionOption> &options)
 {
     QWidget *previous = m_selection;
     m_combo = nullptr;
@@ -229,7 +282,7 @@ void ComboBoxWidget::rebuildSelection(const QString &style, const QStringList &i
     m_radioGroup = nullptr;
     m_selectionScroll = nullptr;
     m_selectionStyle = style;
-    m_items = items;
+    m_options = options;
     if (style == QStringLiteral("分段") || style == QStringLiteral("单选组")) { // i18n: value
         m_selectionScroll = new FluentQt::SingleDirectionScrollArea(Qt::Horizontal, this);
         m_selectionScroll->setObjectName(QStringLiteral("hmiOptionScroll"));
@@ -241,8 +294,8 @@ void ComboBoxWidget::rebuildSelection(const QString &style, const QStringList &i
     if (style == QStringLiteral("分段")) { // i18n: value
         m_segmented = new FluentQt::SegmentedWidget(m_selectionScroll);
         m_segmented->setObjectName(QStringLiteral("hmiOptionSegments"));
-        for (int i = 0; i < items.size(); ++i)
-            m_segmented->addItem(QString::number(i), items.at(i));
+        for (int i = 0; i < options.size(); ++i)
+            m_segmented->addItem(QString::number(i), options.at(i).label);
         m_segmented->ensurePolished();
         m_segmented->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
         connect(m_segmented, &FluentQt::SegmentedWidget::currentItemChanged, this,
@@ -258,8 +311,8 @@ void ComboBoxWidget::rebuildSelection(const QString &style, const QStringList &i
         m_radioGroup = new QButtonGroup(content);
         m_radioGroup->setObjectName(QStringLiteral("hmiOptionGroup"));
         m_radioGroup->setExclusive(true);
-        for (int i = 0; i < items.size(); ++i) {
-            auto *radio = new FluentQt::RadioButton(items.at(i), content);
+        for (int i = 0; i < options.size(); ++i) {
+            auto *radio = new FluentQt::RadioButton(options.at(i).label, content);
             radio->setObjectName(QStringLiteral("hmiOption%1").arg(i));
             radio->ensurePolished();
             radio->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -275,7 +328,8 @@ void ComboBoxWidget::rebuildSelection(const QString &style, const QStringList &i
     } else {
         m_combo = new FluentQt::ComboBox(this);
         m_combo->setObjectName(QStringLiteral("hmiOptionCombo"));
-        m_combo->addItems(items);
+        for (const auto &option : options)
+            m_combo->addItem(option.label);
         connect(m_combo, &FluentQt::ComboBox::currentIndexChanged, this, &ComboBoxWidget::selectIndex);
         m_selection = m_combo;
     }
@@ -297,17 +351,18 @@ void ComboBoxWidget::rebuildSelection(const QString &style, const QStringList &i
 
 void ComboBoxWidget::apply()
 {
-    const QStringList items = nonEmptyLines(text("items"));
+    const auto options = CommandEncoder::selectionOptions(prop("options").toArray());
     QString style = text("selectionStyle");
     if (style != QStringLiteral("分段") && style != QStringLiteral("单选组")) // i18n: value
         style = QStringLiteral("下拉框");                                     // i18n: value
     const int configured = integer("currentIndex");
-    const bool reset = !isLive() || !m_applied || configured != m_configuredIndex || items != m_items;
+    const bool optionsChanged = options != m_options;
+    const bool reset = !isLive() || !m_applied || configured != m_configuredIndex || optionsChanged;
     int index = reset ? configured : m_currentIndex;
-    if (index >= items.size() || (reset && index < 0))
-        index = items.isEmpty() ? -1 : 0;
-    if (style != m_selectionStyle || items != m_items)
-        rebuildSelection(style, items);
+    if (index >= options.size() || (reset && index < 0))
+        index = options.isEmpty() ? -1 : 0;
+    if (style != m_selectionStyle || optionsChanged)
+        rebuildSelection(style, options);
     m_configuredIndex = configured;
     m_applied = true;
     setCurrentIndex(index);
@@ -323,7 +378,7 @@ void ComboBoxWidget::setCurrentIndex(int index)
         if (index < 0) {
             // Pivot has no clear-current API. A fresh view represents the same empty selection as a combo.
             if (!m_segmented->currentItem().isEmpty())
-                rebuildSelection(m_selectionStyle, m_items);
+                rebuildSelection(m_selectionStyle, m_options);
         } else {
             const QSignalBlocker blocker(m_segmented);
             m_segmented->setCurrentItem(QString::number(index));
@@ -343,7 +398,7 @@ void ComboBoxWidget::setCurrentIndex(int index)
 void ComboBoxWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
     if (const auto index = bindingInteger(value))
-        setCurrentIndex(*index >= 0 && *index < m_items.size() ? *index : -1);
+        setCurrentIndex(*index >= 0 && *index < m_options.size() ? *index : -1);
 }
 
 void ComboBoxWidget::selectIndex(int index)
@@ -352,19 +407,30 @@ void ComboBoxWidget::selectIndex(int index)
         m_currentIndex = -1;
         return;
     }
-    if (index >= m_items.size() || index == m_currentIndex)
+    if (index >= m_options.size() || index == m_currentIndex)
         return;
+    const bool sends = context() && widgetSendsCommands(typeName(), properties());
+    if (sends && confirmsSend()) {
+        const int previous = m_currentIndex;
+        if (m_segmented && previous < 0) {
+            // Clearing the selection rebuilds the segmented view after its click handler returns.
+            QMetaObject::invokeMethod(this, [this] {
+                if (m_currentIndex < 0)
+                    setCurrentIndex(-1);
+            }, Qt::QueuedConnection);
+        } else {
+            setCurrentIndex(previous);
+        }
+        requestSend(CommandEncoder::selectionFromProperties(properties(), m_options.at(index), frameTemplates()), [this, previous, index] {
+            if (m_currentIndex == previous)
+                setCurrentIndex(index);
+        });
+        return;
+    }
     m_currentIndex = index;
     ensureSelectionVisible();
-    if (!context() || (!flag("sendOnSelect") && text("commandMode") != QLatin1String("Modbus") &&
-                       text("commandMode") != QLatin1String("S7")))
-        return;
-    // All selection views use the same command table; an empty command falls back to the option text.
-    const QStringList commands = text("commands").split(QLatin1Char('\n'));
-    const QString command = commands.value(index).trimmed();
-    const QString raw = command.isEmpty() ? m_items.at(index) : command;
-    if (!raw.isEmpty())
-        context()->send(CommandEncoder::encode(properties(), raw));
+    if (sends)
+        requestSend(CommandEncoder::selectionFromProperties(properties(), m_options.at(index), frameTemplates()));
 }
 
 void ComboBoxWidget::ensureSelectionVisible()
@@ -458,52 +524,56 @@ void ToggleSwitchWidget::setChecked(bool checked)
 
 void ToggleSwitchWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    std::optional<bool> checked;
-    if (text("onCondition") == QStringLiteral("等于指定值")) { // i18n: value
-        const auto number = bindingFloat(value);
-        const auto expected = bindingFloat(text("onValue"));
-        if (number && expected) {
-            checked = *number == *expected;
+    if (text("onCondition") != QStringLiteral("等于指定值")) { // i18n: value
+        if (const auto checked = bindingBoolean(value)) {
+            setChecked(*checked);
         }
-    } else {
-        checked = bindingBoolean(value);
+        return;
     }
-    if (checked) {
-        setChecked(*checked);
+
+    const auto number = bindingFloat(value);
+    const auto on = bindingFloat(text("onValue"));
+    if (!number || !on) {
+        return;
     }
+    const bool isOn = *number == *on;
+    const QString offText = text("offFeedbackValue").trimmed();
+    if (!offText.isEmpty()) {
+        const auto off = bindingFloat(offText);
+        if (!off || *off == *on || (!isOn && *number != *off)) {
+            return;
+        }
+    }
+    setChecked(isOn);
 }
 
 void ToggleSwitchWidget::checkedEdited(bool checked)
 {
-    m_checked = checked;
-    if (!context())
+    if (!context()) {
+        m_checked = checked;
         return;
-    const bool modbus = text("commandMode") == QLatin1String("Modbus");
-    const bool s7 = text("commandMode") == QLatin1String("S7");
-    const QString commandValue = text(checked ? "onCommand" : "offCommand").trimmed();
-    context()->writeModbusSlaves(this, checked ? 1 : 0, modbus || s7 || !commandValue.isEmpty());
-    if (s7) {
-        const auto command = prop("s7Command").toObject();
-        const auto configured = command.value(checked ? QStringLiteral("onValue") : QStringLiteral("offValue"));
-        const QString value =
-            configured.isUndefined() ? QString::number(checked ? 1 : 0) : configured.toVariant().toString();
-        context()->send(CommandEncoder::s7FromProperties(properties(), value));
-    } else if (modbus) {
-        // Old projects omit mbArea and keep writing a coil. A holding register uses FC06 and 0/1.
-        const bool holding = text("mbArea") == ModbusArea::HoldingRegisters;
-        QJsonObject props = properties();
-        props.insert(QStringLiteral("mbFunc"), holding ? QStringLiteral("06 写单寄存器") // i18n: value
-                                                       : QStringLiteral("05 写单线圈")); // i18n: value
-        props.insert(QStringLiteral("mbDataType"), QStringLiteral("uint16"));
-        const int value = checked ? (holding ? 1 : 0xFF00) : 0;
-        context()->send(CommandEncoder::modbusFromProperties(props, QString::number(value)));
-    } else {
-        if (!commandValue.isEmpty())
-            context()->send(CommandEncoder::encode(properties(), commandValue));
     }
-    if (flag("notify")) {
-        context()->notify(text("notifyTitle"), text("notifyContent"), text("notifyType"), integer("notifyDuration"));
+    const auto command = CommandEncoder::switchFromProperties(properties(), checked, frameTemplates());
+    const bool sends = command.command || !command.error.isEmpty();
+    const auto notify = [this] {
+        if (flag("notify"))
+            context()->notify(text("notifyTitle"), text("notifyContent"), text("notifyType"), integer("notifyDuration"));
+    };
+    if (sends && confirmsSend()) {
+        const bool previous = m_checked;
+        setChecked(previous);
+        requestSend(command, [this, previous, checked, notify] {
+            if (m_checked == previous)
+                setChecked(checked);
+            notify();
+        });
+        return;
     }
+    m_checked = checked;
+    context()->writeModbusSlaves(this, checked ? 1 : 0, sends);
+    if (sends)
+        requestSend(command);
+    notify();
 }
 
 // ---------------------------------------------------------------------------
@@ -531,10 +601,9 @@ SliderWidget::SliderWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
 // a guard keeps programmatic changes from being sent as commands.
 void SliderWidget::apply()
 {
-    m_quiet = true;
+    const QScopedValueRollback quiet(m_quiet, true);
     m_slider->setRange(integer("minimum"), integer("maximum"));
-    m_slider->setValue(integer("value"));
-    m_quiet = false;
+    setValue(integer("value"));
     // Read back from the slider, so the labels show the range it actually has after normalizing.
     m_minLabel->setText(QString::number(m_slider->minimum()));
     m_maxLabel->setText(QString::number(m_slider->maximum()));
@@ -543,22 +612,26 @@ void SliderWidget::apply()
     m_maxLabel->setVisible(showRange);
 }
 
+void SliderWidget::setValue(int value)
+{
+    const QScopedValueRollback quiet(m_quiet, true);
+    m_slider->setValue(value);
+    m_value = m_slider->value();
+}
+
 void SliderWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if (const auto number = bindingInteger(value)) {
-        // Device feedback moves the handle without echoing a command back.
-        m_quiet = true;
-        m_slider->setValue(*number);
-        m_quiet = false;
-    }
+    if (m_held)
+        return;
+    if (const auto number = bindingInteger(value))
+        setValue(*number);
 }
 
 // A drag sends once, when the mouse lets go, instead of a command for every value the handle passes;
 // keys and the wheel move in steps and send each one.
-// Each of those values also goes into the Modbus slaves' tables, sendOnChange or not.
+// A configured local Modbus binding can write the value when device sending is off.
 void SliderWidget::onAttached()
 {
-    m_sends = flag("sendOnChange") || text("commandMode") == QLatin1String("Modbus") || text("commandMode") == QLatin1String("S7");
     // FluentQt's slider never sets QSlider::isSliderDown(), and a drag that starts on the groove
     // emits no pressed/released signals, so the mouse is watched on the slider and its handle.
     m_slider->installEventFilter(this);
@@ -595,10 +668,20 @@ bool SliderWidget::eventFilter(QObject *watched, QEvent *event)
 
 void SliderWidget::sendValue(int value)
 {
-    context()->writeModbusSlaves(this, value, m_sends);
-    if (m_sends) {
-        context()->send(CommandEncoder::encode(properties(), QString::number(value)));
+    const bool sends = widgetSendsCommands(typeName(), properties());
+    if (sends && confirmsSend()) {
+        const int previous = m_value;
+        setValue(previous);
+        requestSend(CommandEncoder::encode(properties(), QString::number(value), nullptr, frameTemplates()), [this, previous, value] {
+            if (m_value == previous)
+                setValue(value);
+        });
+        return;
     }
+    m_value = value;
+    context()->writeModbusSlaves(this, value, sends);
+    if (sends)
+        requestSend(CommandEncoder::encode(properties(), QString::number(value), nullptr, frameTemplates()));
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +713,11 @@ void SpinBoxWidget::setNumberMode(bool decimal)
         m_editor = m_spin;
     }
     m_editor->setObjectName(QStringLiteral("hmiNumericInput"));
+    m_editor->setKeyboardTracking(false);
+    m_editingText = false;
+    auto *line = m_editor->findChild<QLineEdit *>(QString(), Qt::FindDirectChildrenOnly);
+    connect(line, &QLineEdit::textEdited, this, [this] { m_editingText = true; });
+    connect(m_editor, &QAbstractSpinBox::editingFinished, this, [this] { m_editingText = false; });
     if (previous) {
         delete layout()->replaceWidget(previous, m_editor);
         delete previous;
@@ -677,6 +765,8 @@ void SpinBoxWidget::setValue(double value)
 
 void SpinBoxWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
+    if (m_editingText)
+        return;
     if (m_doubleSpin) {
         if (const auto number = bindingFloat(value))
             setValue(*number);
@@ -688,17 +778,27 @@ void SpinBoxWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 
 void SpinBoxWidget::valueEdited(double value)
 {
+    m_editingText = false;
+    if (value == m_value)
+        return;
+    const bool sends = context() && widgetSendsCommands(typeName(), properties());
+    const QString number = m_doubleSpin ? QString::number(value, 'g', QLocale::FloatingPointShortest)
+                                        : QString::number(int(value));
+    if (sends && confirmsSend()) {
+        const double previous = m_value;
+        setValue(previous);
+        requestSend(CommandEncoder::encode(properties(), number, nullptr, frameTemplates()), [this, previous, value] {
+            if (m_value == previous)
+                setValue(value);
+        });
+        return;
+    }
     m_value = value;
     if (!context())
         return;
-    const QString mode = text("commandMode");
-    const bool sendsCommand = flag("sendOnChange") || mode == QLatin1String("Modbus") || mode == QLatin1String("S7");
-    context()->writeModbusSlaves(this, value, sendsCommand);
-    if (sendsCommand) {
-        const QString number =
-            m_doubleSpin ? QString::number(value, 'g', QLocale::FloatingPointShortest) : QString::number(int(value));
-        context()->send(CommandEncoder::encode(properties(), number));
-    }
+    context()->writeModbusSlaves(this, value, sends);
+    if (sends)
+        requestSend(CommandEncoder::encode(properties(), number, nullptr, frameTemplates()));
 }
 
 } // namespace fhmi

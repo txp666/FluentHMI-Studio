@@ -97,4 +97,47 @@ class ChartHistory
     mutable bool m_readSinceWrite = false;
 };
 
+struct TimingLevels
+{
+    quint16 high = 0;
+    quint16 valid = 0;
+
+    bool operator==(const TimingLevels &other) const { return high == other.high && valid == other.valid; }
+    std::optional<bool> level(quint16 mask) const;
+    void setLevel(int index, std::optional<bool> value);
+};
+
+struct TimingSample
+{
+    double seconds = 0;
+    TimingLevels levels;
+};
+
+struct TimingRecording
+{
+    QStringList names;
+    std::deque<TimingSample> samples;
+};
+
+std::optional<TimingRecording> readTimingRecording(const QByteArray &content, ChartFileFormat format, QString *error);
+
+// Transition records share one clock. The temporary recording keeps complete history independently of the viewport.
+class TimingChartHistory
+{
+  public:
+    TimingChartHistory();
+    ~TimingChartHistory();
+    bool isEmpty() const { return m_count == 0; }
+    bool append(const TimingSample &sample, QString *error);
+    bool write(QIODevice *out, ChartFileFormat format, const QStringList &names, double end, QString *error) const;
+    void clear();
+
+  private:
+    std::unique_ptr<QTemporaryFile> m_file;
+    qint64 m_count = 0;
+};
+
+QByteArray timingCsvHeader(const QStringList &names);
+QByteArray timingCsvRow(const TimingSample &sample, qsizetype channels);
+
 } // namespace fhmi

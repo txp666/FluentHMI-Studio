@@ -81,6 +81,9 @@ struct CanAdapterCaps
     bool listenOnly = true;
     bool termination = false;
     bool customTiming = true;
+    int channelCount = 0; // model-specific count, or 0 when unknown
+    QStringList nominalBitrates; // empty: use the usual presets
+    QStringList dataBitrates;
     bool fdEnabled(bool requested) const { return fd && requested; }
 };
 
@@ -89,6 +92,7 @@ inline const QString Pcan = QStringLiteral("PCAN");
 inline const QString Zlg = QStringLiteral("ZLG");
 inline const QString SocketCan = QStringLiteral("SocketCAN");
 inline const QString Slcan = QStringLiteral("slcan");
+inline const QString Virtual = QStringLiteral("虚拟 CAN"); // i18n: value
 
 CanAdapterCaps caps(const QString &adapter, const QString &zlgModel = QString());
 struct TimingOverrides

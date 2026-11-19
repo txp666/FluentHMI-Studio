@@ -13,9 +13,12 @@ namespace fhmi {
 
 namespace {
 
-QString typeText(PropType type)
+QString typeText(const PropDef &prop)
 {
-    switch (type) {
+    if (prop.defaultValue.isArray()) {
+        return QStringLiteral("数组"); // i18n: ignore
+    }
+    switch (prop.type) {
     case PropType::String:
         return QStringLiteral("文本"); // i18n: ignore
     case PropType::Int:
@@ -56,9 +59,9 @@ QString valueText(const QJsonValue &value)
     if (value.isDouble()) {
         return QStringLiteral("`%1`").arg(value.toDouble());
     }
-    if (value.isObject()) {
-        return QStringLiteral("`%1`").arg(
-            QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact)));
+    if (value.isObject() || value.isArray()) {
+        const auto document = value.isArray() ? QJsonDocument(value.toArray()) : QJsonDocument(value.toObject());
+        return QStringLiteral("`%1`").arg(QString::fromUtf8(document.toJson(QJsonDocument::Compact)));
     }
     return QStringLiteral("`\"\"`");
 }
@@ -67,7 +70,7 @@ QString propertyReference(const PropDef &prop)
 {
     QString out;
     out += QStringLiteral("- `%1`（%2，%3）默认 %4") // i18n: ignore
-               .arg(prop.name, prop.label, typeText(prop.type), valueText(prop.defaultValue));
+               .arg(prop.name, prop.label, typeText(prop), valueText(prop.defaultValue));
     if (prop.minimum && prop.maximum) {
         out += QStringLiteral("，范围 %1–%2") // i18n: ignore; whole numbers in full, as in the Python reference
                    .arg(QString::number(*prop.minimum, 'g', 15), QString::number(*prop.maximum, 'g', 15));

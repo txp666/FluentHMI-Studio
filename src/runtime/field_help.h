@@ -20,6 +20,7 @@ enum class FieldHelpTopic
     DataBinding,
     TransformExpression,
     CommandTemplates,
+    PeriodicSend,
     ModbusAddressing,
     S7Addressing,
     ReceiveFraming,

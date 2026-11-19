@@ -1,13 +1,16 @@
 #include "core/can_signal.h"
 
 #include "core/binding.h"
+#include "core/command_encoder.h"
 #include "core/dbc.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QLocale>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSet>
 #include <QtCore/QtNumeric>
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
@@ -125,6 +128,14 @@ bool CanSignalDef::fits(int dataLength) const
 int CanSignalDef::bytesNeeded() const
 {
     return lastPosition(*this) / 8 + 1;
+}
+
+QList<int> CanSignalDef::bitPositions() const
+{
+    QList<int> bits;
+    bits.reserve(length);
+    forEachBit(*this, [&](int position, int) { bits.append(position); });
+    return bits;
 }
 
 quint64 CanSignalDef::rawBits(const QByteArray &data) const
@@ -414,7 +425,7 @@ std::optional<QList<InlineSignal>> parseInlineSignals(const QString &text, QStri
         if (!id) {
             return bad(why);
         }
-        InlineSignal entry{*id, {}};
+        InlineSignal entry{*id, {}, i};
         QString mux;
         QString rest;
         if (!parseSignalBody(match.captured(2), &entry.signal, &mux, &rest, &why)) {
@@ -426,6 +437,22 @@ std::optional<QList<InlineSignal>> parseInlineSignals(const QString &text, QStri
         out.append(entry);
     }
     return out;
+}
+
+QString formatInlineSignal(const InlineSignal &entry)
+{
+    const auto &signal = entry.signal;
+    const auto number = [](double value) { return QString::number(value, 'g', QLocale::FloatingPointShortest); };
+    return QStringLiteral("%1 %2 : %3|%4@%5%6 (%7,%8) [%9|%10] \"%11\"")
+        .arg(Can::idText(entry.id.id, entry.id.extended), signal.name)
+        .arg(signal.start).arg(signal.length)
+        .arg(signal.motorola ? 0 : 1).arg(signal.isSigned ? QLatin1Char('-') : QLatin1Char('+'))
+        .arg(number(signal.factor), number(signal.offset), number(signal.minimum), number(signal.maximum), signal.unit);
+}
+
+QString inlineSignalKey(const CanId &id, const QString &name)
+{
+    return Can::idText(id.id, id.extended) + QLatin1Char('.') + name;
 }
 
 std::optional<QList<QPair<QString, QString>>> parseAssignments(const QString &text, QString *error)
@@ -526,6 +553,7 @@ Message CanSignalSet::decode(const CanFrame &frame) const
         for (const CanSignalDef &signal : *it) {
             const QVariant value = signal.decode(frame.data);
             if (value.isValid()) {
+                out.insert(inlineSignalKey(id, signal.name), value);
                 out.insert(signal.name, value);
             }
         }
@@ -613,6 +641,73 @@ std::optional<CanSignalSet::Target> CanSignalSet::target(const QString &canId, Q
     return target;
 }
 
+std::optional<CanSignalSet::Payload> CanSignalSet::preparePayload(const CanCommand &command, QString *error) const
+{
+    const auto resolved = target(command.target, error);
+    if (!resolved)
+        return std::nullopt;
+    const auto rejected = [error](const QString &message) -> std::optional<Payload> {
+        fail(error, message);
+        return std::nullopt;
+    };
+
+    Payload payload;
+    CanFrame &frame = payload.frame;
+    frame.id = resolved->id.id;
+    frame.extended = resolved->id.extended;
+    payload.targetName = resolved->name.isEmpty() ? Can::idText(resolved->id) : resolved->name;
+    payload.periodMs = command.cycleMs.value_or(resolved->cycleTime);
+
+    if (!resolved->hasSignals) {
+        if (!command.payload)
+            return rejected(command.payloadError);
+        frame.fd = command.fd;
+        frame.data = *command.payload;
+        if (frame.fd ? !Can::padFdPayload(frame.data) : frame.data.size() > 8) {
+            return rejected(frame.fd ? QCoreApplication::translate("fhmi", "CAN FD 数据最多 64 字节")
+                                     : QCoreApplication::translate("fhmi", "CAN 数据最多 8 字节，更长的报文请勾选 canFd 用 CAN FD 发送"));
+        }
+        return payload;
+    }
+
+    if (command.rawOnly)
+        return rejected(QCoreApplication::translate("fhmi", "报文 %1 使用 CAN 信号定义，无法按 HEX 模板字段发送").arg(payload.targetName));
+    const auto assignments = parseAssignments(command.assignments, error);
+    if (!assignments)
+        return std::nullopt;
+    // A DBC message takes its frame format from the DBC. An inline-only ID can opt into FD in the command.
+    frame.fd = resolved->fd || (resolved->name.isEmpty() && command.fd);
+    payload.initialData = QByteArray(resolved->length, '\0');
+    for (const CanSignalDef *signal : resolved->signalDefs) {
+        if (signal->fits(resolved->length))
+            signal->putRawBits(payload.initialData, signal->initialBits());
+    }
+    payload.signalMask = QByteArray(resolved->length, '\0');
+    frame.data = QByteArray(resolved->length, '\0');
+    for (const auto &[name, value] : *assignments) {
+        const CanSignalDef *signal = nullptr;
+        for (const CanSignalDef *candidate : resolved->signalDefs)
+            signal = candidate->name == name ? candidate : signal;
+        if (!signal)
+            return rejected(QCoreApplication::translate("fhmi", "报文 %1 没有信号 %2").arg(payload.targetName, name));
+        if (!signal->fits(resolved->length)) {
+            return rejected(QCoreApplication::translate("fhmi", "信号 %1 超出报文 %2 的 %3 字节")
+                                .arg(name, payload.targetName).arg(resolved->length));
+        }
+        const auto bits = signal->encode(value, error);
+        if (!bits)
+            return std::nullopt;
+        const quint64 written = signal->rawBits(payload.signalMask);
+        if (((signal->rawBits(frame.data) ^ *bits) & written) != 0) {
+            return rejected(QCoreApplication::translate("fhmi", "报文 %1 的信号 %2 与同帧其他赋值在重叠位上冲突")
+                                .arg(payload.targetName, name));
+        }
+        signal->putRawBits(frame.data, *bits);
+        signal->putRawBits(payload.signalMask, std::numeric_limits<quint64>::max());
+    }
+    return payload;
+}
+
 QStringList CanSignalSet::messageNames() const
 {
     QStringList out;
@@ -648,10 +743,29 @@ QStringList CanSignalSet::signalKeys() const
     }
     for (const CanId &id : m_inlineOrder) {
         for (const CanSignalDef &signal : m_inline.value(id.key())) {
+            add(inlineSignalKey(id, signal.name));
             add(signal.name);
         }
     }
     return out;
+}
+
+bool CanSignalSet::definesSignal(const CanId &id, const QString &key) const
+{
+    if (m_dbc) {
+        if (const auto *message = m_dbc->find(id)) {
+            for (const auto &signal : message->signalDefs) {
+                if (key == signal.name || key == message->name + QLatin1Char('.') + signal.name)
+                    return true;
+            }
+        }
+    }
+    const auto inlineSignals = m_inline.constFind(id.key());
+    return inlineSignals != m_inline.constEnd() &&
+           std::any_of(inlineSignals->cbegin(), inlineSignals->cend(),
+                       [&](const CanSignalDef &signal) {
+                           return signal.name == key || inlineSignalKey(id, signal.name) == key;
+                       });
 }
 
 QStringList CanSignalSet::warnings() const

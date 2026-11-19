@@ -38,11 +38,24 @@ struct PropDef
     bool bindable = false;
     QString description; // for the widget reference, where a label alone does not explain it
     QString helpKey = {}; // UI-independent topic key, resolved by the shared field-help renderer
+    QList<QPair<QString, QString>> columns = {}; // Key and label of each cell in an ordered property table.
+    QString visibilityProperty = {};
+    QList<QJsonValue> visibilityValues = {};
+    bool invertVisibility = false;
 
     PropDef withHelp(const char *key) const
     {
         auto result = *this;
         result.helpKey = QLatin1String(key);
+        return result;
+    }
+
+    PropDef visibleWhen(const char *property, QList<QJsonValue> values, bool inverted = false) const
+    {
+        auto result = *this;
+        result.visibilityProperty = QLatin1String(property);
+        result.visibilityValues = std::move(values);
+        result.invertVisibility = inverted;
         return result;
     }
 };
@@ -104,10 +117,24 @@ class WidgetRegistry
     QList<WidgetMeta> m_widgets;
 };
 
+struct WidgetValueRange
+{
+    double minimum;
+    double maximum;
+};
+
+// The effective value range of a ranged control or a bounded state sample.
+std::optional<WidgetValueRange> widgetValueRange(const WidgetMeta &meta, const QJsonObject &properties);
+
 // Shared designer/runtime normalization: migrate omitted legacy settings and keep numeric ranges consistent.
 // `changed` names the property the user just edited, so that endpoint wins.
 QJsonObject normalizedWidgetProperties(const QString &typeName, QJsonObject properties,
                                       const QString &changed = QString());
+
+// The action option shared by the inspector, project validation and the runtime.
+QString commandActivationProperty(QStringView typeName);
+bool widgetSendsCommands(QStringView typeName, const QJsonObject &properties);
+bool widgetReadsStoredBinding(const WidgetMeta &meta, const QJsonObject &properties);
 
 // Registered in builtin_widgets.cpp.
 QList<WidgetMeta> builtinWidgets();

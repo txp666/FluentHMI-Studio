@@ -1,5 +1,7 @@
 #include "studio/preview_page.h"
 
+#include "runtime/project_data_view.h"
+#include "runtime/periodic_task_view.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
 
@@ -45,8 +47,12 @@ PreviewPage::PreviewPage(QWidget *parent) : QWidget(parent)
     m_export->setIcon(FluentQt::icon(FluentQt::FluentIcon::Application));
     m_export->setText(tr("导出应用"));
     m_status = new FluentQt::CaptionLabel(tr("已停止"), this);
+    m_dataMonitor = new FluentQt::PushButton(tr("工程数据监视"), this);
+    m_dataMonitor->setObjectName(QStringLiteral("openProjectDataMonitor"));
+    m_dataMonitor->hide();
     bar->addWidget(m_run);
     bar->addWidget(m_export);
+    bar->addWidget(m_dataMonitor);
     bar->addSpacing(12);
     bar->addWidget(m_status);
     bar->addStretch();
@@ -56,6 +62,7 @@ PreviewPage::PreviewPage(QWidget *parent) : QWidget(parent)
     scroll->setAlignment(Qt::AlignCenter);
     scroll->setFrameShape(QFrame::NoFrame);
     m_surface = new RuntimeSurface;
+    bar->insertWidget(3, createPeriodicTasksButton(m_surface->context()->periodicSender(), this));
     scroll->setWidget(m_surface);
     scroll->enableTransparentBackground();
 
@@ -64,6 +71,9 @@ PreviewPage::PreviewPage(QWidget *parent) : QWidget(parent)
 
     connect(m_run, &QPushButton::clicked, this, [this]() { m_running ? stop() : start(); });
     connect(m_export, &QPushButton::clicked, this, &PreviewPage::exportRequested);
+    connect(m_dataMonitor, &QPushButton::clicked, this, [this] {
+        openProjectDataMonitor(m_project.logic, m_surface->context()->projectData(), window());
+    });
     connect(m_surface, &RuntimeSurface::notificationRequested, this, &PreviewPage::showNotification);
 }
 
@@ -90,6 +100,7 @@ void PreviewPage::start()
     m_run->setText(tr("停止预览"));
     m_run->setIcon(FluentQt::icon(FluentQt::FluentIcon::Pause));
     m_status->setText(tr("运行中 · 用链路卡片连接设备"));
+    m_dataMonitor->setVisible(!m_project.logic.value(QStringLiteral("points")).toArray().isEmpty());
 }
 
 void PreviewPage::stop()
@@ -99,6 +110,7 @@ void PreviewPage::stop()
     m_run->setText(tr("运行预览"));
     m_run->setIcon(FluentQt::icon(FluentQt::FluentIcon::Play));
     m_status->setText(tr("已停止"));
+    m_dataMonitor->hide();
 }
 
 void PreviewPage::showNotification(const QString &title, const QString &content, const QString &type, int durationMs)

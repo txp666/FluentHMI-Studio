@@ -93,6 +93,11 @@ def snap7_notices(destination):
     return [f"licenses/snap7/{p.name}" for p in sorted(folder.iterdir())]
 
 
+def bundle_tutorials(destination):
+    for name in ("examples", "docs"):
+        shutil.copytree(ROOT / name, destination / name, ignore=shutil.ignore_patterns(".DS_Store"))
+
+
 def user_env(**extra):
     """The environment to run packaged programs in: what they would see on a user's machine."""
     env = {key: value for key, value in os.environ.items() if key not in BUILD_ONLY_ENV}
@@ -297,7 +302,7 @@ def package_macos(build_dir, output_dir, version, config):
     (studio / "Contents" / "Helpers").mkdir()
     runtime = Path(shutil.move(str(runtime), str(studio / "Contents" / "Helpers" / "FluentHMIRuntime.app")))
     share_runtime_qt(studio, runtime)
-    shutil.copytree(ROOT / "examples", studio / "Contents" / "Resources" / "examples")
+    bundle_tutorials(studio / "Contents" / "Resources")
 
     offenders = macos_linked_outside(studio, qt_prefix)
     if offenders:
@@ -383,7 +388,7 @@ def package_windows(build_dir, output_dir, version, config):
         sys.exit("windeployqt listed files that are not in the package:\n  " + "\n  ".join(unknown))
     print(f"the runtime takes {len(runtime_files)} files")
     (stage / "runtime-files.txt").write_text("\n".join(runtime_files) + "\n", encoding="utf-8", newline="\n")
-    shutil.copytree(ROOT / "examples", stage / "examples")
+    bundle_tutorials(stage)
     shutil.copy2(ROOT / "LICENSE", stage / "LICENSE.txt")
 
     # The virus scanner can still hold a just-loaded DLL when the folder is removed.
@@ -631,7 +636,7 @@ def package_linux(build_dir, output_dir, version, config):
     (stage / "qt.conf").write_text("[Paths]\nPrefix = .\nLibraries = lib\nPlugins = plugins\n", encoding="utf-8")
     print(f"the runtime takes {len(runtime_files)} files")
     (stage / "runtime-files.txt").write_text("\n".join(runtime_files) + "\n", encoding="utf-8")
-    shutil.copytree(ROOT / "examples", stage / "examples")
+    bundle_tutorials(stage)
     shutil.copy2(ROOT / "LICENSE", stage / "LICENSE.txt")
 
     offenders = linux_linked_outside(stage, qt_prefix)

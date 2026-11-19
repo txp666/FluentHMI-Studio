@@ -1,5 +1,5 @@
 #include "runtime/hmi_widget.h"
-#include "runtime/ui_helpers.h"
+#include "runtime/periodic_sender.h"
 #include "runtime/widgets/alarm_widgets.h"
 #include "runtime/widgets/s7_config_card.h"
 
@@ -12,28 +12,35 @@
 #include "runtime/widgets/can_widgets.h"
 #include "runtime/widgets/container_widgets.h"
 #include "runtime/widgets/data_widgets.h"
+#include "runtime/widgets/digital_timing_widget.h"
 #include "runtime/widgets/display_widgets.h"
 #include "runtime/widgets/link_cards.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
+#include <FluentQtWidgets/Widgets/ComboBox.h>
+#include <FluentQtWidgets/Widgets/InfoBadge.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 
 #include <QtCore/QHash>
+#include <QtCore/QSettings>
+#include <QtWidgets/QAbstractButton>
+#include <QtWidgets/QSpinBox>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
 #include <functional>
+#include <utility>
 
 namespace fhmi {
 
 HmiWidget::HmiWidget(const WidgetMeta &meta, QWidget *parent) : QWidget(parent), m_meta(&meta)
 {
     setAttribute(Qt::WA_StyledBackground, false);
-    fluentToolTip(this);
 }
 
 void HmiWidget::setProperties(const QJsonObject &props)
 {
+    stopPeriodicSend();
     m_props = normalizedWidgetProperties(typeName(), props);
     apply();
 }
@@ -48,6 +55,49 @@ void HmiWidget::setAssetBaseDir(const QString &dir)
 }
 
 void HmiWidget::applyBoundValue(const QVariant &, const BindingEntry &) {}
+
+void HmiWidget::setBindingStatus(BindingStatus status)
+{
+    if (m_bindingStatus != status) {
+        m_bindingStatus = status;
+        bindingStatusChanged(status);
+    }
+}
+
+void HmiWidget::setBindingProblem(const QString &status, const QString &detail)
+{
+    if (!m_bindingBadge && status.isEmpty())
+        return;
+    if (!m_bindingBadge) {
+        m_bindingBadge = new FluentQt::InfoBadge(this);
+        m_bindingBadge->setObjectName(QStringLiteral("bindingQualityBadge"));
+        m_bindingBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_bindingBadge->setMargin(3);
+        m_bindingBadge->setCustomBackgroundColor(QColor(0x85402B), QColor(0x85402B));
+    }
+    const QString description = detail.isEmpty() ? status : status + QStringLiteral(" · ") + detail;
+    m_bindingBadge->setText(status);
+    m_bindingBadge->setAccessibleDescription(description);
+    m_bindingBadge->setVisible(!status.isEmpty());
+    if (!status.isEmpty()) {
+        positionBindingBadge();
+        m_bindingBadge->raise();
+    }
+}
+
+void HmiWidget::positionBindingBadge()
+{
+    if (m_bindingBadge && !m_bindingBadge->isHidden()) {
+        m_bindingBadge->adjustSize();
+        m_bindingBadge->move(std::max(1, width() - m_bindingBadge->width() - 2), 1);
+    }
+}
+
+void HmiWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    positionBindingBadge();
+}
 
 int HmiWidget::contentMinimumHeight(int width)
 {
@@ -91,12 +141,22 @@ void HmiWidget::attach(RuntimeContext *context)
     detach();
     m_context = context;
     if (context) {
+        if (meta().prop(CommandEncoder::SendInterval)) {
+            const auto id = property("fhmiWidgetId").toString();
+            auto *sender = context->periodicSender();
+            live(connect(sender, &PeriodicSender::changed, this, [this, id](const QString &changed) {
+                if (changed == id)
+                    periodicSendChanged(isPeriodicSending());
+            }));
+            live(connect(this, &QObject::destroyed, sender, [sender, id] { sender->stop(id); }));
+        }
         onAttached();
     }
 }
 
 void HmiWidget::detach()
 {
+    stopPeriodicSend();
     if (m_context) {
         onDetached();
         for (const QMetaObject::Connection &connection : std::as_const(m_liveConnections)) {
@@ -105,6 +165,76 @@ void HmiWidget::detach()
         m_liveConnections.clear();
         m_context = nullptr;
     }
+}
+
+QVariant HmiWidget::viewPreference(const QString &key, const QVariant &fallback) const
+{
+    const QString group = m_context ? m_context->widgetPreferencesGroup(*this) : QString();
+    return group.isEmpty() ? fallback : QSettings().value(group + u'/' + key, fallback);
+}
+
+void HmiWidget::saveViewPreference(const QString &key, const QVariant &value)
+{
+    const QString group = m_context ? m_context->widgetPreferencesGroup(*this) : QString();
+    if (!group.isEmpty())
+        QSettings().setValue(group + u'/' + key, value);
+}
+
+void HmiWidget::rememberViewOption(FluentQt::ComboBox *control, const QString &key)
+{
+    const int index = control->findData(viewPreference(key, control->currentData()));
+    if (index >= 0)
+        control->setCurrentIndex(index);
+    live(connect(control, &FluentQt::ComboBox::currentIndexChanged, this, [this, control, key] {
+        saveViewPreference(key, control->currentData());
+    }));
+}
+
+void HmiWidget::rememberViewOption(QAbstractButton *control, const QString &key)
+{
+    control->setChecked(viewPreference(key, control->isChecked()).toBool());
+    live(connect(control, &QAbstractButton::toggled, this, [this, key](bool checked) {
+        saveViewPreference(key, checked);
+    }));
+}
+
+void HmiWidget::rememberViewOption(QSpinBox *control, const QString &key)
+{
+    control->setValue(viewPreference(key, control->value()).toInt());
+    live(connect(control, &QSpinBox::valueChanged, this, [this, key](int value) {
+        saveViewPreference(key, value);
+    }));
+}
+
+void HmiWidget::requestSend(const CommandResult &command, std::function<void()> onSent, const QString &mode,
+                            int intervalMs, CommandReader readInputs)
+{
+    if (m_context) {
+        m_context->requestSend(this, command, confirmsSend(), flag("showSendConfirmationDetails"),
+                               mode.isEmpty() ? text("commandMode") : mode, std::move(onSent), intervalMs,
+                               std::move(readInputs));
+    }
+}
+
+bool HmiWidget::isPeriodicSending() const
+{
+    return m_context && m_context->periodicSender()->running(property("fhmiWidgetId").toString());
+}
+
+bool HmiWidget::isPeriodicStarting() const
+{
+    return m_context && m_context->periodicSender()->starting(property("fhmiWidgetId").toString());
+}
+
+bool HmiWidget::stopPeriodicSend()
+{
+    return m_context && m_context->periodicSender()->stop(property("fhmiWidgetId").toString());
+}
+
+const QJsonObject &HmiWidget::frameTemplates() const
+{
+    static const QJsonObject empty;
+    return m_context ? m_context->frameTemplates() : empty;
 }
 
 QWidget *HmiWidget::childHost(int)
@@ -212,6 +342,7 @@ const QHash<QString, Factory> &factories()
         {QStringLiteral("TabWidget"), make<TabContainerWidget>()},
         {QStringLiteral("Separator"), make<SeparatorWidget>()},
         {QStringLiteral("RealtimeChart"), make<RealtimeChartWidget>()},
+        {QStringLiteral("DigitalTimingChart"), make<DigitalTimingChartWidget>()},
         {QStringLiteral("DataTable"), make<DataTableWidget>()},
         {QStringLiteral("LogBox"), make<LogBoxWidget>()},
         {QStringLiteral("ModbusSlaveTable"), make<ModbusSlaveTableWidget>()},
@@ -237,9 +368,8 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
     if (!meta) {
         return nullptr;
     }
-    const Factory factory = factories().value(typeName);
-    HmiWidget *widget = isIndustrialCategory(meta->category) ? new IndustrialWidget(*meta, parent)
-        : factory ? factory(*meta, parent) : new PlaceholderWidget(*meta, parent);
+    const Factory fallback = isIndustrialCategory(meta->category) ? make<IndustrialWidget>() : make<PlaceholderWidget>();
+    HmiWidget *widget = factories().value(typeName, fallback)(*meta, parent);
     widget->setObjectName(typeName);
     widget->blockSignals(true);
     if (!assetBaseDir.isEmpty()) {

@@ -100,17 +100,6 @@ QList<SjaTimingCandidate> sjaTimingCandidates(double bitrate, double samplePoint
     return results;
 }
 
-QString customTimingHint(const Model &model)
-{
-    if (model.family == Family::Sja1000) {
-        return tr("留空使用设备标准或所选采样点。支持 BTR0,BTR1、BRP,TSEG1,TSEG2,SJW 和 ZCANPRO 结果");
-    }
-    if (model.deviceType == ZCAN_USBCAN_4E_U) {
-        return tr("此型号填十进制波特率（bps），如 200000；采样点由设备决定");
-    }
-    return tr("粘贴 ZCANPRO 波特率计算器中此型号的完整结果（含速率、采样点和括号内参数）；留空使用设备标准波特率");
-}
-
 QString customTimingPlaceholder(const Model &model)
 {
     if (model.family == Family::Sja1000) {

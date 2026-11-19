@@ -87,6 +87,9 @@ QString connAckText(int returnCode);
 
 // Topic filters from a list, or text separated by newlines, commas or semicolons; no duplicates.
 QStringList topics(const QString &text);
+inline const QString SessionTopicLevel = QStringLiteral("{session}");
+QString expandTopicSession(const QString &topic, const QString &session);
+QString restoreTopicSession(const QString &topic, const QString &session);
 
 } // namespace Mqtt
 

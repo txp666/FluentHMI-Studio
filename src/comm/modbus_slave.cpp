@@ -543,14 +543,14 @@ ModbusSlave::ModbusSlave(const Settings &settings, ModbusSlaveStore store, QObje
 {
 }
 
-ModbusSlaveAnswer ModbusSlave::request(ModbusFraming framing, const QByteArray &frame)
+ModbusSlaveAnswer ModbusSlave::request(ModbusFraming framing, const QByteArray &frame, const QString &endpoint)
 {
     ModbusSlaveAnswer answer = answerModbusRequest(m_store, framing, m_settings.slave, m_settings.exceptions, frame);
     if (!answer.handled) {
         return answer;
     }
     for (const auto &[text, level] : std::as_const(answer.log)) {
-        emit logged(text, level);
+        emit logged(text, level, endpoint);
     }
     if (answer.failed) {
         ++m_errors;
@@ -562,10 +562,10 @@ ModbusSlaveAnswer ModbusSlave::request(ModbusFraming framing, const QByteArray &
     return answer;
 }
 
-void ModbusSlave::replied(const ModbusSlaveAnswer &answer)
+void ModbusSlave::replied(const ModbusSlaveAnswer &answer, const QString &endpoint)
 {
     ++m_replies;
-    emit logged(answer.replyLog.first, answer.replyLog.second);
+    emit logged(answer.replyLog.first, answer.replyLog.second, endpoint);
     emit statusChanged();
 }
 
@@ -611,18 +611,19 @@ bool ModbusSlave::writeValue(const QString &table, int address, double value, co
     return registers && write(table, address, *registers);
 }
 
+bool ModbusSlave::acceptsCommand(const ModbusRequest &request) const
+{
+    return request.destination().acceptsLocalSlave(m_settings.slave);
+}
+
 bool ModbusSlave::execute(const ModbusRequest &request)
 {
-    switch (request.func) {
-    case 0x05:
-        return write(QStringLiteral("co"), request.address, {quint16(request.value != 0 ? 1 : 0)});
-    case 0x06:
-        return write(QStringLiteral("hr"), request.address, {quint16(request.value)});
-    case 0x10:
-        return write(QStringLiteral("hr"), request.address, request.registers);
-    default:
+    if (!acceptsCommand(request))
         return false;
-    }
+    if (request.func == 0x05)
+        return write(QStringLiteral("co"), request.address, {quint16(request.value != 0 ? 1 : 0)});
+    const auto values = request.func == 0x06 ? QList<quint16>{quint16(request.value)} : request.registers;
+    return write(QStringLiteral("hr"), request.address, values);
 }
 
 QString ModbusSlave::status() const

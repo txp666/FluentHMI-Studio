@@ -1,5 +1,6 @@
 #include "comm/can/can_initial_state.h"
 #include "comm/can/can_link.h"
+#include "comm/comm_hub.h"
 #include "core/dbc.h"
 
 #include <QtCore/QFile>
@@ -276,6 +277,40 @@ class TestCanInitialState : public QObject
         link.close();
     }
 
+    void manualPeriodicCanTakesOverWithoutQueuingRepeats()
+    {
+        RecordingLink link;
+        QString error;
+        QVERIFY2(link.open(CanSettings{}, {}, {}, {}, &error), qPrintable(error));
+        CanCommand command;
+        command.target = QStringLiteral("0x321");
+        command.payload = QByteArray::fromHex("A5");
+        command.cycleMs = 20;
+        const auto legacy = link.prepare(command, &error);
+        QVERIFY(legacy && link.commit(*legacy, &error));
+        QTRY_VERIFY(link.driver->sent.size() >= 2);
+
+        link.driver->deferred = true;
+        QTRY_COMPARE(link.driver->pending.size(), 1);
+        command.payload = QByteArray::fromHex("B6");
+        const auto prepared = link.prepare(command, &error);
+        QVERIFY(prepared && link.startPeriodic(*prepared, 1, QStringLiteral("button A"), 30, &error));
+        QVERIFY(!link.startPeriodic(*prepared, 2, QStringLiteral("button B"), 60, &error));
+        QVERIFY(error.contains(QStringLiteral("button A")));
+        QCOMPARE(link.driver->pending.size(), 1);
+        link.driver->complete(true);
+        QTRY_COMPARE(link.driver->pending.size(), 1);
+        QCOMPARE(link.driver->pending.first().data, *command.payload);
+        link.driver->complete(true);
+        QCOMPARE(link.driver->sent.last().data, *command.payload);
+        QTRY_COMPARE(link.driver->pending.size(), 1);
+        QCOMPARE(link.driver->pending.first().data, *command.payload);
+        link.stopPeriodic(1);
+        link.driver->complete(true); // late adapter result must not revive either timer
+        QTest::qWait(70);
+        QVERIFY(link.driver->pending.isEmpty()); // neither a backlog nor the old CAN timer
+    }
+
     void queuedStaleFeedbackBlocksFirstSend()
     {
         Fixture fixture;
@@ -412,6 +447,27 @@ class TestCanInitialState : public QObject
         const auto definitions = signalSet(incompatible);
         QVERIFY(definitions);
         QVERIFY(!CanInitialState::build(*definitions, QStringLiteral("HMI=IO"), &error));
+    }
+
+    void broadcastPreflightsEveryCanDestination()
+    {
+        CommHub hub;
+        RecordingLink first, second;
+        hub.addLink(&first, "first");
+        hub.addLink(&second, "second");
+        QString error;
+        QVERIFY(first.open({}, {}, {}, {}, &error));
+        QVERIFY(second.open({}, {}, {}, {}, &error));
+        CanFrame frame;
+        frame.id = 0x123;
+        frame.data = QByteArray::fromHex("01");
+        const auto periodic = second.prepareRawFrame(frame, &error);
+        QVERIFY(periodic && second.startPeriodic(*periodic, 1, "receiver task", 60000, &error));
+        frame.data = QByteArray::fromHex("02");
+        QCOMPARE(hub.sendCanFrame(frame, &error, {DataRoute::Broadcast, {}}), 0);
+        QVERIFY(error.contains(QStringLiteral("second")));
+        QVERIFY(first.driver->sent.isEmpty());
+        QVERIFY(second.driver->sent.isEmpty());
     }
 
     void synchronousNewCommandIsNotOverwritten()

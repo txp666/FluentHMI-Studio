@@ -16,6 +16,8 @@
 
 namespace fhmi {
 
+struct CanCommand;
+
 // One signal of a CAN message, from a DBC SG_ line or a line of the card's canSignals.
 struct CanSignalDef
 {
@@ -44,6 +46,8 @@ struct CanSignalDef
     bool fits(int dataLength) const;
     // The data length that holds every bit.
     int bytesNeeded() const;
+    // Absolute bit indices in wire order for Motorola, or increasing order for Intel.
+    QList<int> bitPositions() const;
     // The raw bits, LSB first in the result; the signal must fit.
     quint64 rawBits(const QByteArray &data) const;
     void putRawBits(QByteArray &data, quint64 bits) const;
@@ -91,8 +95,11 @@ struct InlineSignal
 {
     CanId id;
     CanSignalDef signal;
+    int line = -1; // zero-based line in the original text
 };
 std::optional<QList<InlineSignal>> parseInlineSignals(const QString &text, QString *error = nullptr);
+QString formatInlineSignal(const InlineSignal &entry);
+QString inlineSignalKey(const CanId &id, const QString &name);
 
 // The body of an SG_ line after its keyword (DBC files and canSignals alike): <Name> [M|m<n>] : <start>|<length>@
 // <0|1><+|-> [(<factor>,<offset>)] [[<min>|<max>]] ["<unit>"] [receivers]. `mux` gets the multiplexer marker,
@@ -118,13 +125,23 @@ class CanSignalSet
         QList<const CanSignalDef *> signalDefs; // DBC signals in file order, then inline ones
     };
 
+    // The validated payload before an adapter merges the initial or last transmitted state.
+    struct Payload
+    {
+        CanFrame frame;
+        int periodMs = 0;
+        QByteArray signalMask;
+        QByteArray initialData;
+        QString targetName;
+    };
+
     // Inline signals are checked against each other and against the DBC (a name twice is an error).
     static std::optional<CanSignalSet> build(std::shared_ptr<const CanDatabase> dbc, const QString &inlineText,
                                              QString *error = nullptr);
 
     bool isEmpty() const;
-    // The fields of a received frame (see the spec): <Message>.<Signal> and <Signal>, with .text keys for value
-    // descriptions, for DBC signals in file order, then <Signal> for inline ones. Empty when nothing matches.
+    // The fields of a received frame: <Message>.<Signal> and <Signal> for DBC signals, plus .text for descriptions.
+    // An inline signal has <CAN ID>.<Signal> and <Signal>. Empty when nothing matches.
     Message decode(const CanFrame &frame) const;
     // "Sig=val unit, …" for the monitor.
     QString signalsText(const CanFrame &frame) const;
@@ -133,9 +150,11 @@ class CanSignalSet
     // What a command's canId names: a DBC message by name, else an ID per Can::parseId, which has signals when
     // the DBC or the inline signals define some for it.
     std::optional<Target> target(const QString &canId, QString *error = nullptr) const;
+    std::optional<Payload> preparePayload(const CanCommand &command, QString *error = nullptr) const;
     // Every message name and every signal key a binding can use, for the designer's completions.
     QStringList messageNames() const;
     QStringList signalKeys() const;
+    bool definesSignal(const CanId &id, const QString &key) const;
     QStringList warnings() const;
 
   private:

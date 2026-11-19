@@ -120,7 +120,7 @@ void S7ConfigCardWidget::onAttached()
                      if (source != id())
                          return;
                      m_status->setText(status);
-                     m_status->setToolTip(status);
+                     m_status->setToolTip(QString());
                      refresh();
                      if (connected)
                          m_errorNotice.clear();

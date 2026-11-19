@@ -25,6 +25,7 @@ class TcpClientLink : public Link
     QString description() const override;
     bool isConnected() const override;
     bool isConnecting() const;
+    bool hasPendingWrite(const QString &) const override { return m_socket.bytesToWrite() > 0; }
 
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
@@ -53,6 +54,8 @@ class TcpServerLink : public Link
     bool isConnected() const override; // listening
     bool canSend() const override { return !m_clients.isEmpty(); }
     QStringList sendEndpoints() const override;
+    quint64 sendSession(const QString &endpoint) const override;
+    bool hasPendingWrite(const QString &endpoint) const override;
     int clientCount() const { return int(m_clients.size()); }
 
   signals:

@@ -1,69 +1,74 @@
-# Tutorial projects / 视频教程工程
+# Studio v0.9 教程工程 / Tutorial projects
 
-These `.uidp` files open in the desktop HMI designers. The older numbered examples keep their original protocol setup; the version snapshot below applies only to the new S7 lesson.
+[中文使用手册](../../docs/guide.zh.md) · [English user guide](../../docs/guide.en.md) · [UIDP 工程格式](../../docs/uidp-format.md)
 
-这些 `.uidp` 工程可由桌面设计器打开。旧教程保留原有协议配置；下列版本快照只针对本期 S7 教程，不代表已重新验证全部旧工程。
+从 **17** 学完整收发过程。用 **17.10** 练同一连接混收和周期停止，用 **14–16** 练报警、分页和控件风格。打开工程后进入「预览运行」。TCP 例程先连接服务端，再连接客户端。示例文档每课给出预期读数和报文。
 
-## 13 — Your first S7 PLC / 第一次 S7 PLC 联调
+Start with **17** for a command and feedback round trip. Use **17.10** for mixed frames and periodic stopping, or **14–16** for alarms, pages, and styles. Start Preview after opening a project. Connect the TCP server before the client. Each lab lists its expected readings or bytes.
 
-[Watch video lesson12](https://hmi.modusignal.cn/tutorials/12-s7-plc/?lang=en) · [观看第12期视频](https://hmi.modusignal.cn/tutorials/12-s7-plc/) · [English instructions](../../docs/tutorials/13-s7-plc.en.md) · [中文步骤](../../docs/tutorials/13-s7-plc.zh.md)
+## 17 系列 / Series 17
 
-| File / 文件 | Open with / 打开方式 |
+[中文分步实训](../../docs/tutorials/17-frame-io.zh.md) · [English lab instructions](../../docs/tutorials/17-frame-io.en.md)
+
+| 工程 / Project | 练习 / What to verify |
 | --- | --- |
-| [13-S7-PLC-Monitor-en.uidp](13-S7-PLC-Monitor-en.uidp) | English HMI project / 英文 HMI 工程 |
-| [13-S7PLC联调.uidp](13-S7PLC联调.uidp) | Chinese HMI project / 中文 HMI 工程 |
-| [13-s7-first-plc.plcsim.json](13-s7-first-plc.plcsim.json) | [FluentPLC Simulator](https://github.com/txp666/FluentPLC-Simulator) project / 模拟器工程 |
+| [17 数据收发与帧模板](17-数据收发与帧模板.uidp) | TCP、同一模板收发、必填字段、回车和按钮、设备反馈与记录 / Shared HEX template, Enter and button sends, feedback and history |
+| [17.1 文本键值与 CSV](17.1-文本键值与CSV.uidp) | CRLF、键值、CSV、双周期 / Text, CSV, two independent intervals |
+| [17.2 UDP 嵌套 JSON](17.2-UDP嵌套JSON.uidp) | UDP、嵌套对象、数组、布尔 / UDP, objects, arrays, Boolean values |
+| [17.3 固定长度与 CRC8](17.3-固定长度与CRC8.uidp) | 固定长度、混合端序、校验验证 / Fixed length, mixed byte order, CRC8 |
+| [17.4 帧尾分帧与异或](17.4-帧尾分帧与异或.uidp) | 帧尾、异或、ASCII 与 HEX 字段 / Footer, XOR, ASCII and HEX fields |
+| [17.5 双字节长度与 CCITT](17.5-双字节长度与CCITT.uidp) | 两字节整帧长度、混合类型、CRC16-CCITT / Two-byte total length, mixed types, CCITT |
+| [17.6 Modbus 混合寄存器](17.6-Modbus混合寄存器.uidp) | 四区轮询、FC05／06／16、寄存器范围 / Four areas, FC05, FC06, and FC16, register ranges |
+| [17.7 CAN 经典帧与 FD 信号](17.7-CAN经典帧与FD信号.uidp) | 虚拟 CAN、标准／扩展帧、RTR、FD+BRS / Virtual CAN, standard and extended frames, RTR, FD+BRS · [位图实训](../../docs/tutorials/can-bit-map.zh.md) / [Bit-map tutorial](../../docs/tutorials/can-bit-map.en.md) |
+| [17.8 空闲分帧与和校验](17.8-空闲分帧与和校验.uidp) | 空闲分帧、和校验、默认字段 / Idle gap, sum checksum, field defaults |
+| [17.9 同连接多种 HEX 帧](17.9-同连接多种HEX帧.uidp) | 共用分帧、命令字、半帧、坏 CRC / Common framing, command bytes, partial frames, invalid CRC |
+| [17.10 同连接多接收模板](17.10-同连接多接收模板.uidp) | 三种分帧、同名字段、坏帧恢复、周期当前值 / Three layouts, shared field names, recovery, live periodic input |
+| [17.11 串口收发与数据发送卡](17.11-串口收发与数据发送卡.uidp) | 虚拟串口 A/B、长度字段、发送卡周期 / Virtual serial A/B, length field, periodic send card |
+| [17.12 MQTT 发布订阅与主题取值](17.12-MQTT发布订阅与主题取值.uidp) | QoS 1、主题与相同键、当前工程值 / QoS 1, topic selection, current project values |
 
-**Version snapshot / 版本快照 (2026-11-16):** FluentHMI Studio C++ **0.7.0**, PyQt UI Designer **0.7.0**, FluentPLC Simulator **0.1.1**, UIDP **1.1**. Website lesson slug: `12-s7-plc`; source example number: `13`.
+17–17.11 可用本机回环、内置虚拟串口或虚拟 CAN。17.12 预设公共 MQTT Broker，可以换成已有的本地 Broker。两张卡需使用同一 Broker。
 
-1. Open the `.plcsim.json` in Simulator while stopped; start its loopback server on `127.0.0.1:1102`.
-2. Open either `.uidp` in desktop HMI 0.7.0. Run Preview and manually connect: rack 0, slot 1, PG. Auto-connect is off.
-3. Read temperature **23.5 °C**, speed **900 rpm**, and a pressure sine wave **0.8–1.6 bar**.
-4. Toggle Pump enable. Enter **1500** and press Enter, then press the **900 rpm** preset. Confirm the display reads the new value back from the simulator.
-5. Save and export: C++ creates an independent runtime application; Py exports editable Python source or builds with Nuitka.
+Labs 17 to 17.11 use loopback or the built-in virtual links. Lab 17.12 uses a public MQTT broker. You can set both cards to the same local broker.
 
-操作：先在模拟器载入并启动工程，再在 HMI 打开中文或英文工程，运行预览并手动连接。观察数值和曲线，拨动开关，输入 1500 后回车，再用按钮恢复 900。两份语言工程的控件 ID、地址和命令相同；模拟器的 `.plcsim.json` 与 HMI 的 `.uidp` 是不同格式。
+## 设备与界面专题 / Device and interface labs
 
-| Address / 地址 | Type / 类型 | Purpose / 用途 |
-| --- | --- | --- |
-| `DB1.DBX0.0` | BOOL | Pump enable feedback and command / 泵启停读写 |
-| `DB1.DBX0.7` | BOOL | Neighbor bit initially ON / 邻位初值为 ON |
-| `DB1.DBW2` | INT | Speed, initially 900 rpm / 转速初值 900 |
-| `DB1.DBD4` | REAL | Temperature, 23.5 °C / 温度 |
-| `DB1.DBD8` | REAL | Dynamic pressure / 动态压力与曲线 |
+| 工程 / Project | 练习 / What to verify |
+| --- | --- |
+| [01 温湿度采集](01-温湿度采集.uidp) | 文本读数与实时曲线 / Text readings and trends |
+| [02 温控仪监控](02-温控仪监控.uidp) | 串口 Modbus RTU、温度和设置值 / Serial Modbus RTU and temperature |
+| [03 电机控制板](03-电机控制板.uidp) | HEX 数据、数值换算和控制 / HEX data, scaling, and commands |
+| [04 环境监测站](04-环境监测站.uidp) | JSON 数据路径、列表与曲线 / JSON paths, displays, and charts |
+| [05 AT 指令调试助手](05-AT指令调试助手.uidp) | 串口 AT 命令、手动发送和文本日志 / AT commands and text logs |
+| [06 PID 调参助手](06-PID调参助手.uidp) | 参数输入与响应趋势 / Parameter inputs and trends |
+| [07 ADC 采集板](07-ADC采集板.uidp) | 文本键值采样、ADC 换算和状态字 / Text samples, ADC scaling, and status bits |
+| [08 电池放电测试](08-电池放电测试.uidp) | 放电控制、电压曲线和电流、累计放电量记录 / Discharge control, voltage trends, and current and capacity records |
+| [10 PLC 恒压供水](10-PLC恒压供水.uidp) | Modbus 地址轮询、输出设置 / Modbus polling and write settings |
+| [11 温控仪模拟器](11-温控仪模拟器.uidp) | 从站寄存器表和应答 / Slave register tables and replies |
+| [12 CAN 收发测试](12-CAN收发测试.uidp) | CAN 通道、[DBC](12-CAN收发测试.dbc) 与信号 / CAN channels, DBC, and signals |
+| [13 S7 PLC 联调](13-S7PLC联调.uidp) · [English project](13-S7-PLC-Monitor-en.uidp) | PLC 读数、曲线、BOOL 与 INT 写入 / S7 reads, trends, and writes |
+| [14 工程数据与报警](14-工程数据与报警.uidp) | 两路来源、表达式、低电量与历史 / Two sources, expressions, alarms, and history |
+| [15 分页与控件风格](15-分页与控件风格.uidp) | 四种分页导航、启动页、按钮和卡片 / Four navigation styles, the start page, buttons and cards |
+| [16 输入与状态筛选](16-输入与状态筛选.uidp) | 小数输入、选择器、枚举徽标、自定义时间 / Decimal inputs, selectors, badges, and time filters |
 
-The tutorial validates a local simulator, not physical Siemens hardware. It uses classic S7comm absolute addresses, not optimized DBs, symbolic access or S7CommPlus. [Connection setup and scope](../../docs/s7.md).
+### 06–08 和 12 的本地输入 / Local inputs for 06–08 and 12
 
-## Updating this lesson / 后续维护
+- **06** 在虚拟串口对端依次发送 `kp=1.4,ki=0.4,kd=0.12,tgt=100,pos=82` 和 `tgt=100,pos=91`，各自以换行结束。检查三个参数读数、目标曲线和实际曲线。 / Send both lines with a newline and check the three parameter readings and the target and actual traces.
+- **07** 在虚拟串口对端发送 `adc0=2048,adc1=3072,st=5`，末尾加换行，核对 ADC 换算和状态位。 / Send this line with a newline from the virtual serial peer and check the scaled ADC values and status bits.
+- **08** 发送 `v=12.2,i=0.8,mah=120,run=1`，末尾加换行，核对电压曲线、记录表和放电指示。 / Send this line with a newline and check the voltage trend, the record table, and the discharge indicator.
+- **12** 本机演练时，在运行预览把两张卡都切到「虚拟 CAN」，勾选 FD 再连接。确认示例工程与 DBC 在同一目录。演练 64 字节帧时，点击「发 CAN FD 报文 0x200」，核对 `FdLast` 为 `200`。 / With the project and DBC together, select **Virtual CAN** and enable **FD** on both cards before connecting. Send `0x200` and look for `FdLast` equal to `200` in the 64-byte example.
 
-Update the two language projects, simulator address/initial values, address table, software versions and validation date together. Keep historical version records for older lessons unless they have actually been revalidated. Regenerate screenshots and video from the recorded software versions when changing visible behavior.
+### 13 S7 模拟器 / S7 simulator
 
-本期网站素材存放于 `tutorials/assets/12-s7-plc/v070/`。视频源工程本地保留在 `video-workflow/projects/FluentHMI-Studio/tutorials/12-s7-plc/`，不放入软件源码仓库。教程工程在软件 v0.7.0 发布后新增，下载链接应使用教程提交 / 主分支或网站静态资源，不能假设它们存在于软件 `v0.7.0` tag 内。
+打开 [FluentPLC Simulator 工程](13-s7-first-plc.plcsim.json)，在 `127.0.0.1:1102` 启动服务。启动 HMI 预览后用机架 0、插槽 1、PG 连接。应读到 `23.5 °C`、`900 rpm` 和变化的压力。写入 `1500` 再恢复 `900`，同时检查 BOOL 邻位。
 
-This directory contains examples and documentation only. Changes to it use `[skip ci]`; validate edited project files locally rather than rerunning desktop packaging CI for prose changes.
+Open the simulator project and start it on `127.0.0.1:1102`. Connect from Preview with rack 0, slot 1, and PG. Expect `23.5 °C`, `900 rpm`, and a changing pressure. Write `1500` then reset to `900` and check that the adjacent BOOL bit retains its value.
 
-## v0.8 示例 / v0.8 examples
+[中文步骤](../../docs/tutorials/13-s7-plc.zh.md) · [English instructions](../../docs/tutorials/13-s7-plc.en.md) · [视频 / Video](https://hmi.modusignal.cn/tutorials/12-s7-plc/)
 
-[中文操作图解](../../docs/tutorials/v0.8-guide.zh.md) · [English illustrated guide](../../docs/tutorials/v0.8-guide.en.md)
+### 14–16 配置练习 / Setup exercises
 
-### 14 · 工程数据与报警
+- **14** 连接两路本机 TCP 服务端 `9201` 和 `9202`。给设备 A 发 `fault=0,soc=65`，给设备 B 发 `fault=0`。任一路先改为 `fault=1`，再把电量设为 `20`。在报警列表核对触发、恢复和确认。 / Connect to the two local servers, send the sample lines, then change the fault and charge values to inspect alarm transitions.
+- **15** 无需连接设备。运行预览比较四种分页，返回设计器修改「当前编辑页」和「运行时启动页」。 / Compare four navigation styles offline and change the edit page and runtime start page.
+- **16** 在预览比较选择器、数值框和状态徽标。用固定温度报警练习历史页的条件组合、自定义时间和导出。 / Compare input styles and use the simulated temperature alarm to filter and export history.
 
-打开 [14-工程数据与报警.uidp](14-工程数据与报警.uidp) 并预览，启动两路 TCP 服务端（9201、9202）。用客户端接入后，设备 A 每行发送 `fault=0,soc=65`，设备 B 每行发送 `fault=0`。将任一 `fault` 改为 1 可触发总故障，`soc` 改为 20 可触发低电量。点击设计器顶部「数据与报警」可查看数据点、表达式与报警规则。
-
-Start the two TCP servers in Preview and connect with local clients. The example combines both devices' fault states, shows battery charge, and records alarm events. See the illustrated guide for the sample messages and configuration.
-
-### 15 · 分页与控件风格
-
-打开 [15-分页与控件风格.uidp](15-分页与控件风格.uidp) 并预览，无需硬件或连接。四列分别演示经典选项卡、下划线导航、分段导航和文档页签；点击「总览 / 参数」切换静态读数。中间比较标准、强调、轻量和描边按钮，点击仅显示本地通知；下方比较标准、透明和描边卡片及数值卡。
-
-返回设计器后，选中分页容器，在属性区切换导航风格，添加、删除、重命名或前后移动页面。用「当前编辑页」选设计器正在编辑的页，用「运行时启动页」选预览和导出应用的首页。页内控件随页面移动，删除页面时移至相邻页。按钮和卡片也可在属性区直接选择风格。
-
-Open this project and run Preview without a device or connection. Compare four page navigation styles, four button styles and three card styles. Buttons show local notifications only. Select a container in the designer to change its style or manage its pages.
-
-### 16 · 输入与状态筛选
-
-打开 [16-输入与状态筛选.uidp](16-输入与状态筛选.uidp) 并预览，无需硬件。上方对比小数数值框（含六位精度）、下拉／分段／单选组、开关／复选框；这些演示输入不发送设备命令。中间的状态徽标复用枚举文字与颜色。
-
-下方使用固定计算值模拟温度报警，压力报警保留无数据状态。点击「筛选」组合关键词、级别、状态和时间。切换到「历史记录」后可按事件类型筛选，也可选「自定义时间」分别填写起止日期和时间。「导出筛选结果」保存匹配的事件，「导出全部历史」保存完整历史。重新运行预览后，固定温度值会再次满足报警条件。
-
-Open this project without a device to compare decimal inputs, selector styles, checkboxes and status badges. A constant calculated temperature demonstrates alarms; pressure remains unknown. Expand Filter to combine conditions, or switch to history to filter events. Demo inputs do not send device commands.
+[工程数据、报警和布局的详细操作](../../docs/guide.zh.md#工程数据与报警) · [Data points, alarms, and layouts](../../docs/guide.en.md#project-data-and-alarms)

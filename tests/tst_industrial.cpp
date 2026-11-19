@@ -6,6 +6,7 @@
 #include "designer/property_editor.h"
 #include "designer/widget_palette.h"
 #include "runtime/hmi_widget.h"
+#include "runtime/widgets/digital_timing_widget.h"
 #include "runtime/modbus_poller.h"
 #include "runtime/widgets/industrial_widget.h"
 #include <QtCore/QJsonArray>
@@ -81,6 +82,7 @@ class TestIndustrial : public QObject
             PropertyEditor editor;
             editor.setScene(&scene);
             editor.showItem(scene.findItem("device"));
+            const bool acceptsExpression = !industrialCapabilities(type).structuredInput;
             bool expressionFound = false;
             for (auto *form : editor.findChildren<QFormLayout *>()) {
                 for (int row = 0; row < form->rowCount(); ++row) {
@@ -92,14 +94,17 @@ class TestIndustrial : public QObject
                     if (label && label->text() == QStringLiteral("转换表达式")) {
                         auto *edit = qobject_cast<QLineEdit *>(form->itemAt(row, QFormLayout::FieldRole)->widget());
                         QVERIFY(edit);
-                        edit->setText("value * 2");
+                        QCOMPARE(edit->isHidden(), !acceptsExpression);
+                        if (acceptsExpression)
+                            edit->setText("value * 2");
                         expressionFound = true;
                     }
                 }
             }
             QVERIFY(expressionFound);
-            QCOMPARE(scene.widgetsJson().first().toObject().value("binding").toObject().value("expression").toString(),
-                     QStringLiteral("value * 2"));
+            if (acceptsExpression)
+                QCOMPARE(scene.widgetsJson().first().toObject().value("binding").toObject().value("expression").toString(),
+                         QStringLiteral("value * 2"));
         }
     }
     void englishNames()
@@ -166,6 +171,37 @@ class TestIndustrial : public QObject
             QVERIFY(widget->reading());
         }
     }
+    void closedSourceLeavesAStaleReadingAndStopsMotion()
+    {
+        RuntimeContext context;
+        std::unique_ptr<HmiWidget> base(createHmiWidget("Pump", {}));
+        auto *pump = static_cast<IndustrialWidget *>(base.get());
+        pump->attach(&context);
+        pump->show();
+        context.registerWidget("pump", pump);
+        const auto binding = BindingEntry::fromWidget(
+            {{"id", "pump"}, {"type", "Pump"}, {"binding", QJsonObject{{"key", "state"}, {"sourceCardId", "plant"}}}});
+        QVERIFY(binding);
+        context.addBinding(*binding);
+        context.setActive(true);
+
+        const DataSource plant{"plant", 1, "plc"};
+        emit context.hub()->unitReceived({}, Message{{"state", 1}}, plant);
+        QVERIFY(pump->animationRunning());
+        emit context.hub()->streamClosed(DataSource{"plant", 2, "other-peer"});
+        QVERIFY(pump->animationRunning());
+
+        emit context.hub()->streamClosed(plant);
+        QCOMPARE(pump->bindingStatus(), HmiWidget::BindingStatus::Stale);
+        QCOMPARE(pump->reading(), std::optional<double>(1));
+        QVERIFY(pump->readingText().startsWith(QStringLiteral("旧值")));
+        QVERIFY(!pump->animationRunning());
+
+        emit context.hub()->unitReceived({}, Message{{"state", 1}}, DataSource{"plant", 3, "plc"});
+        QCOMPARE(pump->bindingStatus(), HmiWidget::BindingStatus::Live);
+        QVERIFY(pump->animationRunning());
+    }
+
     void allTypes_data()
     {
         QTest::addColumn<QString>("type");
@@ -183,14 +219,22 @@ class TestIndustrial : public QObject
         QVERIFY(meta);
         QVERIFY(isIndustrialCategory(meta->category));
         QCOMPARE(meta->bindProperty(), QStringLiteral("value"));
-        for (const char *name : {"title", "showTitle", "showValue", "textLayout", "titleOffsetX", "titleOffsetY",
-                                 "valueOffsetX", "valueOffsetY", "showToolTip"}) {
+        for (const char *name : {"title", "showTitle", "showValue"})
+            QVERIFY2(meta->prop(QLatin1String(name)), name);
+        std::unique_ptr<HmiWidget> created(createHmiWidget(type, {}));
+        if (type == QLatin1String("DigitalTimingChart")) {
+            QVERIFY(dynamic_cast<DigitalTimingChartWidget *>(created.get()));
+            QVERIFY(meta->prop(QStringLiteral("bitProfile")));
+            QVERIFY(!meta->prop(QStringLiteral("textLayout")));
+            return; // the state word and chart interactions are exercised through RuntimeSurface
+        }
+        for (const char *name : {"textLayout", "titleOffsetX", "titleOffsetY", "valueOffsetX", "valueOffsetY",
+                                 "showToolTip"}) {
             QVERIFY2(meta->prop(QLatin1String(name)), name);
         }
         if (type != "BmsCellMatrix" && type != "DcPowerSupply") {
             QVERIFY(meta->prop("value"));
         }
-        std::unique_ptr<HmiWidget> created(createHmiWidget(type, {}));
         auto *widget = dynamic_cast<IndustrialWidget *>(created.get());
         QVERIFY(widget);
         QVERIFY(widget->reading());
@@ -206,25 +250,25 @@ class TestIndustrial : public QObject
         context.setActive(true);
         if (type == "BmsCellMatrix" || type == "DcPowerSupply") {
             const QVariant payload = definition.value("value").toVariant();
-            emit context.hub()->messageReceived({{"reading", payload}});
+            emit context.hub()->unitReceived({}, Message{{"reading", payload}});
             QVERIFY(widget->reading());
             return;
         }
 
         QVERIFY(!widget->reading());
         QVERIFY(widget->readingText().contains(QStringLiteral("待数据")));
-        emit context.hub()->messageReceived({{"unrelated", 99LL}});
+        emit context.hub()->unitReceived({}, Message{{"unrelated", 99LL}});
         QVERIFY(!widget->reading());
-        emit context.hub()->messageReceived({{"reading", 0LL}});
+        emit context.hub()->unitReceived({}, Message{{"reading", 0LL}});
         QCOMPARE(widget->reading(), std::optional<double>(1));
         QCOMPARE(widget->properties().value("value"), serialized.value("properties").toObject().value("value"));
-        emit context.hub()->messageReceived({{"reading", QStringLiteral("invalid")}});
+        emit context.hub()->unitReceived({}, Message{{"reading", QStringLiteral("invalid")}});
         QVERIFY(!widget->reading());
         QVERIFY(widget->readingText().contains(QStringLiteral("数据异常")));
-        emit context.hub()->messageReceived({{"reading", 0LL}});
+        emit context.hub()->unitReceived({}, Message{{"reading", 0LL}});
         QCOMPARE(widget->reading(), std::optional<double>(1));
         if (definition.value("mode").toString() != "number" && definition.value("mode").toString() != "word" &&
-            definition.value("mode").toString() != "timing" && definition.value("mode").toString() != "encoder") {
+            definition.value("mode").toString() != "encoder") {
             widget->applyBoundValue(0.5, *entry);
             QVERIFY(!widget->reading());
             if (definition.value("mode").toString() == "byte") {
@@ -253,7 +297,7 @@ class TestIndustrial : public QObject
         QCOMPARE(modbus->evaluate(modbus->extractFromParsed({{"hr100", 1LL}})).toDouble(), 1.0);
         context.addBinding(*modbus);
         QCOMPARE(context.modbusNeeds().size(), 1);
-        emit context.hub()->messageReceived({{"hr100", 1LL}});
+        emit context.hub()->unitReceived({}, Message{{"hr100", 1LL}});
         QCOMPARE(widget->reading(), std::optional<double>(1));
         const auto addBinding = [&](const QJsonObject &fields) {
             QJsonObject data = serialized;
@@ -263,10 +307,10 @@ class TestIndustrial : public QObject
             context.addBinding(*entry);
         };
         addBinding({{"parseMode", ParseMode::JsonPath}, {"jsonPath", "payload.value"}, {"expression", "value + 1"}});
-        emit context.hub()->messageReceived({{"payload", QVariantMap{{"value", 0}}}});
+        emit context.hub()->unitReceived({}, Message{{"payload", QVariantMap{{"value", 0}}}});
         QCOMPARE(widget->reading(), std::optional<double>(1));
         addBinding({{"parseMode", ParseMode::HexBytes}, {"dataType", "uint16"}, {"expression", "value + 1"}});
-        emit context.hub()->rawReceived(QByteArray::fromHex("0000"));
+        emit context.hub()->unitReceived(QByteArray::fromHex("0000"), {});
         QCOMPARE(widget->reading(), std::optional<double>(1));
         addBinding({{"parseMode", ParseMode::CanSignal},
                     {"canId", "0x123"},

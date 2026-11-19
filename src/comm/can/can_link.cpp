@@ -9,7 +9,9 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QTimer>
 
-#include <limits>
+#include <algorithm>
+#include <utility>
+
 
 namespace fhmi {
 
@@ -168,7 +170,7 @@ bool CanLink::openChannel(const CanSettings &settings, const QString &dbcPath, c
     m_signals = std::make_shared<const CanSignalSet>(std::move(*signalSet));
     m_filter = *parsedFilter;
     m_settings = settings;
-    m_loadRate = settings.adapter == CanAdapter::SocketCan ? 0 : settings.bitrate;
+    m_loadRate = CanAdapter::caps(settings.adapter, settings.zlgModel).bitrate ? settings.bitrate : 0;
     m_loadDataRate = settings.dataBitrate;
     if (!settings.customTiming.trimmed().isEmpty()) {
         m_loadRate = 0;
@@ -286,65 +288,17 @@ std::optional<CanLink::Prepared> CanLink::prepare(const CanCommand &command, QSt
     if (!m_signals) {
         return fail(tr("CAN 未连接"));
     }
-    const auto target = m_signals->target(command.target, error);
-    if (!target) {
+    const auto payload = m_signals->preparePayload(command, error);
+    if (!payload) {
         return std::nullopt;
     }
-    Prepared prepared;
-    prepared.connectionGeneration = m_generation;
+    Prepared prepared{payload->frame, payload->periodMs, payload->signalMask, payload->initialData, m_generation};
     CanFrame &frame = prepared.frame;
-    frame.id = target->id.id;
-    frame.extended = target->id.extended;
-    const QString shownName = target->name.isEmpty() ? Can::idText(target->id) : target->name;
-    if (target->hasSignals) {
-        const auto assignments = parseAssignments(command.assignments, error);
-        if (!assignments) {
-            return std::nullopt;
-        }
-        // A DBC message is FD as the DBC says; an ID with inline signals only as the command (or its length) says.
-        frame.fd = target->fd || (target->name.isEmpty() && command.fd);
-        frame.requireAdapterReply = m_initialState.hasRule(target->id);
-        prepared.initialData = QByteArray(target->length, '\0');
-        for (const CanSignalDef *signal : target->signalDefs) {
-            if (signal->fits(target->length))
-                signal->putRawBits(prepared.initialData, signal->initialBits());
-        }
-        prepared.signalMask = QByteArray(target->length, '\0');
-        frame.data = QByteArray(target->length, '\0');
-        for (const auto &[name, value] : *assignments) {
-            const CanSignalDef *signal = nullptr;
-            for (const CanSignalDef *candidate : target->signalDefs) {
-                signal = candidate->name == name ? candidate : signal;
-            }
-            if (!signal) {
-                return fail(tr("报文 %1 没有信号 %2").arg(shownName, name));
-            }
-            if (!signal->fits(target->length)) {
-                return fail(tr("信号 %1 超出报文 %2 的 %3 字节").arg(name, shownName).arg(target->length));
-            }
-            const auto bits = signal->encode(value, error);
-            if (!bits) {
-                return std::nullopt;
-            }
-            signal->putRawBits(frame.data, *bits);
-            signal->putRawBits(prepared.signalMask, std::numeric_limits<quint64>::max());
-        }
-    } else {
-        if (!command.payload) {
-            return fail(command.payloadError);
-        }
-        frame.fd = command.fd;
-        frame.data = *command.payload;
-        if (frame.fd ? !Can::padFdPayload(frame.data) : frame.data.size() > 8) {
-            return fail(frame.fd ? tr("CAN FD 数据最多 64 字节")
-                                 : tr("CAN 数据最多 8 字节，更长的报文请勾选 canFd 用 CAN FD 发送"));
-        }
-    }
     if (frame.fd && !m_settings.fd) {
-        return fail(tr("报文 %1 是 CAN FD 报文，请在 CAN 卡片上勾选 CAN FD 后重新连接").arg(shownName));
+        return fail(tr("报文 %1 是 CAN FD 报文，请在 CAN 卡片上勾选 CAN FD 后重新连接").arg(payload->targetName));
     }
     frame.brs = frame.fd && m_settings.brs;
-    prepared.periodMs = command.cycleMs > 0 ? command.cycleMs : target->cycleTime;
+    frame.requireAdapterReply = !prepared.signalMask.isEmpty() && m_initialState.hasRule({frame.id, frame.extended});
     const auto composed = composeFrame(prepared, error);
     if (!composed)
         return std::nullopt;
@@ -394,6 +348,11 @@ bool CanLink::checkSendAvailable(QString *error) const
 
 bool CanLink::commit(const Prepared &prepared, QString *error)
 {
+    return queueCommand(prepared, error);
+}
+
+bool CanLink::canCommit(const Prepared &prepared, QString *error) const
+{
     if (prepared.connectionGeneration != m_generation) {
         if (error)
             *error = tr("CAN 未连接");
@@ -401,34 +360,157 @@ bool CanLink::commit(const Prepared &prepared, QString *error)
     }
     if (!checkSendAvailable(error))
         return false;
-    const quint64 key = frameKey(prepared.frame);
-    const auto entry = m_table.find(key);
-    if (entry != m_table.end() && (entry->submission.id || !entry->queue.isEmpty())) {
-        if (m_waiting >= kMaxWaitingCommands) {
+    const auto entry = m_table.constFind(frameKey(prepared.frame));
+    if (entry == m_table.cend())
+        return true;
+    if (entry->periodic) {
+        const auto &task = *entry->periodic;
+        const auto &periodicMask = task.command.signalMask;
+        const auto &mask = prepared.signalMask;
+        const bool overlaps = mask.isEmpty() || mask.size() != periodicMask.size() ||
+            !std::equal(mask.begin(), mask.end(), periodicMask.begin(), [](char a, char b) { return !(a & b); });
+        if (overlaps) {
             if (error)
-                *error = CanBackend::tr("CAN 发送队列已满");
+                *error = tr("CAN 报文 %1 的周期发送由 %2 控制").arg(Can::idText({prepared.frame.id, prepared.frame.extended}),
+                                                                    task.owner);
             return false;
         }
-        entry->queue.enqueue({prepared, m_backend->transmitState()->generation});
+    }
+    if ((entry->submission.id || !entry->queue.isEmpty()) && m_waiting >= kMaxWaitingCommands) {
+        if (error)
+            *error = CanBackend::tr("CAN 发送队列已满");
+        return false;
+    }
+    return true;
+}
+
+bool CanLink::queueCommand(Prepared prepared, QString *error)
+{
+    if (!canCommit(prepared, error))
+        return false;
+    const auto entry = m_table.find(frameKey(prepared.frame));
+    if (entry != m_table.end() && entry->periodic)
+        prepared.periodMs = 0;
+    if (entry != m_table.end() && (entry->submission.id || !entry->queue.isEmpty())) {
+        entry->queue.enqueue({std::move(prepared), m_backend->transmitState()->generation});
         ++m_waiting;
         return true;
     }
     const auto frame = composeFrame(prepared, error);
-    return frame && submitFrame(*frame, prepared.periodMs, error);
+    return frame && submitFrame(*frame, prepared.updateImage ? std::optional{prepared.periodMs} : std::nullopt, error);
 }
 
-bool CanLink::submitFrame(CanFrame frame, std::optional<int> periodMs, QString *error)
+std::optional<CanLink::Prepared> CanLink::prepareRawFrame(const CanFrame &frame, QString *error) const
+{
+    if (!checkSendAvailable(error))
+        return std::nullopt;
+    if (frame.fd && !m_settings.fd) {
+        if (error)
+            *error = tr("通道是经典 CAN，不能发送 CAN FD 报文（勾选 CAN FD 后重新连接）");
+        return std::nullopt;
+    }
+    return Prepared{frame, 0, {}, {}, m_generation, false};
+}
+
+bool CanLink::startPeriodic(const Prepared &prepared, quint64 task, const QString &owner, int intervalMs,
+                            QString *error, PeriodicFrameReader readFrame)
+{
+    if (prepared.connectionGeneration != m_generation || !checkSendAvailable(error))
+        return false;
+    const auto key = frameKey(prepared.frame);
+    auto &entry = m_table[key];
+    if (entry.periodic) {
+        if (error)
+            *error = tr("CAN 报文 %1 的周期发送由 %2 控制").arg(Can::idText({prepared.frame.id, prepared.frame.extended}),
+                                                                entry.periodic->owner);
+        return false;
+    }
+    entry.periodic = Periodic{prepared, task, owner, intervalMs, std::move(readFrame)};
+    updateCycleTimer(key, entry);
+    // Reserve the slot first, so every destination can be checked before any first frame is submitted.
+    const auto generation = m_generation;
+    QMetaObject::invokeMethod(this, [this, key, generation, task] {
+        const auto it = m_table.constFind(key);
+        if (m_generation == generation && it != m_table.cend() && it->periodic && it->periodic->task == task)
+            dispatchNext(key);
+    }, Qt::QueuedConnection);
+    return true;
+}
+
+void CanLink::stopPeriodic(quint64 task)
+{
+    for (auto it = m_table.begin(); it != m_table.end(); ++it) {
+        if (!it->periodic || it->periodic->task != task)
+            continue;
+        it->periodic.reset();
+        updateCycleTimer(it.key(), *it);
+        if (!it->frame && !it->submission.id && it->queue.isEmpty())
+            m_table.erase(it);
+        return;
+    }
+}
+
+QList<CanLink::LegacyCycle> CanLink::legacyCycles() const
+{
+    QList<LegacyCycle> cycles;
+    for (const auto &entry : m_table) {
+        if (entry.legacyTask)
+            cycles.append({entry.legacyTask, *entry.frame, entry.legacyInterval, entry.legacySubmitted,
+                           entry.legacySkipped, entry.periodic.has_value()});
+    }
+    return cycles;
+}
+
+bool CanLink::stopLegacyCycles(quint64 task)
+{
+    bool changed = false;
+    for (auto it = m_table.begin(); it != m_table.end(); ++it) {
+        if (task && it->legacyTask != task)
+            continue;
+        changed |= it->legacyTask != 0;
+        it->legacyTask = 0;
+        it->legacyInterval = 0;
+        if (it->submission.periodMs)
+            it->submission.periodMs = 0;
+        for (auto &queued : it->queue)
+            queued.command.periodMs = 0;
+        updateCycleTimer(it.key(), *it);
+    }
+    if (changed)
+        emit legacyCyclesChanged();
+    return changed;
+}
+
+void CanLink::updateCycleTimer(quint64 key, Entry &entry)
+{
+    const int interval = entry.periodic ? (entry.periodic->started ? entry.periodic->intervalMs : 0)
+                                        : entry.legacyInterval;
+    if (!interval) {
+        if (entry.timer)
+            entry.timer->stop();
+        return;
+    }
+    if (!entry.timer) {
+        entry.timer = new QTimer(this);
+        entry.timer->setTimerType(Qt::PreciseTimer);
+        connect(entry.timer, &QTimer::timeout, this, [this, key] { resend(key); });
+    }
+    if (!entry.timer->isActive() || entry.timer->interval() != interval)
+        entry.timer->start(interval);
+}
+
+bool CanLink::submitFrame(CanFrame frame, std::optional<int> periodMs, QString *error, quint64 task)
 {
     frame.submissionId = ++m_nextSubmission;
-    m_table[frameKey(frame)].submission = {frame.submissionId, periodMs};
+    m_table[frameKey(frame)].submission = {frame.submissionId, periodMs, task};
     const QPointer<CanLink> alive(this);
-    const bool accepted = sendFrame(frame, error);
+    const bool accepted = m_backend->send(frame, error);
     if (!accepted && alive)
-        finishSubmission(frame, false);
+        finishSubmission(frame, false, error ? *error : QString());
     return accepted;
 }
 
-void CanLink::finishSubmission(const CanFrame &frame, bool accepted)
+void CanLink::finishSubmission(const CanFrame &frame, bool accepted, const QString &error)
 {
     if (!frame.submissionId)
         return;
@@ -436,30 +518,49 @@ void CanLink::finishSubmission(const CanFrame &frame, bool accepted)
     auto entry = m_table.find(key);
     if (entry == m_table.end() || entry->submission.id != frame.submissionId)
         return;
-    const auto period = entry->submission.periodMs;
-    entry->submission = {};
-    if (accepted && period) {
+    const auto submission = std::exchange(entry->submission, {});
+    bool legacyChanged = false;
+    if (accepted && (submission.periodMs || submission.task))
         entry->frame = frame;
-        if (*period > 0) {
-            if (!entry->timer) {
-                entry->timer = new QTimer(this);
-                entry->timer->setTimerType(Qt::PreciseTimer);
-                connect(entry->timer, &QTimer::timeout, this, [this, key] { resend(key); });
-            }
-            if (entry->timer->interval() != *period || !entry->timer->isActive())
-                entry->timer->start(*period);
+    if (accepted && submission.periodMs.value_or(0) > 0) {
+        legacyChanged = !entry->legacyTask || entry->legacyInterval != *submission.periodMs;
+        if (!entry->legacyTask) {
+            entry->legacyTask = nextDataStream();
+            entry->legacySubmitted = 0;
+            entry->legacySkipped = 0;
         }
+        ++entry->legacySubmitted;
+        entry->legacyInterval = *submission.periodMs;
+        updateCycleTimer(key, *entry);
     }
-    if (entry->queue.isEmpty()) {
-        if (!entry->frame)
-            m_table.erase(entry);
-        return;
+    if (accepted && submission.task && submission.task == entry->legacyTask)
+        ++entry->legacySubmitted;
+    const bool belongsToTask = submission.task && entry->periodic && entry->periodic->task == submission.task;
+    if (belongsToTask) {
+        if (accepted) {
+            legacyChanged = entry->legacyTask != 0;
+            entry->legacyTask = 0;
+            entry->legacyInterval = 0;
+            entry->periodic->started = true;
+        } else {
+            entry->periodic.reset();
+        }
+        updateCycleTimer(key, *entry);
     }
-    const auto generation = m_generation;
-    QMetaObject::invokeMethod(this, [this, key, generation] {
-        if (m_generation == generation)
-            dispatchNext(key);
-    }, Qt::QueuedConnection);
+    if (!entry->queue.isEmpty() || (entry->periodic && !entry->periodic->started)) {
+        const auto generation = m_generation;
+        QMetaObject::invokeMethod(this, [this, key, generation] {
+            if (m_generation == generation)
+                dispatchNext(key);
+        }, Qt::QueuedConnection);
+    } else if (!entry->frame && !entry->periodic) {
+        m_table.erase(entry);
+    }
+    const QPointer<CanLink> alive(this);
+    if (belongsToTask)
+        emit periodicResult(submission.task, accepted ? SendStatus::Submitted : SendStatus::Failed, error);
+    if (legacyChanged && alive)
+        emit legacyCyclesChanged();
 }
 
 void CanLink::dispatchNext(quint64 key)
@@ -471,7 +572,9 @@ void CanLink::dispatchNext(quint64 key)
         if (entry == m_table.end() || entry->submission.id)
             return;
         if (entry->queue.isEmpty()) {
-            if (!entry->frame)
+            if (entry->periodic && !entry->periodic->started)
+                resend(key);
+            else if (!entry->frame && !entry->periodic)
                 m_table.erase(entry);
             return;
         }
@@ -482,7 +585,8 @@ void CanLink::dispatchNext(quint64 key)
         QString error;
         const auto frame = composeFrame(next.command, &error);
         if (frame) {
-            if (!submitFrame(*frame, next.command.periodMs, &error) && alive && m_generation == generation)
+            if (!submitFrame(*frame, next.command.updateImage ? std::optional{next.command.periodMs} : std::nullopt, &error)
+                && alive && m_generation == generation)
                 onSendFailed(error);
             return; // the adapter result schedules the next command
         }
@@ -494,27 +598,58 @@ void CanLink::dispatchNext(quint64 key)
 
 bool CanLink::sendFrame(const CanFrame &frame, QString *error)
 {
-    if (!checkSendAvailable(error))
-        return false;
-    if (frame.fd && !m_settings.fd) {
-        if (error) {
-            *error = tr("通道是经典 CAN，不能发送 CAN FD 报文（勾选 CAN FD 后重新连接）");
-        }
-        return false;
-    }
-    return m_backend->send(frame, error);
+    const auto prepared = prepareRawFrame(frame, error);
+    return prepared && commit(*prepared, error);
 }
 
 void CanLink::resend(quint64 key)
 {
-    const auto it = m_table.constFind(key);
-    if (it == m_table.constEnd() || !it->frame || it->submission.id || !it->queue.isEmpty() ||
-        !checkSendAvailable(nullptr)) {
+    const auto it = m_table.find(key);
+    if (it == m_table.end())
+        return;
+    if (it->periodic) {
+        const auto task = it->periodic->task;
+        if (it->submission.id || !it->queue.isEmpty()) {
+            emit periodicResult(task, SendStatus::Busy, {});
+            return;
+        }
+        QString error;
+        std::optional<CanFrame> frame;
+        if (checkSendAvailable(&error)) {
+            const auto &periodic = *it->periodic;
+            if (periodic.started && periodic.readFrame) {
+                const auto latest = periodic.readFrame(&error);
+                if (!latest) {
+                    emit periodicResult(task, SendStatus::Busy, error);
+                    return;
+                }
+                if (frameKey(latest->frame) != key || latest->signalMask != periodic.command.signalMask) {
+                    emit periodicResult(task, SendStatus::Busy,
+                        tr("CAN 周期任务使用启动时的报文 ID 和信号。更改后请重新启动任务。"));
+                    return;
+                }
+                frame = latest->frame;
+            } else {
+                frame = composeFrame(periodic.command, &error);
+            }
+        }
+        if (frame) {
+            submitFrame(*frame, std::nullopt, &error, task);
+        } else {
+            stopPeriodic(task);
+            emit periodicResult(task, SendStatus::Failed, error);
+        }
+        return;
+    }
+    if (!it->legacyTask)
+        return;
+    if (it->submission.id || !it->queue.isEmpty() || !checkSendAvailable(nullptr)) {
+        ++it->legacySkipped;
         return;
     }
     QString error;
     const QPointer<CanLink> alive(this);
-    if (!submitFrame(*it->frame, std::nullopt, &error) && alive) {
+    if (!submitFrame(*it->frame, std::nullopt, &error, it->legacyTask) && alive) {
         onSendFailed(error);
     }
 }
@@ -628,7 +763,7 @@ void CanLink::onFrameSendFailed(const CanFrame &frame, const QString &message)
 {
     if (!isConnected())
         return;
-    finishSubmission(frame, false);
+    finishSubmission(frame, false, message);
     onSendFailed(message);
 }
 

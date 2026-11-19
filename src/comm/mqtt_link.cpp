@@ -8,6 +8,8 @@ namespace fhmi {
 
 namespace {
 
+constexpr qsizetype PublishWindow = 8;
+constexpr qint64 PublishBufferLimit = 256 * 1024;
 constexpr int kMaxReconnectDelayMs = 30000;
 // Wildcard subscriptions can fan out widely; parsers beyond this are dropped and rebuilt.
 constexpr int kMaxTopicParsers = 256;
@@ -54,7 +56,9 @@ bool MqttLink::connectTo(const MqttSettings &requested, QString *error)
     };
     MqttSettings settings = requested;
     settings.host = settings.host.trimmed();
-    settings.publishTopic = settings.publishTopic.trimmed();
+    settings.publishTopic = Mqtt::expandTopicSession(settings.publishTopic.trimmed(), settings.topicSession);
+    for (auto &topic : settings.topics)
+        topic = Mqtt::expandTopicSession(topic, settings.topicSession);
     if (settings.host.isEmpty()) {
         return fail(tr("请填写 MQTT 服务器地址"));
     }
@@ -137,11 +141,12 @@ QString MqttLink::description() const
 
 quint16 MqttLink::nextPacketId()
 {
-    // Identifiers are 1..65535; skip any still in flight.
-    do {
+    for (int i = 0; i < 0xFFFF; ++i) {
         m_lastPacketId = m_lastPacketId == 0xFFFF ? 1 : quint16(m_lastPacketId + 1);
-    } while (m_outbound.contains(m_lastPacketId) || m_pendingSubscriptions.contains(m_lastPacketId));
-    return m_lastPacketId;
+        if (!m_outbound.contains(m_lastPacketId) && !m_pendingSubscriptions.contains(m_lastPacketId))
+            return m_lastPacketId;
+    }
+    return 0;
 }
 
 bool MqttLink::sendPacket(const QByteArray &packet)
@@ -166,22 +171,43 @@ bool MqttLink::canSendTo(const QString &endpoint) const
     return m_up && !topic.isEmpty() && !topic.contains(QLatin1Char('+')) && !topic.contains(QLatin1Char('#'));
 }
 
+QStringList MqttLink::sendEndpoints() const
+{
+    return {Mqtt::restoreTopicSession(m_settings.publishTopic, m_settings.topicSession)};
+}
+
+bool MqttLink::hasPendingWrite(const QString &) const
+{
+    return m_socket.bytesToWrite() > 0 || m_outbound.size() >= PublishWindow;
+}
+
 qint64 MqttLink::writeTo(const QByteArray &bytes, const QString &endpoint)
 {
     const QString topic = endpoint.isEmpty() ? m_settings.publishTopic : endpoint;
     if (!canSendTo(topic)) {
-        emit errorOccurred(tr("发送失败: 未设置发布主题"));
+        emit errorOccurred(tr("发送失败: 未设置发布主题"), endpoint);
+        return WriteFailureReported;
+    }
+    if (m_socket.bytesToWrite() >= PublishBufferLimit || m_outbound.size() >= PublishWindow) {
+        emit errorOccurred(tr("MQTT 发送队列已满"), topic);
         return WriteFailureReported;
     }
     Mqtt::PublishMessage message;
-    message.topic = topic;
+    message.topic = Mqtt::expandTopicSession(topic, m_settings.topicSession);
     message.payload = bytes;
     message.qos = m_settings.qos;
     if (message.qos > 0) {
         message.packetId = nextPacketId();
-        m_outbound.insert(message.packetId);
+        if (!message.packetId) {
+            emit errorOccurred(tr("MQTT 发送队列已满"), topic);
+            return WriteFailureReported;
+        }
     }
-    return sendPacket(Mqtt::encodePublish(message)) ? bytes.size() : -1;
+    if (!sendPacket(Mqtt::encodePublish(message)))
+        return -1;
+    if (message.packetId)
+        m_outbound.insert(message.packetId, message.qos == 1 ? Mqtt::PubAck : Mqtt::PubRec);
+    return bytes.size();
 }
 
 void MqttLink::onReadyRead()
@@ -214,8 +240,8 @@ void MqttLink::handlePacket(const Mqtt::Packet &packet)
         dropParsers();
         if (!m_settings.topics.isEmpty()) {
             const quint16 id = nextPacketId();
-            m_pendingSubscriptions.insert(id, m_settings.topics);
-            sendPacket(Mqtt::encodeSubscribe(id, m_settings.topics, m_settings.qos));
+            if (id && sendPacket(Mqtt::encodeSubscribe(id, m_settings.topics, m_settings.qos)))
+                m_pendingSubscriptions.insert(id, m_settings.topics);
         }
         if (m_settings.keepAlive > 0) {
             m_pingTimer.start(m_settings.keepAlive * 750);
@@ -258,13 +284,19 @@ void MqttLink::handlePacket(const Mqtt::Packet &packet)
         break;
     case Mqtt::PubRec:
         if (const auto id = Mqtt::packetId(packet)) {
-            sendPacket(Mqtt::encodeAck(Mqtt::PubRel, *id));
+            auto awaited = m_outbound.find(*id);
+            if (awaited != m_outbound.end() && (*awaited == Mqtt::PubRec || *awaited == Mqtt::PubComp)) {
+                *awaited = Mqtt::PubComp;
+                if (!sendPacket(Mqtt::encodeAck(Mqtt::PubRel, *id)))
+                    connectionLost(tr("MQTT 发布确认失败"));
+            }
         }
         break;
     case Mqtt::PubAck:
     case Mqtt::PubComp:
         if (const auto id = Mqtt::packetId(packet)) {
-            m_outbound.remove(*id);
+            if (m_outbound.value(*id, Mqtt::Connect) == packet.type)
+                m_outbound.remove(*id);
         }
         break;
     default:
@@ -277,42 +309,23 @@ void MqttLink::handleMessage(const Mqtt::PublishMessage &message)
     if (!m_up) {
         return;
     }
-    auto it = m_parsers.find(message.topic);
+    const auto topic = Mqtt::restoreTopicSession(message.topic, m_settings.topicSession);
+    auto it = m_parsers.find(topic);
     if (it == m_parsers.end()) {
         if (m_parsers.size() >= kMaxTopicParsers) {
             dropParsers();
         }
-        it = m_parsers.insert(message.topic, std::shared_ptr<Parser>(createStreamParser(message.topic)));
-        registerStream(it->get(), message.topic);
+        it = m_parsers.insert(topic, std::shared_ptr<Parser>(createStreamParser(topic)));
+        registerStream(it->get(), topic);
     }
     const std::shared_ptr<Parser> parser = *it; // a slot may reconnect and clear m_parsers
-    if (!parser) {
-        emit rawReceived(message.payload, dataSource(parser.get()));
-        return;
-    }
-    const DataSource source = dataSource(parser.get());
-    // Each MQTT message is a whole record: a line parser gets its terminator if it is missing.
-    const QByteArray terminator = parserType() == QLatin1String("line") ? lineTerminator(parserConfig()) : QByteArray();
-    const auto report = [this, &message, &parser, &terminator, source](const QList<QByteArray> &units) {
-        for (const QByteArray &unit : units) {
-            emit rawReceived(unit, source);
-            QByteArray data = unit;
-            if (!terminator.isEmpty() && !data.endsWith(terminator)) {
-                data.append(terminator);
-            }
-            for (Message parsed : parser->parse(data)) {
-                if (parsed.size() == 1 && parsed.contains(QStringLiteral("ch0"))) {
-                    parsed.insert(message.topic, parsed.value(QStringLiteral("ch0")));
-                }
-                emit messageReceived(parsed, source);
-            }
-        }
-    };
-    report(parser->frames(message.payload));
-    // A message arrives whole, so a parser that frames on silence has its frame now.
-    if (parser->idleTimeout() > 0) {
-        report(parser->flush());
-    }
+    deliver(parser.get(), message.payload, Boundary::Message);
+}
+
+void MqttLink::annotateMessage(Message &message, const DataSource &source) const
+{
+    if (message.size() == 1 && message.contains(QStringLiteral("ch0")))
+        message.insert(source.endpoint, message.value(QStringLiteral("ch0")));
 }
 
 void MqttLink::onSocketError(QAbstractSocket::SocketError error)

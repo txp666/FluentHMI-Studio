@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.3",
   "appName": "串口采集 Demo",
   "canvas": {
     "width": 1080,
@@ -311,7 +311,6 @@
       "properties": {
         "placeholderText": "输入 READ、START 或 STOP，按回车发送",
         "text": "",
-        "readOnly": false,
         "sendOnEnter": true,
         "commandMode": "文本",
         "commandTemplate": "{value}",
@@ -488,22 +487,10 @@
     },
     {
       "id": "protocol_info",
-      "type": "LineEdit",
+      "type": "Label",
       "properties": {
-        "placeholderText": "",
         "text": "协议: JSON / 115200 / 8N1",
-        "readOnly": true,
-        "sendOnEnter": false,
-        "commandMode": "文本",
-        "commandTemplate": "{value}",
-        "frameHeader": "",
-        "frameTail": "",
-        "dataType": "HEX字符串",
-        "byteOrder": "大端(BE)",
-        "commandNewline": "\\r\\n",
-        "mbSlave": 1,
-        "mbFunc": "06 写单寄存器",
-        "mbAddress": 0
+        "fontSize": 12
       },
       "geometry": {
         "x": 250,
@@ -517,10 +504,13 @@
       "id": "command_presets",
       "type": "ComboBox",
       "properties": {
-        "items": "停止设备\n读取一次\n启动设备",
+        "options": [
+          {"label": "停止设备", "value": "STOP"},
+          {"label": "读取一次", "value": "READ"},
+          {"label": "启动设备", "value": "START"}
+        ],
         "currentIndex": 1,
         "sendOnSelect": true,
-        "commands": "STOP\nREAD\nSTART",
         "commandMode": "文本",
         "commandTemplate": "{value}",
         "frameHeader": "",

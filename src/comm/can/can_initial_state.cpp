@@ -131,6 +131,54 @@ std::optional<CanInitialState> CanInitialState::build(const CanSignalSet &signal
     return result;
 }
 
+std::optional<QString> CanInitialState::migrateSignalMapping(const CanSignalSet &before, const CanSignalSet &after,
+                                                              const QString &mapping,
+                                                              const QHash<QString, QString> &changes)
+{
+    bool affected = false;
+    auto lines = mapping.split(u'\n');
+    for (auto &line : lines) {
+        const auto original = build(before, line, nullptr);
+        if (!original || original->m_rules.isEmpty())
+            continue;
+        const auto &rule = original->m_rules.cbegin().value();
+        const auto &source = original->m_sources.cbegin().value();
+        const auto target = before.target(rule.targetName);
+        const auto input = before.target(source.name);
+        const auto changed = [&](const CanId &id, const CanSignalDef *signal) {
+            return changes.contains(inlineSignalKey(id, signal->name));
+        };
+        if (std::none_of(target->signalDefs.cbegin(), target->signalDefs.cend(), [&](auto *signal) {
+                return changed(target->id, signal);
+            }) && std::none_of(input->signalDefs.cbegin(), input->signalDefs.cend(), [&](auto *signal) {
+                return changed(source.id, signal);
+            }))
+            continue;
+
+        QStringList explicitPairs;
+        QHash<QString, QString> expected;
+        bool changedPair = false;
+        for (const auto &pair : rule.bindings) {
+            const auto outputKey = inlineSignalKey(target->id, pair.target.name);
+            const auto inputKey = inlineSignalKey(source.id, pair.source.name);
+            const auto outputName = changes.value(outputKey, pair.target.name);
+            const auto inputName = changes.value(inputKey, pair.source.name);
+            changedPair |= changes.contains(outputKey) || changes.contains(inputKey);
+            expected.insert(outputName, inputName);
+            explicitPairs.append(QStringLiteral("%1.%2=%3.%4").arg(rule.targetName, outputName, source.name, inputName));
+        }
+        const auto updated = build(after, line, nullptr);
+        QHash<QString, QString> actual;
+        if (updated)
+            for (const auto &pair : updated->m_rules.cbegin()->bindings)
+                actual.insert(pair.target.name, pair.source.name);
+        if (actual != expected)
+            line = explicitPairs.join(u'\n');
+        affected |= changedPair || actual != expected;
+    }
+    return affected ? std::optional<QString>(lines.join(u'\n')) : std::nullopt;
+}
+
 bool CanInitialState::acceptsFilter(const CanFilter &filter, QString *error) const
 {
     for (const Source &source : m_sources) {

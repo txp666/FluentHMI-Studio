@@ -1,0 +1,495 @@
+{
+  "version": "1.3",
+  "appName": "17.10 同连接多接收模板",
+  "canvas": {
+    "width": 1120,
+    "height": 798,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line"
+  },
+  "widgets": [
+    {
+      "id": "lessonTitle",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 16,
+        "w": 1072,
+        "h": 38
+      },
+      "properties": {
+        "text": "17.10 同连接多接收模板",
+        "fontSize": 24,
+        "bold": true
+      }
+    },
+    {
+      "id": "lessonSteps",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 60,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "先连右侧，再连左侧。转速可回车单发，也可在周期混发时直接修改。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "hmi",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 24,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "上位机 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39182,
+        "defaultMode": "客户端",
+        "receiveFrameTemplateIds": [
+          "speed",
+          "temperature",
+          "status"
+        ]
+      }
+    },
+    {
+      "id": "device",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 568,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "模拟设备 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39182,
+        "defaultMode": "服务端",
+        "receiveFrameTemplateIds": [
+          "speed",
+          "temperature",
+          "status"
+        ]
+      }
+    },
+    {
+      "id": "rpm",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 302,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "转速帧 · value",
+        "value": "—",
+        "unit": "rpm",
+        "decimals": "0",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "收到的转速"
+      }
+    },
+    {
+      "id": "temperature",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 294,
+        "y": 302,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "温度帧 · value",
+        "value": "—",
+        "unit": "°C",
+        "decimals": "1",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "收到的温度"
+      }
+    },
+    {
+      "id": "pressure",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 386,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "压力状态帧 · value",
+        "value": "—",
+        "unit": "bar",
+        "decimals": "2",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "收到的压力"
+      }
+    },
+    {
+      "id": "state",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 294,
+        "y": 386,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "压力状态帧 · state",
+        "value": "—",
+        "unit": "",
+        "decimals": "0",
+        "fontSize": 20,
+        "displayStyle": "状态徽标",
+        "displayFormat": "枚举",
+        "textList": "1=运行|#107c10\n2=故障|#d13438"
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "hmi",
+        "key": "status.state"
+      }
+    },
+    {
+      "id": "rpmInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 568,
+        "y": 302,
+        "w": 528,
+        "h": 36
+      },
+      "properties": {
+        "title": "转速（回车单发）",
+        "text": "1800",
+        "placeholderText": "按转速模板组帧",
+        "inputOnly": false,
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "sendFrameTemplateId": "speed",
+        "sendFrameField": "value",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true
+      }
+    },
+    {
+      "id": "sendA",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 350,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发转速 · 固定长度",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameTemplateId": "speed",
+        "command": "10 DC 05",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendB",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 350,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发温度 · 长度字段",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameTemplateId": "temperature",
+        "command": "20 FF 83",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendC",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 398,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发压力状态 · 帧尾",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameTemplateId": "status",
+        "command": "02 00 FA",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendBatch",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 398,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "一次写入三种帧",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "command": "7E 7F 01 01 77 77 0D 0A A5 5A 20 02 00 C3 EA 75 0D A5 5A 10 FC 08 72",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendBad",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 446,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "先发坏 CRC 温度帧，再发转速",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "command": "A5 5A 20 02 03 E7 EA 9F 0D A5 5A 10 DC 05 FF",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendCycle",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 494,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "开始周期混发 · 1000 ms",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "sendIntervalMs": 1000,
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "commandInputs": [
+          {
+            "inputId": "rpmInput",
+            "variable": "rpm",
+            "dataType": "uint16"
+          }
+        ],
+        "commandTemplate": "7E 7F 01 01 77 77 0D 0A A5 5A 20 02 00 C3 EA 75 0D A5 5A 10 {rpm}",
+        "byteOrder": "小端(LE)",
+        "txFrame": {
+          "checksum": "CRC8",
+          "checksumStart": 19
+        }
+      }
+    },
+    {
+      "id": "cycleCheck",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 500,
+        "w": 510,
+        "h": 24
+      },
+      "properties": {
+        "text": "周期混发每轮交付 3 帧。修改转速后，下一轮自动取值。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "sendBadLength",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 446,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "先发错长度，再发转速",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "command": "A5 5A 20 F0 FF 83 AA 75 0D A5 5A 10 FC 08 72",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "hmiLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 24,
+        "y": 544,
+        "w": 528,
+        "h": 230
+      },
+      "properties": {
+        "title": "上位机收发报文",
+        "sourceCardId": "hmi"
+      }
+    },
+    {
+      "id": "deviceLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 568,
+        "y": 544,
+        "w": 528,
+        "h": 230
+      },
+      "properties": {
+        "title": "模拟设备收发报文",
+        "sourceCardId": "device"
+      }
+    }
+  ],
+  "frameTemplates": {
+    "speed": {
+      "name": "转速帧",
+      "parser": "hex",
+      "parserConfig": {
+        "header": "A5 5A",
+        "footer": "",
+        "fixedLength": 6,
+        "matchOffset": 2,
+        "matchBytes": "10",
+        "checksum": "CRC8",
+        "checksumStart": 2,
+        "fields": [
+          [
+            "value",
+            1,
+            2,
+            "uint16",
+            "小端(LE)"
+          ]
+        ],
+        "sendRequiredFields": [
+          "value"
+        ]
+      },
+      "sample": "A5 5A 10 DC 05 FF"
+    },
+    "temperature": {
+      "name": "温度帧",
+      "parser": "hex",
+      "parserConfig": {
+        "header": "A5 5A",
+        "footer": "0D",
+        "lengthOffset": 3,
+        "lengthSize": 1,
+        "maxFrameLength": 64,
+        "idleTimeout": 350,
+        "lengthCovers": "数据",
+        "matchOffset": 2,
+        "matchBytes": "20",
+        "checksum": "CRC16-Modbus",
+        "checksumStart": 2,
+        "checksumEndian": "小端(LE)",
+        "fields": [
+          [
+            "value",
+            2,
+            2,
+            "int16",
+            "大端(BE)"
+          ]
+        ]
+      },
+      "sample": "A5 5A 20 02 FF 83 AA 75 0D"
+    },
+    "status": {
+      "name": "压力状态帧",
+      "parser": "hex",
+      "parserConfig": {
+        "header": "7E 7F",
+        "footer": "0D 0A",
+        "checksum": "异或",
+        "checksumStart": 2,
+        "fields": [
+          [
+            "state",
+            0,
+            1,
+            "uint8"
+          ],
+          [
+            "value",
+            1,
+            2,
+            "uint16",
+            "大端(BE)"
+          ]
+        ]
+      },
+      "sample": "7E 7F 02 00 FA F8 0D 0A"
+    }
+  },
+  "logic": {
+    "points": [
+      {
+        "name": "收到的转速",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "speed.value"
+        }
+      },
+      {
+        "name": "收到的温度",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "temperature.value",
+          "expression": "value * 0.1"
+        }
+      },
+      {
+        "name": "收到的压力",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "status.value",
+          "expression": "value * 0.01"
+        }
+      }
+    ]
+  }
+}

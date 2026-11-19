@@ -65,7 +65,6 @@ WidgetPalette::WidgetPalette(QWidget *parent) : QWidget(parent)
             auto *item = new QTreeWidgetItem(group, {translated(meta->displayName)});
             item->setIcon(0, widgetIcon(meta->icon));
             item->setData(0, TypeRole, meta->typeName);
-            item->setToolTip(0, meta->typeName);
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
         }
         group->setExpanded(true);

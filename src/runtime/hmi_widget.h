@@ -9,6 +9,14 @@
 #include <QtGui/QIcon>
 #include <QtWidgets/QWidget>
 
+class QAbstractButton;
+class QSpinBox;
+
+namespace FluentQt {
+class ComboBox;
+class InfoBadge;
+}
+
 namespace fhmi {
 
 // Base of every designable widget. The same object is shown on the design canvas
@@ -19,6 +27,8 @@ class HmiWidget : public QWidget
     Q_OBJECT
 
   public:
+    enum class BindingStatus { Unbound, Waiting, Live, Stale };
+
     explicit HmiWidget(const WidgetMeta &meta, QWidget *parent = nullptr);
 
     const WidgetMeta &meta() const { return *m_meta; }
@@ -35,6 +45,12 @@ class HmiWidget : public QWidget
     // Device data arriving through a binding, already transformed and formatted.
     // Implementations update the display only; device feedback never sends a command.
     virtual void applyBoundValue(const QVariant &value, const BindingEntry &binding);
+    void setBindingStatus(BindingStatus status);
+    void setBindingProblem(const QString &status, const QString &detail = {});
+    BindingStatus bindingStatus() const { return m_bindingStatus; }
+    bool isBound() const { return m_bindingStatus != BindingStatus::Unbound; }
+
+    virtual std::optional<QVariant> inputValue() const { return std::nullopt; }
 
     void attach(RuntimeContext *context);
     void detach();
@@ -58,10 +74,20 @@ class HmiWidget : public QWidget
     virtual void apply() = 0;
     virtual void onAttached() {}
     virtual void onDetached() {}
+    virtual void bindingStatusChanged(BindingStatus) {}
     virtual void arrangeForWidth(int) {}
+    void resizeEvent(QResizeEvent *event) override;
     void updateMinimumHeight();
     // A connection that only exists while attached; detach() disconnects it.
     void live(const QMetaObject::Connection &connection) { m_liveConnections.append(connection); }
+
+    // Restore from local settings after apply() sets the project's defaults.
+    // Combo boxes use stable item data, independent of the display language.
+    void rememberViewOption(FluentQt::ComboBox *control, const QString &key);
+    void rememberViewOption(QAbstractButton *control, const QString &key);
+    void rememberViewOption(QSpinBox *control, const QString &key);
+    QVariant viewPreference(const QString &key, const QVariant &fallback) const;
+    void saveViewPreference(const QString &key, const QVariant &value);
 
     // Property readers that fall back to the metadata default.
     QJsonValue prop(const char *name) const;
@@ -70,13 +96,26 @@ class HmiWidget : public QWidget
     double real(const char *name) const;
     bool flag(const char *name) const;
 
+    bool confirmsSend() const { return flag("confirmBeforeSend"); }
+    const QJsonObject &frameTemplates() const;
+    void requestSend(const CommandResult &command, std::function<void()> onSent = {}, const QString &mode = {},
+                     int intervalMs = 0, CommandReader readInputs = {});
+    bool isPeriodicSending() const;
+    bool isPeriodicStarting() const;
+    bool stopPeriodicSend();
+    virtual void periodicSendChanged(bool) {}
+
   private:
+    friend class RuntimeContext;
     int contentMinimumHeight(int width);
+    void positionBindingBadge();
     const WidgetMeta *m_meta;
     QJsonObject m_props;
     QString m_assetBaseDir;
     QPointer<RuntimeContext> m_context;
     QList<QMetaObject::Connection> m_liveConnections;
+    BindingStatus m_bindingStatus = BindingStatus::Unbound;
+    FluentQt::InfoBadge *m_bindingBadge = nullptr;
 };
 
 // Creates the widget for a project type, or a labelled placeholder for a type the

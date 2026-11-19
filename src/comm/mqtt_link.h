@@ -25,6 +25,7 @@ struct MqttSettings
     int qos = 0;
     bool tls = false;
     quint16 keepAlive = 60;
+    QString topicSession; // expands the {session} level on this run's wire topics
 };
 
 // An MQTT 3.1.1 client as a link. Every message is one complete frame: a line-mode
@@ -53,13 +54,15 @@ class MqttLink : public Link
     // The connection worked, dropped, and is being re-established.
     bool isReconnecting() const { return m_wanted && !m_up && m_everUp; }
     bool addressedModbusReplies() const override { return false; }
-    QStringList sendEndpoints() const override { return {m_settings.publishTopic}; }
+    QStringList sendEndpoints() const override;
     bool canSendTo(const QString &endpoint) const override;
+    bool hasPendingWrite(const QString &) const override;
     const MqttSettings &settings() const { return m_settings; }
 
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
     qint64 writeTo(const QByteArray &bytes, const QString &endpoint) override;
+    void annotateMessage(Message &message, const DataSource &source) const override;
 
   private:
     void dropParsers();
@@ -85,7 +88,7 @@ class MqttLink : public Link
     quint16 m_lastPacketId = 0;
     QHash<quint16, QStringList> m_pendingSubscriptions;
     QSet<quint16> m_inboundQos2; // delivered, waiting for PUBREL
-    QSet<quint16> m_outbound;    // published with QoS 1/2, not yet acknowledged
+    QHash<quint16, Mqtt::PacketType> m_outbound; // response awaited for each QoS 1/2 publish
     QHash<QString, std::shared_ptr<Parser>> m_parsers;
     QTimer m_pingTimer;
     QTimer m_reconnectTimer;

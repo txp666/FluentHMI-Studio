@@ -7,6 +7,7 @@
 namespace fhmi {
 
 class CanvasItem;
+struct WidgetMeta;
 
 inline constexpr const char *WidgetMimeType = "application/x-fluenthmi-widget";
 // Copied widgets on the clipboard, shared with PyQt UI Designer: {"version": "1.0", "widgets": [...]}.
@@ -43,6 +44,7 @@ class DesignScene : public QGraphicsScene
     void setGridVisible(bool visible);
     bool isGridVisible() const { return m_gridVisible; }
     void setAssetBaseDir(const QString &dir);
+    void setProjectParser(const QString &parser);
 
     // Replaces the scene contents. Returns false (and keeps the old contents) if an
     // item cannot be built.
@@ -57,6 +59,8 @@ class DesignScene : public QGraphicsScene
     void selectIds(const QStringList &ids);
 
     CanvasItem *createItem(const QString &typeName, const QPointF &scenePos);
+    // For edits that add a widget and update references together. The caller records the edit.
+    CanvasItem *insertSibling(const CanvasItem &anchor, const QString &typeName, const QJsonObject &initialProperties);
     void deleteSelected();
     void clearAll();
     void align(Alignment alignment);
@@ -71,8 +75,7 @@ class DesignScene : public QGraphicsScene
     // container) when they fit. Ids already in use are replaced. The pasted widgets become the selection.
     QList<CanvasItem *> paste(const QJsonArray &widgets, CanvasItem *container, int step);
 
-    // Every ModbusSlaveTable shows the area of the first card in the document whose modbusRole is 从站, with its
-    // slaveInit values. After each design change, and after loading.
+    // Preview the register areas and initial values of the uniquely matched Modbus slave card.
     void refreshSlaveTables();
 
   signals:
@@ -93,6 +96,7 @@ class DesignScene : public QGraphicsScene
     void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override;
 
   private:
+    CanvasItem *insertItem(const WidgetMeta &meta, const QJsonObject &properties, const QPointF &scenePos);
     void adopt(CanvasItem *item);
     // The innermost container under `scenePos`, ignoring `exclude` and its descendants.
     CanvasItem *containerAt(const QPointF &scenePos, const CanvasItem *exclude = nullptr) const;
@@ -100,6 +104,7 @@ class DesignScene : public QGraphicsScene
     void reparentAfterMove(CanvasItem *item);
 
     QSize m_canvasSize{1200, 800};
+    QString m_projectParser = QStringLiteral("line");
     int m_gridSize = 10;
     bool m_gridVisible = true;
     QString m_assetBaseDir;

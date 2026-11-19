@@ -20,9 +20,7 @@ namespace fhmi {
 // padding and 32 px minimum, which would push the icon off centre at that size.
 void keepSquareBeside(QAbstractButton *button, QWidget *field);
 
-// Shows the widget's tooltip as a Fluent one rather than the native one. Call it once, where the widget is
-// created: the text is read from toolTip() when the pointer enters, so a later setToolTip() changes it and an
-// empty one shows nothing. Sets the tooltip too when text is given.
+// Installs one Fluent tooltip filter on the widget. Set text here or update it later with setToolTip().
 void fluentToolTip(QWidget *widget, const QString &text = QString());
 
 // Uses the same Fluent picker as the settings page. Cancelling returns an invalid color.

@@ -19,6 +19,8 @@ class ModbusMaster;
 class ModbusSlave;
 struct ModbusSlaveAnswer;
 
+enum class SendStatus { Submitted, Busy, Failed };
+
 // One transport to a device (a serial port, a TCP connection, ...). Every link frames
 // its incoming bytes with its own parser and reports the same signals, so the hub,
 // bindings, charts, tables and logs never care which transport the data came over.
@@ -40,10 +42,13 @@ class Link : public QObject
 
     // Writes to the device; false when nothing could be written.
     bool send(const QByteArray &bytes, const QString &endpoint = {});
+    SendStatus sendPeriodic(const QByteArray &bytes, const QString &endpoint);
     void setConnectionId(const QString &id) { m_connectionId = id; }
     QString connectionId() const { return m_connectionId; }
     DataSource dataSource(Parser *parser = nullptr);
+    DataSource eventSource(const QString &endpoint = {}) const;
     bool ownsStream(quint64 streamId, const QString &endpoint = {}) const;
+    FrameProgress frameProgress(quint64 streamId) const;
 
     bool setParser(const QString &type, const QJsonObject &config, QString *error = nullptr);
     QString parserType() const { return m_parserType; }
@@ -64,6 +69,8 @@ class Link : public QObject
     virtual QStringList sendEndpoints() const { return {QString()}; }
     // A named TCP peer must already be connected. UDP and MQTT can address a new destination.
     virtual bool canSendTo(const QString &endpoint) const;
+    virtual quint64 sendSession(const QString &endpoint) const;
+    virtual bool hasPendingWrite(const QString &) const { return false; }
     // MQTT request/reply topics may differ; their Modbus transactions belong to the connection.
     virtual bool addressedModbusReplies() const { return true; }
 
@@ -73,12 +80,15 @@ class Link : public QObject
     void canSendChanged();
     void messageReceived(const fhmi::Message &message, const fhmi::DataSource &source = {});
     void rawReceived(const QByteArray &bytes, const fhmi::DataSource &source = {});
+    void unitReceived(const QByteArray &bytes, const fhmi::Message &message, const fhmi::DataSource &source);
+    void wireReceived(const QByteArray &bytes, const fhmi::DataSource &source);
+    void frameRejected(const fhmi::FrameNotice &notice, const fhmi::DataSource &source);
     void bytesSent(const QByteArray &bytes, const fhmi::DataSource &source = {});
     void streamClosed(const fhmi::DataSource &source);
-    void errorOccurred(const QString &message);
+    void errorOccurred(const QString &message, const QString &endpoint = {});
     // Something the log shows at warning level (a DBC line skipped, a CAN bus in error passive).
-    void warningMessage(const QString &message);
-    void infoMessage(const QString &message);
+    void warningMessage(const QString &message, const QString &endpoint = {});
+    void infoMessage(const QString &message, const QString &endpoint = {});
 
   protected:
     // writeBytes() result for a failure the link already explained through errorOccurred().
@@ -86,13 +96,13 @@ class Link : public QObject
     virtual qint64 writeBytes(const QByteArray &bytes) = 0;
     virtual qint64 writeTo(const QByteArray &bytes, const QString &endpoint);
     void registerStream(Parser *parser, const QString &endpoint);
+    quint64 streamIdForEndpoint(const QString &endpoint) const;
     // A fresh parser for one incoming stream (a TCP server keeps one per client).
     std::unique_ptr<Parser> createStreamParser(const QString &endpoint = {});
-    // Frames bytes read from one stream and reports each complete unit: rawReceived() with
-    // the unit, then messageReceived() for each of its messages. A parser that frames on
-    // silence gets an idle timer, restarted by every read, that reports what flush() returns.
-    void deliver(Parser *parser, const QByteArray &bytes);
-    void deliverUnits(Parser *parser, const QList<QByteArray> &units);
+    enum class Boundary { Stream, Message };
+    // Binary buffering is per stream. Datagram transports also supply a boundary for line and idle framing.
+    void deliver(Parser *parser, const QByteArray &bytes, Boundary boundary = Boundary::Stream);
+    virtual void annotateMessage(Message &, const DataSource &) const {}
     // Stops and forgets the idle timer of a parser about to be destroyed, and the slave replies still due to it.
     void dropStream(Parser *parser);
     // Writes a slave's reply to the stream `parser` frames (a server's device); by default to the link.
@@ -112,6 +122,9 @@ class Link : public QObject
     };
 
     std::unique_ptr<Parser> makeParser(const QString &type, const QJsonObject &config, QString *error, const std::shared_ptr<ModbusRequests> &requests) const;
+    void deliverUnits(Parser *parser, const QList<QByteArray> &units, Boundary boundary = Boundary::Stream);
+    void publishUnit(const QByteArray &bytes, const QList<DecodedRecord> &records, const DataSource &source);
+    void reportFramingState(Parser *parser, const DataSource &source);
     void answer(Parser *parser, const QByteArray &frame);
     void sendNextReply();
     void dropReplies(Parser *parser);
@@ -130,6 +143,7 @@ class Link : public QObject
     QTimer *m_replyTimer = nullptr;
     struct Stream { quint64 id = nextDataStream(); QString endpoint; };
     QString m_connectionId;
+    quint64 m_sendSession = nextDataStream();
     QHash<Parser *, Stream> m_streams;
 };
 

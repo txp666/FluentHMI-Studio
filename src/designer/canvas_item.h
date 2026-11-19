@@ -57,8 +57,8 @@ class CanvasItem : public QGraphicsObject
     bool renamePage(int index, const QString &name);
 
     QSizeF size() const { return m_size; }
-    // User edits respect the widget's minimum size (minimumHeight() for the height); loading keeps what
-    // the project says, except that a link card grows to rowsHeight().
+    // User edits respect the widget's minimum size. Loading keeps saved dimensions, with link cards fitted to their rows.
+    qreal minimumWidth() const;
     // The smallest height this item takes: the metadata's, or for a connection card the height
     // its visible rows need, if that is more.
     qreal minimumHeight() const;
@@ -86,6 +86,7 @@ class CanvasItem : public QGraphicsObject
     // Re-arranges children for layout containers and shows only the current tab page.
     void relayoutChildren();
     bool isFreeLayout() const;
+    bool widthManagedByLayout() const;
     void setDropHighlight(bool on);
 
     void snapToGrid();
@@ -120,7 +121,8 @@ class CanvasItem : public QGraphicsObject
     void updatePageVisibility();
     void relayoutPages();
     void arrangeChildren(const QList<CanvasItem *> &children, const QString &mode);
-    QString layoutMode() const;
+    QString layoutMode(int page = -1) const;
+    bool isVerticalSeparator() const;
     void fitWidth(qreal available);
 
     const WidgetMeta *m_meta;

@@ -3,6 +3,9 @@
 #include "comm/modbus_slave.h"
 #include "runtime/hmi_widget.h"
 
+#include <QtGui/QTextBlock>
+
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -43,7 +46,7 @@ class RealtimeChartWidget : public HmiWidget
     struct Curve
     {
         QString name;
-        BindingEntry binding;
+        std::optional<BindingEntry> binding;
     };
     // The curve configurations a property set describes.
     static std::vector<Curve> curvesFromProperties(const QJsonObject &props);
@@ -69,10 +72,10 @@ class RealtimeChartWidget : public HmiWidget
     };
 
     void rebuildCurves();
+    void setDisplayPoints(int points);
     void applyTheme();
     // The plot and the header from the samples now; data arriving schedules it.
     void refresh();
-    QColor curveColor(int index) const;
     // The sample number the live window starts at, which a loaded run is lined up with.
     qint64 windowStart() const;
     void showLiveValues();
@@ -105,27 +108,28 @@ class DataTableWidget : public HmiWidget
   protected:
     void apply() override;
     void onAttached() override;
+    void onDetached() override;
 
   private:
     void onMessage(const Message &message, const DataSource &source);
+    void appendRecord(const Message &values);
     bool logging() const;
+    bool loggingPoints() const;
 
     FluentQt::TableWidget *m_table = nullptr;
-    QStringList m_columns;
+    FluentQt::BodyLabel *m_recordHint = nullptr;
+    QTimer *m_recordTimer = nullptr;
+    QStringList m_recordFields;
 };
 
-// One area (mbArea) of the data table of the document's first link card whose modbusRole is 从站: a row per
-// address, its value as displayFormat says (无符号, 有符号, 十六进制; coils and discrete inputs as 0/1). Running, a
-// double click edits a value, which goes into that table; writes from anywhere show at once, row by row. On the
-// design canvas it shows that card's addresses with their slaveInit values (showDesign()). Without such a card
-// it holds one line: 没有从站链路卡片.
+// One area of a single Modbus slave's data table. In a live project, double-clicking edits that slave.
+// The designer shows the selected card's initial values, using the same rule for ambiguous sources.
 class ModbusSlaveTableWidget : public HmiWidget
 {
   public:
     ModbusSlaveTableWidget(const WidgetMeta &meta, QWidget *parent);
 
-    // The design canvas: the properties of the first slave card (defaults filled in), or nullptr without one.
-    void showDesign(const QJsonObject *cardProperties);
+    void showDesign(const QJsonObject *cardProperties, bool ambiguous = false);
 
   protected:
     void apply() override;
@@ -147,6 +151,7 @@ class ModbusSlaveTableWidget : public HmiWidget
     std::optional<ModbusSlaveStore> m_design;
     QPointer<ModbusSlave> m_slave;
     QMetaObject::Connection m_slaveConnection;
+    bool m_ambiguousSource = false;
     bool m_filling = false;
 };
 
@@ -170,6 +175,7 @@ class DataRecvCardWidget : public HmiWidget
 {
   public:
     DataRecvCardWidget(const WidgetMeta &meta, QWidget *parent);
+    ~DataRecvCardWidget() override;
 
   protected:
     void apply() override;
@@ -177,16 +183,42 @@ class DataRecvCardWidget : public HmiWidget
     void paintEvent(QPaintEvent *event) override;
 
   private:
-    void append(const QString &html);
-    // Bytes as HEX or text: received text the way its link spells it, what was sent as UTF-8.
-    QString render(const QByteArray &bytes, bool received, const DataSource &source) const;
+    struct PacketRecord;
+    struct ReceiveSample
+    {
+        QByteArray bytes;
+        LinkParser::Format format;
+    };
+    void appendLog(const QString &kind, const QString &text, const DataSource &source, const QColor &color);
+    void appendPacket(const QByteArray &bytes, bool received, const DataSource &source);
+    void appendSampleLog(const QString &kind, const QString &text, const QByteArray &bytes, const DataSource &source,
+                         const QColor &color);
+    std::optional<ReceiveSample> rememberSample(const QByteArray &bytes, const DataSource &source, const Link *link);
+    void queueLog(std::unique_ptr<PacketRecord> record);
+    void scheduleLogRefresh();
+    void flushLog();
+    void discardEvictedSelection(int incomingRows);
+    const ReceiveSample *selectedSample() const;
+    void updateSampleButton();
+    void refreshPacketFormat();
+    void refreshCounter();
+    void showReceiveSample();
+    QString packetText(const PacketRecord &packet, QStringView mode) const;
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
     FluentQt::CaptionLabel *m_counter = nullptr;
-    FluentQt::CheckBox *m_hex = nullptr;
+    FluentQt::ComboBox *m_format = nullptr;
     FluentQt::CheckBox *m_autoScroll = nullptr;
+    FluentQt::CheckBox *m_wire = nullptr;
+    FluentQt::PushButton *m_sample = nullptr;
     QTextEdit *m_output = nullptr;
-    int m_count = 0;
+    QTimer *m_logRefresh = nullptr;
+    std::deque<std::unique_ptr<PacketRecord>> m_pendingLog;
+    std::optional<ReceiveSample> m_recentSample;
+    QTextBlock m_selectedRecord;
+    int m_maxLines = 1000;
+    int m_receivedCount = 0;
+    quint64 m_wireBytes = 0;
 };
 
 class DataSendCardWidget : public HmiWidget
@@ -197,18 +229,23 @@ class DataSendCardWidget : public HmiWidget
   protected:
     void apply() override;
     void onAttached() override;
+    void periodicSendChanged(bool running) override;
     void paintEvent(QPaintEvent *event) override;
 
   private:
     void sendInput();
-    void flashTip(const QString &tip);
+    void refreshInputOptions();
+    QJsonObject inputProperties() const;
 
     FluentQt::StrongBodyLabel *m_title = nullptr;
+    FluentQt::CaptionLabel *m_target = nullptr;
     FluentQt::LineEdit *m_input = nullptr;
+    QWidget *m_textOptions = nullptr;
+    QWidget *m_newlineRow = nullptr;
     FluentQt::CheckBox *m_hex = nullptr;
     FluentQt::ComboBox *m_newline = nullptr;
     FluentQt::PushButton *m_send = nullptr;
-    QTimer *m_tipTimer = nullptr;
+    bool m_can = false;
 };
 
 // The dark terminal of the log and receive views, the same in both themes.

@@ -24,7 +24,6 @@ struct ChannelTiming
 };
 
 std::optional<ChannelTiming> channelTiming(const Model &model, const CanSettings &settings, QString *error = nullptr);
-QString customTimingHint(const Model &model);
 QString customTimingPlaceholder(const Model &model);
 
 struct SjaTimingCandidate

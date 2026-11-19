@@ -1,10 +1,16 @@
 #include "core/command_encoder.h"
+#include "core/frame_templates.h"
 
+#include "core/binding.h"
 #include "core/hex_utils.h"
+#include "core/i18n.h"
+#include "core/project_logic.h"
 #include "core/protocol_parser.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
+#include <QtCore/QRegularExpression>
+#include <QtCore/QSet>
 #include <QtCore/QtEndian>
 
 #include <algorithm>
@@ -13,6 +19,104 @@
 #include <cstring>
 
 namespace fhmi::CommandEncoder {
+
+Mode commandMode(QStringView value)
+{
+    if (value.isEmpty() || value == QStringLiteral("文本")) // i18n: value
+        return Mode::Text;
+    if (value == QLatin1String("JSON"))
+        return Mode::Json;
+    if (value == QLatin1String("HEX"))
+        return Mode::Hex;
+    if (value == QLatin1String("CAN"))
+        return Mode::Can;
+    if (value == QLatin1String("Modbus"))
+        return Mode::Modbus;
+    if (value == QLatin1String("S7"))
+        return Mode::S7;
+    return Mode::Unknown;
+}
+
+bool supportsPeriodicSend(QStringView value)
+{
+    const auto mode = commandMode(value);
+    return mode == Mode::Text || mode == Mode::Json || mode == Mode::Hex || mode == Mode::Can;
+}
+
+int periodicSendInterval(const QJsonObject &props)
+{
+    const int interval = props.value(SendInterval).toInt();
+    return interval > 0 && interval <= MaxSendInterval &&
+                   supportsPeriodicSend(props.value(QStringLiteral("commandMode")).toString())
+               ? interval : 0;
+}
+
+bool supportsPeriodicInputs(const QJsonObject &props)
+{
+    if (periodicSendInterval(props) == 0)
+        return false;
+    const auto ids = commandInputIds(props);
+    return std::any_of(ids.cbegin(), ids.cend(), [](const QString &id) { return !id.isEmpty(); });
+}
+
+QString modbusValueText(const ModbusRequest &request)
+{
+    if (request.func == 0x05)
+        return QStringLiteral("0x") + QString::number(request.value, 16).rightJustified(4, u'0').toUpper();
+    if (request.func == 0x10) {
+        QStringList words;
+        for (quint16 value : request.registers)
+            words.append(QString::number(value));
+        return words.join(QStringLiteral(", "));
+    }
+    return QString::number(request.value);
+}
+
+QString inputValuesText(const EncodedCommand &command, bool showAddresses)
+{
+    QStringList lines;
+    for (const auto &input : command.inputValues) {
+        const QString value = QStringLiteral("%1 = %2").arg(input.name, input.value);
+        if (showAddresses && input.address) {
+            lines.append(QCoreApplication::translate("fhmi", "%1 (%2 · 地址 %3)")
+                             .arg(value, input.dataType, QString::number(*input.address)));
+        } else {
+            lines.append(value);
+        }
+    }
+    return lines.join(u'\n');
+}
+
+QString describe(const EncodedCommand &command, const QString &mode)
+{
+    const auto tr = [](const char *source) { return QCoreApplication::translate("fhmi", source); };
+    switch (command.kind) {
+    case EncodedCommand::Kind::Modbus: {
+        const auto &request = command.modbus;
+        const QString summary = request.func != 0x10 || command.inputValues.isEmpty()
+            ? (request.func < 0x05 ? tr("读取数量 %1") : tr("写入值 %1")).arg(modbusValueText(request))
+            : tr("写入 %1 个寄存器").arg(request.registers.size());
+        return tr("%1\n从站 %2 · 地址 %3\n%4")
+            .arg(translated(functionOptions({request.func}).first())).arg(request.slave).arg(request.address)
+            .arg(summary);
+    }
+    case EncodedCommand::Kind::S7: {
+        const auto &s7 = command.s7;
+        const QString value = displayString(S7::decodeValue(s7.bytes.constData(), int(s7.bytes.size()), s7.point.type));
+        return tr("写入 %1 (%2)\n值 %3").arg(s7.point.address.canonical, s7.point.type.name, value);
+    }
+    case EncodedCommand::Kind::Can:
+        return tr("CAN 报文 %1").arg(command.can.target) + u'\n' + tr("信号赋值 %1").arg(command.can.assignments);
+    case EncodedCommand::Kind::CanFrame:
+        return Can::frameLine(command.frame);
+    case EncodedCommand::Kind::Bytes:
+        if (mode == QLatin1String("HEX"))
+            return QString::fromLatin1(command.bytes.toHex(' ').toUpper());
+        return LineParser::decode(command.bytes, command.textEncoding).replace(u'\\', QStringLiteral("\\\\"))
+            .replace(u'\r', QStringLiteral("\\r")).replace(u'\n', QStringLiteral("\\n")).replace(u'\t', QStringLiteral("\\t"));
+    }
+    return {};
+}
 
 namespace {
 
@@ -48,10 +152,36 @@ std::optional<qint64> integerProp(const QJsonObject &props, const char *name, qi
     return integerText(value.toString());
 }
 
+bool validModbusAddress(qint64 slave, qint64 address)
+{
+    return slave >= 1 && slave <= 247 && address >= 0 && address <= 65535;
+}
+
+EncodedCommand modbusCommand(const QJsonObject &props, ModbusRequest request)
+{
+    EncodedCommand command;
+    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
+                     props.value(QStringLiteral("commandEndpoint")).toString()};
+    command.kind = EncodedCommand::Kind::Modbus;
+    command.modbus = std::move(request);
+    return command;
+}
+
 // Pack `value` as the struct type, then put its hex digits through the template.
 std::optional<QByteArray> packedPayload(const QString &value, const QString &type, bool bigEndian)
 {
     QByteArray out;
+    if (type == QLatin1String("float64")) {
+        bool ok = false;
+        const double number = value.trimmed().toDouble(&ok);
+        if (!ok || !std::isfinite(number))
+            return std::nullopt;
+        quint64 bits = 0;
+        std::memcpy(&bits, &number, sizeof bits);
+        out.resize(sizeof bits);
+        bigEndian ? qToBigEndian(bits, out.data()) : qToLittleEndian(bits, out.data());
+        return out;
+    }
     if (type == QLatin1String("float32")) {
         bool ok = false;
         const double d = value.trimmed().toDouble(&ok);
@@ -115,6 +245,13 @@ QString hexError() { return QCoreApplication::translate("fhmi", "HEX 格式错�
 // JSON mode. Strict RFC 8259 grammar (no range checks, no NaN / Infinity), checked by hand because
 // QJsonDocument neither keeps a value as written nor follows the grammar exactly.
 const QString kPlaceholder = QStringLiteral("{value}");
+const QString kInputVariable = QStringLiteral("[A-Za-z_][A-Za-z0-9_]*");
+const QString kRawHex = QStringLiteral("HEX字符串"); // i18n: value
+
+bool bigEndian(const QJsonObject &props)
+{
+    return prop(props, "byteOrder", QStringLiteral("大端(BE)")) == QStringLiteral("大端(BE)"); // i18n: value
+}
 
 bool jsonSpace(QChar c)
 {
@@ -320,39 +457,41 @@ class JsonValidator
 
 bool isJson(const QString &text) { return JsonValidator(text).valid(); }
 
-// One pass over `text`: drop JSON whitespace outside strings and, when `valueJson` is given, replace each
-// {value} outside strings by it; nullopt when a {value} sits inside a string literal.
-std::optional<QString> fillJson(const QString &text, const std::optional<QString> &valueJson)
+// Drop whitespace outside strings and fill named placeholders in the value positions.
+std::optional<QString> fillJson(const QString &text, const QHash<QString, QString> &values = {})
 {
     QString out;
     out.reserve(text.size());
     bool inString = false;
     bool escaped = false;
-    for (qsizetype i = 0; i < text.size();) {
-        const QChar c = text.at(i);
-        const bool placeholder = valueJson && QStringView(text).mid(i).startsWith(kPlaceholder);
-        if (inString) {
-            if (placeholder) {
-                return std::nullopt;
-            }
-            out.append(c);
-            if (escaped) {
-                escaped = false;
-            } else if (c == u'\\') {
-                escaped = true;
-            } else if (c == u'"') {
-                inString = false;
-            }
-            ++i;
-        } else if (placeholder) {
-            out.append(*valueJson);
-            i += kPlaceholder.size();
-        } else {
-            if (!jsonSpace(c)) {
+    const auto append = [&](const QString &literal) {
+        for (const QChar c : literal) {
+            if (inString) {
+                out.append(c);
+                if (escaped)
+                    escaped = false;
+                else if (c == u'\\')
+                    escaped = true;
+                else if (c == u'"')
+                    inString = false;
+            } else if (!jsonSpace(c)) {
                 out.append(c);
                 inString = c == u'"';
             }
-            ++i;
+        }
+    };
+    if (values.isEmpty()) {
+        append(text);
+        return out;
+    }
+    for (const auto &part : templateParts(text)) {
+        const auto value = part.isInput ? values.constFind(part.text) : values.cend();
+        if (value == values.cend()) {
+            append(part.isInput ? inputToken(part.text) : part.text);
+        } else {
+            if (inString)
+                return std::nullopt;
+            out.append(*value);
         }
     }
     return out;
@@ -403,22 +542,40 @@ bool blank(const QString &text)
                        [](QChar c) { return c.isSpace() || (c.unicode() >= 0x1C && c.unicode() <= 0x1F); });
 }
 
-CommandResult jsonCommand(const QJsonObject &props, const QString &value)
+QString jsonValue(const QString &value)
+{
+    return isJson(value) ? *fillJson(value) : jsonString(value);
+}
+
+CommandResult jsonCommand(const QJsonObject &props, const QHash<QString, QString> &values,
+                          const std::optional<QJsonObject> &frame)
 {
     const QString templ = prop(props, "commandTemplate", kPlaceholder);
     const QString effective = blank(templ) ? kPlaceholder : templ;
-    const auto shape = fillJson(effective, QStringLiteral("null"));
+    QHash<QString, QString> placeholders;
+    for (auto it = values.cbegin(); it != values.cend(); ++it)
+        placeholders.insert(it.key(), QStringLiteral("null"));
+    const auto shape = fillJson(effective, placeholders);
     if (!shape || !isJson(*shape)) {
         return CommandResult::failure(QCoreApplication::translate("fhmi", "JSON 模板无效: %1").arg(templ));
     }
-    const QString valueJson = isJson(value) ? *fillJson(value, std::nullopt) : jsonString(value);
     const QString option = prop(props, "commandJsonNewline", QStringLiteral("无")); // i18n: value
     const bool known = option == QLatin1String("\\r\\n") || option == QLatin1String("\\n")
                        || option == QLatin1String("\\r");
     EncodedCommand command;
     command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
                      props.value(QStringLiteral("commandEndpoint")).toString()};
-    command.bytes = (*fillJson(effective, valueJson) + (known ? newline(option) : QString())).toUtf8();
+    const QString body = *fillJson(effective, values);
+    if (frame) {
+        QString error;
+        const auto bytes = buildLineFrame(body, *frame, &error);
+        if (!bytes)
+            return CommandResult::failure(error);
+        command.bytes = *bytes;
+        command.textEncoding = frame->value(QStringLiteral("encoding")).toString().toLower();
+    } else {
+        command.bytes = (body + (known ? newline(option) : QString())).toUtf8();
+    }
     return CommandResult::ok(command);
 }
 
@@ -426,25 +583,67 @@ CommandResult jsonCommand(const QJsonObject &props, const QString &value)
 
 namespace {
 
-// Every function code option, in the order the designer lists them.
-const QList<QPair<QString, int>> &functionTable()
+struct ModbusFunction
 {
-    static const QList<QPair<QString, int>> table = {
-        {QStringLiteral("01 读线圈"), 0x01},       {QStringLiteral("02 读离散输入"), 0x02},   // i18n: value
-        {QStringLiteral("03 读保持寄存器"), 0x03}, {QStringLiteral("04 读输入寄存器"), 0x04}, // i18n: value
-        {QStringLiteral("05 写单线圈"), 0x05},     {QStringLiteral("06 写单寄存器"), 0x06},   // i18n: value
-        {QStringLiteral("16 写多个寄存器"), 0x10},                                            // i18n: value
+    QString name;
+    int code;
+    ModbusArgument argument;
+    int maximumCount = 0;
+    int maximumRegisters = 0;
+};
+
+// Keep the designer's options and the encoder's constraints together.
+const QList<ModbusFunction> &functionTable()
+{
+    static const QList<ModbusFunction> table = {
+        {QStringLiteral("01 读线圈"), 0x01, ModbusArgument::ReadCount, 2000},       // i18n: value
+        {QStringLiteral("02 读离散输入"), 0x02, ModbusArgument::ReadCount, 2000},   // i18n: value
+        {QStringLiteral("03 读保持寄存器"), 0x03, ModbusArgument::ReadCount, 125}, // i18n: value
+        {QStringLiteral("04 读输入寄存器"), 0x04, ModbusArgument::ReadCount, 125}, // i18n: value
+        {QStringLiteral("05 写单线圈"), 0x05, ModbusArgument::Coil},                // i18n: value
+        {QStringLiteral("06 写单寄存器"), 0x06, ModbusArgument::Register, 0, 1},    // i18n: value
+        {QStringLiteral("16 写多个寄存器"), 0x10, ModbusArgument::Register, 0, 2},  // i18n: value
     };
     return table;
+}
+
+struct RegisterType
+{
+    QString name;
+    int registerCount;
+    ModbusValueRange range;
+};
+
+const QList<RegisterType> &registerTypes()
+{
+    // The largest double below the midpoint that would round to infinity as a float.
+    static const double floatLimit = std::nextafter(0x1.ffffffp+127, 0.0);
+    static const QList<RegisterType> types = {
+        {QStringLiteral("uint16"), 1, {0, 65535}},
+        {QStringLiteral("int16"), 1, {-32768, 32767}},
+        {QStringLiteral("uint32"), 2, {0, 4294967295.0}},
+        {QStringLiteral("int32"), 2, {-2147483648.0, 2147483647.0}},
+        {QStringLiteral("float32"), 2, {-floatLimit, floatLimit}},
+    };
+    return types;
+}
+
+const RegisterType *registerType(QStringView name)
+{
+    for (const auto &type : registerTypes()) {
+        if (type.name == name)
+            return &type;
+    }
+    return nullptr;
 }
 
 } // namespace
 
 int functionCode(const QString &option)
 {
-    for (const auto &[name, code] : functionTable()) {
-        if (name == option) {
-            return code;
+    for (const auto &function : functionTable()) {
+        if (function.name == option) {
+            return function.code;
         }
     }
     return 0x06;
@@ -453,23 +652,52 @@ int functionCode(const QString &option)
 QStringList functionOptions(const QList<int> &codes)
 {
     QStringList out;
-    for (const auto &[name, code] : functionTable()) {
-        if (codes.isEmpty() || codes.contains(code)) {
-            out.append(name);
+    for (const auto &function : functionTable()) {
+        if (codes.isEmpty() || codes.contains(function.code)) {
+            out.append(function.name);
         }
     }
     return out;
 }
 
+ModbusFunctionSpec modbusFunctionSpec(qint64 code)
+{
+    for (const auto &function : functionTable()) {
+        if (function.code != code)
+            continue;
+        ModbusFunctionSpec spec{function.argument, function.maximumCount, {}};
+        for (const auto &type : registerTypes()) {
+            if (type.registerCount <= function.maximumRegisters)
+                spec.dataTypes.append(type.name);
+        }
+        return spec;
+    }
+    return {};
+}
+
+std::optional<ModbusValueRange> modbusValueRange(QStringView dataType)
+{
+    const auto *type = registerType(dataType);
+    return type ? std::optional(type->range) : std::nullopt;
+}
+
 QStringList dataTypes()
 {
-    return {QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"), QStringLiteral("int32"),
-            QStringLiteral("float32")};
+    QStringList options;
+    for (const auto &type : registerTypes())
+        options.append(type.name);
+    return options;
 }
 
 QStringList registerOrders()
 {
     return {QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")}; // i18n: value
+}
+
+bool usesRegisterOrder(QStringView dataType)
+{
+    const auto *type = registerType(dataType);
+    return type && type->registerCount > 1;
 }
 
 std::optional<QList<quint16>> modbusRegisters(const QString &value, const QString &dataType,
@@ -481,37 +709,29 @@ std::optional<QList<quint16>> modbusRegisters(const QString &value, const QStrin
         }
         return std::nullopt;
     };
-    if (!dataTypes().contains(dataType)) {
+    const auto *type = registerType(dataType);
+    if (!type) {
         return fail(QCoreApplication::translate("fhmi", "未知的 Modbus 数据类型: %1").arg(dataType));
     }
+    const auto &range = type->range;
     const QString invalid = QCoreApplication::translate("fhmi", "Modbus 值无效或超出 %1 的范围").arg(dataType);
     quint32 bits = 0;
     if (dataType == QLatin1String("float32")) {
         bool ok = false;
         const double d = value.trimmed().toDouble(&ok);
-        // Below this, a double rounds to a finite float; converting one beyond it is undefined.
-        if (!ok || !std::isfinite(d) || std::abs(d) >= 0x1.ffffffp+127) {
+        if (!ok || !std::isfinite(d) || d < range.minimum || d > range.maximum) {
             return fail(invalid);
         }
         const float number = float(d);
         std::memcpy(&bits, &number, sizeof bits);
     } else {
         const auto number = integerText(value);
-        struct Range
-        {
-            qint64 lo, hi;
-        };
-        static const QHash<QString, Range> ranges = {{QStringLiteral("uint16"), {0, 65535}},
-                                                     {QStringLiteral("int16"), {-32768, 32767}},
-                                                     {QStringLiteral("uint32"), {0, 4294967295LL}},
-                                                     {QStringLiteral("int32"), {-2147483648LL, 2147483647LL}}};
-        const Range range = ranges.value(dataType);
-        if (!number || *number < range.lo || *number > range.hi) {
+        if (!number || *number < range.minimum || *number > range.maximum) {
             return fail(invalid);
         }
         bits = quint32(*number);
     }
-    if (dataType == QLatin1String("uint16") || dataType == QLatin1String("int16")) {
+    if (type->registerCount == 1) {
         return QList<quint16>{quint16(bits)};
     }
     QList<quint16> registers{quint16(bits >> 16), quint16(bits)};
@@ -540,19 +760,18 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
         }
         return std::nullopt;
     };
-    if (slave < 1 || slave > 247 || address < 0 || address > 65535) {
+    if (!validModbusAddress(slave, address)) {
         return fail(QCoreApplication::translate("fhmi", "Modbus 从站地址或寄存器地址超出范围"));
     }
-    bool valid = false;
-    if (func == 1 || func == 2) {
-        valid = value >= 1 && value <= 2000;
-    } else if (func == 3 || func == 4) {
-        valid = value >= 1 && value <= 125;
-    } else if (func == 5) {
-        valid = value == 0 || value == 0xFF00;
-    } else if (func == 6) {
-        valid = value >= 0 && value <= 65535;
+    const auto spec = modbusFunctionSpec(func);
+    if (spec.argument == ModbusArgument::Coil) {
+        if (value == 0 || value == 1 || value == 0xFF00)
+            return ModbusRequest{int(slave), int(func), int(address), value == 0 ? 0 : 0xFF00, {}};
+        return fail(QCoreApplication::translate("fhmi", "Modbus 线圈值应为 0 或 1"));
     }
+    const bool valid = spec.argument == ModbusArgument::ReadCount
+                           ? value >= 1 && value <= spec.maximumCount && address + value <= 65536
+                           : func == 0x06 && value >= 0 && value <= 65535;
     if (!valid) {
         return fail(QCoreApplication::translate("fhmi", "Modbus 值或读取数量超出功能码允许范围"));
     }
@@ -568,17 +787,18 @@ std::optional<ModbusRequest> modbusRequest(qint64 slave, qint64 func, qint64 add
         }
         return std::nullopt;
     };
-    if (func != 0x06 && func != 0x10) {
+    const auto spec = modbusFunctionSpec(func);
+    if (spec.argument != ModbusArgument::Register) {
         const auto number = integerText(value);
         if (!number) {
             return fail(QCoreApplication::translate("fhmi", "Modbus 地址和值必须是整数"));
         }
         return modbusRequest(slave, func, address, *number, error);
     }
-    if (slave < 1 || slave > 247 || address < 0 || address > 65535) {
+    if (!validModbusAddress(slave, address)) {
         return fail(QCoreApplication::translate("fhmi", "Modbus 从站地址或寄存器地址超出范围"));
     }
-    if (func == 0x06 && dataType != QLatin1String("uint16") && dataType != QLatin1String("int16")) {
+    if (func == 0x06 && !spec.dataTypes.contains(dataType)) {
         return fail(QCoreApplication::translate("fhmi", "32 位数据占两个寄存器，请用 16 写多个寄存器"));
     }
     const auto registers = modbusRegisters(value, dataType, regOrder, error);
@@ -644,45 +864,405 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
 {
     const auto slave = integerProp(props, "mbSlave", 1);
     const auto address = integerProp(props, "mbAddress", 0);
-    const auto amount = integerProp(props, "mbValue", 1);
-    if (!slave || !address || (!value && !amount)) {
+    if (!slave || !address) {
         return CommandResult::failure(QCoreApplication::translate("fhmi", "Modbus 地址和值必须是整数"));
     }
     const int func = functionCode(prop(props, "mbFunc", QStringLiteral("06 写单寄存器"))); // i18n: value
     QString error;
-    const auto request = modbusRequest(*slave, func, *address, value ? *value : QString::number(*amount),
+    const auto configured = props.value(QStringLiteral("mbValue"));
+    const QString amount = configured.isBool() ? QString::number(configured.toBool())
+                                               : prop(props, "mbValue", QStringLiteral("1"));
+    const auto request = modbusRequest(*slave, func, *address, value.value_or(amount),
                                        prop(props, "mbDataType", QStringLiteral("uint16")),
                                        prop(props, "mbRegOrder", registerOrders().first()), &error);
     if (!request) {
         return CommandResult::failure(error);
     }
-    EncodedCommand command;
-    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
-                     props.value(QStringLiteral("commandEndpoint")).toString()};
-    command.kind = EncodedCommand::Kind::Modbus;
-    command.modbus = *request;
-    return CommandResult::ok(command);
+    return CommandResult::ok(modbusCommand(props, *request));
+}
+
+static int modbusSwitchFunction(const QJsonObject &props)
+{
+    // Projects without mbArea write a coil, just like projects that select the coil explicitly.
+    return prop(props, "mbArea", {}) == ModbusArea::HoldingRegisters ? 0x06 : 0x05;
+}
+
+CommandResult modbusSwitchFromProperties(const QJsonObject &props, bool checked)
+{
+    QJsonObject write = props;
+    write.insert(QStringLiteral("mbFunc"), functionOptions({modbusSwitchFunction(props)}).first());
+    write.insert(QStringLiteral("mbDataType"), QStringLiteral("uint16"));
+    return modbusFromProperties(write, QString::number(checked ? 1 : 0));
+}
+
+RouteFilter sendRouteFilter(const QJsonObject &props, QStringView widgetType)
+{
+    switch (commandMode(prop(props, "commandMode", {}))) {
+    case Mode::Can: return RouteTransport::Can;
+    case Mode::S7: return RouteTransport::S7;
+    case Mode::Modbus:
+        return ModbusDestination{int(integerProp(props, "mbSlave", 1).value_or(1)),
+            widgetType == QLatin1String("ToggleSwitch") ? modbusSwitchFunction(props)
+                                                       : functionCode(prop(props, "mbFunc", {}))};
+    default: return RouteTransport::Bytes;
+    }
+}
+
+RouteFilter sendRouteFilter(const EncodedCommand &command)
+{
+    switch (command.kind) {
+    case EncodedCommand::Kind::S7: return RouteTransport::S7;
+    case EncodedCommand::Kind::Can:
+    case EncodedCommand::Kind::CanFrame: return RouteTransport::Can;
+    case EncodedCommand::Kind::Modbus: return command.modbus.destination();
+    case EncodedCommand::Kind::Bytes: return RouteTransport::Bytes;
+    }
+    return RouteTransport::Bytes;
+}
+
+InputListMode inputListMode(const QJsonObject &props)
+{
+    switch (commandMode(prop(props, "commandMode", {}))) {
+    case Mode::Text: return InputListMode::Text;
+    case Mode::Hex: return InputListMode::Hex;
+    case Mode::Json: return InputListMode::Json;
+    case Mode::Can: return InputListMode::Can;
+    case Mode::Modbus:
+        return functionCode(prop(props, "mbFunc", {})) == 0x10 ? InputListMode::Registers : InputListMode::ModbusValue;
+    case Mode::S7: return InputListMode::S7Value;
+    case Mode::Unknown: break;
+    }
+    return InputListMode::None;
+}
+
+bool usesTemplate(InputListMode mode)
+{
+    return mode == InputListMode::Text || mode == InputListMode::Json || mode == InputListMode::Hex ||
+           mode == InputListMode::Can;
+}
+
+QString singleInputProperty(InputListMode mode)
+{
+    if (mode == InputListMode::ModbusValue)
+        return QStringLiteral("mbInputId");
+    if (mode == InputListMode::S7Value)
+        return QStringLiteral("s7InputId");
+    return {};
+}
+
+QString defaultInputVariable(qsizetype row)
+{
+    return QStringLiteral("p%1").arg(row + 1);
+}
+
+bool validInputVariable(const QString &name)
+{
+    static const QRegularExpression pattern(QRegularExpression::anchoredPattern(kInputVariable));
+    return pattern.match(name).hasMatch();
+}
+
+QList<TemplatePart> templateParts(const QString &text)
+{
+    static const QRegularExpression token(QStringLiteral("\\{(") + kInputVariable + QStringLiteral(")\\}"));
+    QList<TemplatePart> parts;
+    qsizetype offset = 0;
+    auto matches = token.globalMatch(text);
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        if (match.capturedStart() > offset)
+            parts.append({text.mid(offset, match.capturedStart() - offset)});
+        parts.append({match.captured(1), true});
+        offset = match.capturedEnd();
+    }
+    if (offset < text.size())
+        parts.append({text.mid(offset)});
+    return parts;
+}
+
+QString inputToken(const QString &variable)
+{
+    return u'{' + variable + u'}';
+}
+
+QStringList hexDataTypes()
+{
+    return QStringList{kRawHex, QStringLiteral("uint8"), QStringLiteral("int8")} + dataTypes();
+}
+
+namespace {
+
+QJsonValue inputListProperty(const QJsonObject &props)
+{
+    if (inputListMode(props) == InputListMode::Json && !props.value(QStringLiteral("jsonUseInputs")).toBool())
+        return QJsonValue(QJsonValue::Undefined);
+    const auto current = props.value(QStringLiteral("commandInputs"));
+    if (current.isUndefined() && inputListMode(props) == InputListMode::Registers)
+        return props.value(QStringLiteral("mbWriteInputs"));
+    return current;
+}
+
+} // namespace
+
+QList<CommandInput> commandInputs(const QJsonObject &props)
+{
+    const auto mode = inputListMode(props);
+    if (mode == InputListMode::None)
+        return {};
+    if (const QString key = singleInputProperty(mode); !key.isEmpty()) {
+        const QString id = props.value(key).toString();
+        return id.isEmpty() ? QList<CommandInput>{} : QList<CommandInput>{{id, {}, {}}};
+    }
+    QList<CommandInput> inputs;
+    for (const QJsonValue &entry : inputListProperty(props).toArray()) {
+        const auto row = entry.toObject();
+        const QString variable = row.value(QStringLiteral("variable")).toString().trimmed();
+        inputs.append({row.value(QStringLiteral("inputId")).toString(),
+                       row.value(QStringLiteral("dataType")).toString(QStringLiteral("uint16")),
+                       variable.isEmpty() ? defaultInputVariable(inputs.size()) : variable});
+    }
+    return inputs;
+}
+
+bool usesFrameFields(const QJsonObject &props)
+{
+    return FrameTemplates::isBinarySend(props.value(QStringLiteral("commandMode")).toString()) &&
+           props.value(FrameTemplates::SendFieldsEnabled).toBool();
+}
+
+QStringList commandInputIds(const QJsonObject &props)
+{
+    QStringList ids;
+    if (usesFrameFields(props)) {
+        for (const auto &entry : props.value(FrameTemplates::SendBindings).toArray()) {
+            const QString id = entry.toObject().value(QStringLiteral("inputId")).toString();
+            if (!id.isEmpty())
+                ids.append(id);
+        }
+    } else {
+        for (const auto &input : commandInputs(props))
+            ids.append(input.inputId);
+    }
+    return ids;
+}
+
+void mapInputIds(QJsonObject &properties, const std::function<QString(const QString &)> &map)
+{
+    const auto update = [&](QJsonObject &object, const QString &key) {
+        const auto before = object.value(key).toString();
+        if (before.isEmpty())
+            return;
+        const auto after = map(before);
+        if (before != after)
+            object.insert(key, after);
+    };
+    for (const auto &key : {QStringLiteral("s7InputId"), QStringLiteral("mbInputId")})
+        update(properties, key);
+    for (const auto &key : {QStringLiteral("commandInputs"), QStringLiteral("mbWriteInputs"), FrameTemplates::SendBindings}) {
+        const auto original = properties.value(key).toArray();
+        auto rows = original;
+        for (qsizetype row = 0; row < rows.size(); ++row) {
+            const auto before = rows.at(row).toObject();
+            auto input = before;
+            update(input, QStringLiteral("inputId"));
+            if (input != before)
+                rows[row] = input;
+        }
+        if (rows != original)
+            properties.insert(key, rows);
+    }
+}
+
+QString InputValue::text() const
+{
+    return value.isValid() && !value.isNull() ? dataPointCommandText(value) : QString();
+}
+
+namespace {
+
+std::optional<CommandInputValue> readInput(const CommandInput &input, const InputValueReader &read)
+{
+    const auto value = read && !input.inputId.isEmpty() ? read(input.inputId) : std::nullopt;
+    if (!value)
+        return std::nullopt;
+    return CommandInputValue{value->title.isEmpty() ? widgetIdForInput(input.inputId) : value->title, input.dataType,
+                             value->text(), std::nullopt};
+}
+
+CommandResult missingInput(qsizetype row, const CommandInput &input)
+{
+    if (const auto name = pointNameForInput(input.inputId); !name.isEmpty())
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "第 %1 行的工程数据点 %2 没有有效值")
+                                          .arg(row + 1).arg(name));
+    return CommandResult::failure(QCoreApplication::translate("fhmi", "输入列表第 %1 行没有可用的输入框（%2）")
+                                      .arg(row + 1).arg(widgetIdForInput(input.inputId)));
+}
+
+CommandResult modbusWriteFromInputs(const QJsonObject &props, const QList<CommandInput> &inputs,
+                                    const InputValueReader &inputValue)
+{
+    const auto tr = [](const char *source) { return QCoreApplication::translate("fhmi", source); };
+    const auto slave = integerProp(props, "mbSlave", 1);
+    const auto address = integerProp(props, "mbAddress", 0);
+    if (!slave || !address || !validModbusAddress(*slave, *address))
+        return CommandResult::failure(tr("Modbus 从站地址或寄存器地址超出范围"));
+
+    const QString order = prop(props, "mbRegOrder", registerOrders().first());
+    QList<quint16> registers;
+    QList<CommandInputValue> values;
+    for (const auto &input : inputs) {
+        auto value = readInput(input, inputValue);
+        if (!value)
+            return missingInput(values.size(), input);
+        QString error;
+        value->value = value->value.trimmed();
+        const auto words = modbusRegisters(value->value, input.dataType, order, &error);
+        if (!words)
+            return CommandResult::failure(tr("%1 的写入值无效：%2").arg(value->name, error));
+        value->address = int(*address + registers.size());
+        values.append(*value);
+        registers.append(*words);
+        if (registers.size() > 123)
+            return CommandResult::failure(tr("FC16 每帧最多写入 123 个寄存器"));
+        if (*address + registers.size() > 65536)
+            return CommandResult::failure(tr("Modbus 从站地址或寄存器地址超出范围"));
+    }
+    auto command = modbusCommand(props, {int(*slave), 0x10, int(*address), int(registers.size()), registers});
+    command.inputValues = std::move(values);
+    return CommandResult::ok(std::move(command));
+}
+
+} // namespace
+
+CommandResult switchFromProperties(const QJsonObject &props, bool checked, const QJsonObject &frameTemplates)
+{
+    const QString mode = prop(props, "commandMode", {});
+    if (mode == QLatin1String("Modbus"))
+        return modbusSwitchFromProperties(props, checked);
+    if (mode == QLatin1String("S7")) {
+        const auto config = props.value(QStringLiteral("s7Command")).toObject();
+        const auto value = config.value(QLatin1String(checked ? "onValue" : "offValue"));
+        return s7FromProperties(props, value.isUndefined() ? QString::number(checked ? 1 : 0) : value.toVariant().toString());
+    }
+    const QString value = prop(props, checked ? "onCommand" : "offCommand", {}).trimmed();
+    return value.isEmpty() ? CommandResult{} : encode(props, value, nullptr, frameTemplates);
+}
+
+QList<SelectionOption> selectionOptions(const QJsonArray &rows)
+{
+    QList<SelectionOption> options;
+    for (const auto &row : rows) {
+        const auto entry = row.toObject();
+        const QString label = entry.value(QStringLiteral("label")).toString().trimmed();
+        if (!label.isEmpty())
+            options.append({label, entry.value(QStringLiteral("value")).toString().trimmed()});
+    }
+    return options;
+}
+
+CommandResult selectionFromProperties(const QJsonObject &props, const SelectionOption &option,
+                                      const QJsonObject &frameTemplates)
+{
+    return encode(props, option.value.isEmpty() ? option.label : option.value, nullptr, frameTemplates);
 }
 
 namespace {
 
 // HEX mode's command text: the template with {value} in, packed per dataType and byteOrder for a numeric type.
-std::optional<QString> hexCommandText(const QJsonObject &props, const QString &templ, const QString &value)
+std::optional<QString> hexCommandText(const QJsonObject &props, const QString &templ, const QString &value,
+                                      BinaryFrameLayout *layout)
 {
-    const QString type = prop(props, "dataType", QStringLiteral("HEX字符串")); // i18n: value
-    if (type == QStringLiteral("HEX字符串")) {                                 // i18n: value
-        return templ.contains(QStringLiteral("{value}")) ? QString(templ).replace(QStringLiteral("{value}"), value)
-                                                          : templ;
+    const QString type = prop(props, "dataType", kRawHex);
+    QString replacement = value;
+    if (type != kRawHex) {
+        const auto payload = packedPayload(value, type, bigEndian(props));
+        if (!payload)
+            return std::nullopt;
+        replacement = QString::fromLatin1(payload->toHex());
     }
-    const bool be = prop(props, "byteOrder", QStringLiteral("大端(BE)")) == QStringLiteral("大端(BE)"); // i18n: value
-    const auto payload = packedPayload(value, type, be);
-    if (!payload) {
-        return std::nullopt;
+    const QString text = QString(templ).replace(kPlaceholder, replacement);
+    if (layout) {
+        QByteArray separate;
+        QList<qsizetype> sizes;
+        for (const auto &part : templateParts(templ)) {
+            const auto bytes = parseHex(part.isInput ? replacement : part.text);
+            if (!bytes)
+                return text;
+            separate += *bytes;
+            sizes.append(bytes->size());
+        }
+        // A literal nibble can share a byte with {value} in a pasted legacy template.
+        if (parseHex(text) == separate)
+            layout->partSizes = sizes;
     }
-    return QString(templ).replace(QStringLiteral("{value}"), QString::fromLatin1(payload->toHex()));
+    return text;
 }
 
-CommandResult canCommand(const QJsonObject &props, const QString &templ, const QString &value)
+CommandResult bytesCommand(const QJsonObject &props, const QByteArray &bytes)
+{
+    EncodedCommand command;
+    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
+                     props.value(QStringLiteral("commandEndpoint")).toString()};
+    command.bytes = bytes;
+    return CommandResult::ok(std::move(command));
+}
+
+CommandResult textCommand(const QJsonObject &props, const QString &text, const std::optional<QJsonObject> &frame)
+{
+    if (!frame)
+        return bytesCommand(props, (text + newline(prop(props, "commandNewline", QStringLiteral("\\r\\n")))).toUtf8());
+    QString error;
+    const auto bytes = buildLineFrame(text, *frame, &error);
+    if (!bytes)
+        return CommandResult::failure(error);
+    auto result = bytesCommand(props, *bytes);
+    result.command->textEncoding = frame->value(QStringLiteral("encoding")).toString().toLower();
+    return result;
+}
+
+std::optional<QByteArray> assembleBytes(const QJsonObject &props, const QByteArray &body,
+                                       bool can, const std::optional<QJsonObject> &shared, QString *error,
+                                       BinaryFrameLayout *layout)
+{
+    auto *frameLayout = layout ? &layout->frame : nullptr;
+    if (shared)
+        return FrameTemplates::buildSendFrame(body, *shared, error, frameLayout);
+    const auto header = parseHex(can ? QString() : prop(props, "frameHeader", {}));
+    const auto footer = parseHex(can ? QString() : prop(props, "frameTail", {}));
+    if (!header || !footer) {
+        *error = hexError();
+        return std::nullopt;
+    }
+    const auto settings = props.value(QStringLiteral("txFrame"));
+    if (!settings.isUndefined() && !settings.isObject()) {
+        *error = QCoreApplication::translate("fhmi", "无效的发送帧设置");
+        return std::nullopt;
+    }
+    return buildHexFrame(body, *header, *footer, settings.toObject(), error, frameLayout);
+}
+
+CommandResult hexCommand(const QJsonObject &props, const std::optional<QByteArray> &body, BinaryFrameLayout *layout,
+                         const std::optional<QJsonObject> &shared)
+{
+    if (!body)
+        return CommandResult::failure(hexError());
+    QString error;
+    const auto frame = assembleBytes(props, *body, false, shared, &error, layout);
+    if (!frame)
+        return CommandResult::failure(error);
+    auto result = bytesCommand(props, *frame);
+    if (shared)
+        result.command->framingNotice = FrameTemplates::sendMatchNotice(*frame, *shared);
+    return result;
+}
+
+QString canHexError(const QString &text)
+{
+    return QCoreApplication::translate("fhmi", "CAN 数据不是有效的 HEX: %1").arg(text);
+}
+
+CommandResult canCommand(const QJsonObject &props, const QString &assignments,
+                         std::optional<QByteArray> payload, const QString &payloadError, BinaryFrameLayout *layout,
+                         const std::optional<QJsonObject> &shared, bool sendOnce = false)
 {
     if (!props.value(QStringLiteral("commandEndpoint")).toString().isEmpty())
         return CommandResult::failure(QCoreApplication::translate("fhmi", "当前模式不支持子通道"));
@@ -696,63 +1276,367 @@ CommandResult canCommand(const QJsonObject &props, const QString &templ, const Q
     }
     const QJsonValue fd = props.value(QStringLiteral("canFd"));
     can.fd = fd.isBool() ? fd.toBool() : fd.toDouble() != 0;
-    can.cycleMs = int(std::clamp<qint64>(integerProp(props, "canCycle", 0).value_or(0), 0, 60000));
-    can.assignments = templ.contains(QStringLiteral("{value}")) ? QString(templ).replace(QStringLiteral("{value}"), value)
-                                                                : templ;
+    const int cycle = int(std::clamp<qint64>(integerProp(props, "canCycle", 0).value_or(0), 0, 60000));
+    if (sendOnce || cycle > 0)
+        can.cycleMs = sendOnce ? 0 : cycle;
     // Whether the message has signals is up to each link; the raw bytes are ready for the links where it has none.
-    if (const auto text = hexCommandText(props, templ, value)) {
-        can.payload = parseHex(*text);
-        if (!can.payload) {
-            can.payloadError = QCoreApplication::translate("fhmi", "CAN 数据不是有效的 HEX: %1").arg(*text);
-        }
-    } else {
-        can.payloadError = QCoreApplication::translate("fhmi", "数值无效或超出数据类型范围");
+    can.assignments = assignments;
+    can.payloadError = payloadError;
+    if (payload)
+        can.payload = assembleBytes(props, *payload, true, shared, &can.payloadError, layout);
+    if (shared && can.payload)
+        command.framingNotice = FrameTemplates::sendMatchNotice(*can.payload, *shared);
+    if (shared && !FrameTemplates::requiredFields(*shared).isEmpty()) {
+        if (!can.payload)
+            return CommandResult::failure(can.payloadError);
+        can.rawOnly = true;
     }
-    return CommandResult::ok(command);
+    return CommandResult::ok(std::move(command));
+}
+
+std::optional<QByteArray> packFrameField(const HexField &field, const QString &value)
+{
+    if (field.type == QLatin1String("ASCII")) {
+        if (value.size() > field.length || std::any_of(value.begin(), value.end(), [](QChar ch) {
+                return ch.isNull() || ch.unicode() > 0x7f;
+            }))
+            return std::nullopt;
+        return value.toLatin1().leftJustified(field.length, '\0');
+    }
+    if (field.type == QLatin1String("HEX")) {
+        const auto bytes = parseHex(value);
+        return bytes && bytes->size() == field.length ? bytes : std::nullopt;
+    }
+    return packedPayload(value, field.type, !field.littleEndian);
+}
+
+enum class FieldEncoding { Send, CheckBindings, DefaultsSample };
+
+CommandResult mappedFrame(const QJsonObject &props, const QJsonValue &bindings, const InputValueReader &read,
+                          BinaryFrameLayout *layout, const std::optional<QJsonObject> &shared, bool sendOnce,
+                          FieldEncoding encoding = FieldEncoding::Send)
+{
+    const auto tr = [](const char *s) { return QCoreApplication::translate("fhmi", s); };
+    if (!shared)
+        return CommandResult::failure(tr("请选择包含字段的 HEX 帧模板"));
+    QString error;
+    const auto format = hexFrameConfig(*shared, &error);
+    if (!format)
+        return CommandResult::failure(error);
+    const auto overrides = bindings.toArray();
+    QSet<QString> overridden;
+    for (const auto &row : overrides)
+        overridden.insert(row.toObject().value(QStringLiteral("field")).toString());
+    const auto defaults = shared->value(FrameTemplates::SendDefaults);
+    if (!defaults.isUndefined() && !defaults.isObject())
+        return CommandResult::failure(tr("HEX 模板的发送默认值必须是按字段名设置的对象"));
+    const auto valuesByName = defaults.toObject();
+    const auto required = encoding == FieldEncoding::DefaultsSample ? QStringList{} : FrameTemplates::requiredFields(*shared);
+    const auto missing = [&](const QString &name) {
+        return CommandResult::failure(tr("必填字段 %1 缺少发送值").arg(name));
+    };
+    for (const auto &name : required) {
+        if (!overridden.contains(name) && valuesByName.value(name).toString().trimmed().isEmpty())
+            return missing(name);
+    }
+    QJsonArray rows;
+    for (auto it = valuesByName.constBegin(); it != valuesByName.constEnd(); ++it) {
+        if (!overridden.contains(it.key()))
+            rows.append(QJsonObject{{QStringLiteral("field"), it.key()}, {QStringLiteral("value"), it.value()}});
+    }
+    for (const auto &row : overrides)
+        rows.append(row);
+    if (rows.isEmpty())
+        return CommandResult::failure(tr("请为至少一个模板字段设置发送值"));
+
+    const auto frame = format->layout();
+    const auto lengthOffset = frame.lengthOffset >= 0 ? frame.lengthOffset - frame.headerSize : 0;
+    if (lengthOffset < 0)
+        return CommandResult::failure(tr("长度字段位置须在帧头之后、数据末尾以内"));
+    const auto maximum = format->maxFrameLength - frame.headerSize - frame.checksumSize - frame.footerSize;
+    qsizetype size = lengthOffset + frame.lengthSize;
+    if (format->fixedLength > 0)
+        size = format->fixedLength - frame.headerSize - frame.checksumSize - frame.footerSize;
+    else
+        for (const auto &field : format->fields)
+            size = std::max(size, qsizetype(field.offset) + field.length);
+    if (format->fixedLength == 0)
+        size = std::max(size, format->identificationEnd() - frame.headerSize);
+
+    const bool can = prop(props, "commandMode", {}) == QLatin1String("CAN");
+    if (size < 0 || size > maximum)
+        return CommandResult::failure(tr("模板字段超出可发送的帧长度"));
+    QByteArray data(size, '\0');
+    QByteArray written(size, '\0');
+    const auto fields = FrameTemplates::writableFields(*format);
+    QHash<QString, InputValue> samples;
+    QList<CommandInputValue> values;
+    QList<BinaryFrameLayout::FieldSpan> spans;
+    for (const auto &row : rows) {
+        const auto binding = row.toObject();
+        const auto name = binding.value(QStringLiteral("field")).toString();
+        const auto field = std::find_if(fields.begin(), fields.end(), [&](const HexField &item) { return item.name == name; });
+        if (field == fields.end())
+            return CommandResult::failure(tr("模板字段 %1 不存在或不可写").arg(name));
+        if (std::any_of(written.cbegin() + field->offset, written.cbegin() + field->offset + field->length,
+                        [](char byte) { return byte != 0; }))
+            return CommandResult::failure(tr("模板字段 %1 与另一发送字段的字节范围重叠").arg(name));
+        std::fill_n(written.begin() + field->offset, field->length, '\1');
+
+        const auto inputId = binding.value(QStringLiteral("inputId")).toString();
+        const auto fixed = binding.value(QStringLiteral("value"));
+        const bool needsValue = required.contains(name);
+        if (inputId.isEmpty() && !fixed.isString() && !needsValue)
+            return CommandResult::failure(tr("请为字段 %1 设置值来源").arg(name));
+        if (!inputId.isEmpty() && encoding == FieldEncoding::CheckBindings)
+            continue;
+        QString value = fixed.toString();
+        if (!inputId.isEmpty()) {
+            if (!samples.contains(inputId)) {
+                const auto input = read ? read(inputId) : std::nullopt;
+                if (!input)
+                    return needsValue ? missing(name)
+                                      : CommandResult::failure(tr("字段 %1 的输入来源 %2 没有有效值").arg(name, inputId));
+                samples.insert(inputId, *input);
+            }
+            value = samples.value(inputId).text();
+        }
+        if (needsValue && value.trimmed().isEmpty())
+            return missing(name);
+        const auto bytes = packFrameField(*field, value);
+        if (!bytes)
+            return CommandResult::failure(tr("字段 %1 无法按 %2 编码，请检查输入值").arg(name, translated(field->type)));
+        data.replace(field->offset, field->length, *bytes);
+        values.append({name, field->type, value, std::nullopt});
+        spans.append({name, frame.headerSize + field->offset, field->length});
+    }
+    FrameTemplates::fillUnassignedMatchBytes(data, written, *format);
+    // The protocol stores field offsets after the frame header, including the computed length slot.
+    // Remove that slot from the body so the shared frame builder can insert its length and append the checksum.
+    if (frame.lengthSize)
+        data.remove(lengthOffset, frame.lengthSize);
+    auto result = can ? canCommand(props, {}, std::move(data), {}, layout, shared, sendOnce)
+                      : hexCommand(props, std::move(data), layout, shared);
+    if (!result.command)
+        return result;
+    if (can) {
+        auto &command = result.command->can;
+        if (!command.payload)
+            return CommandResult::failure(command.payloadError);
+        if (command.payload->size() > (command.fd ? 64 : 8))
+            return CommandResult::failure(tr("发送数据超出 CAN 帧的载荷上限"));
+        command.rawOnly = true;
+    }
+    if (layout)
+        layout->fields = std::move(spans);
+    result.command->inputValues = std::move(values);
+    return result;
+}
+
+CommandResult templateFromInputs(const QJsonObject &props, InputListMode mode, const QList<CommandInput> &inputs,
+                                 const InputValueReader &read, BinaryFrameLayout *layout,
+                                 const std::optional<QJsonObject> &shared)
+{
+    const auto tr = [](const char *source) { return QCoreApplication::translate("fhmi", source); };
+    QHash<QString, qsizetype> variables;
+    for (qsizetype row = 0; row < inputs.size(); ++row) {
+        const QString &name = inputs.at(row).variable;
+        if (!validInputVariable(name) || variables.contains(name))
+            return CommandResult::failure(tr("输入列表第 %1 行的模板变量无效或重复").arg(row + 1));
+        variables.insert(name, row);
+    }
+
+    const bool textOnly = mode == InputListMode::Text;
+    const bool json = mode == InputListMode::Json;
+    const bool can = mode == InputListMode::Can;
+    const bool packBytes = mode == InputListMode::Hex || can;
+    const bool be = bigEndian(props);
+    const QString templ = prop(props, "commandTemplate", kPlaceholder);
+    static const QRegularExpression signalSeparators(QStringLiteral("[=,;\\r\\n]"));
+    QString text;
+    QHash<QString, QString> jsonValues;
+    QByteArray bytes;
+    QString hexProblem;
+    const auto appendLiteral = [&](const QString &literal) {
+        text += literal;
+        if (packBytes && hexProblem.isEmpty()) {
+            if (const auto fragment = parseHex(literal)) {
+                bytes += *fragment;
+                if (layout)
+                    layout->partSizes.append(fragment->size());
+            } else {
+                hexProblem = can ? canHexError(literal) : hexError();
+            }
+        }
+    };
+    QList<std::optional<CommandInputValue>> snapshots(inputs.size());
+    bool hasInput = false;
+    for (const auto &part : templateParts(templ)) {
+        if (!part.isInput) {
+            appendLiteral(part.text);
+            continue;
+        }
+        hasInput = true;
+        const auto row = variables.constFind(part.text);
+        if (row == variables.cend())
+            return CommandResult::failure(tr("发送模板中的变量 %1 未在输入列表中定义").arg(inputToken(part.text)));
+        const auto &input = inputs.at(*row);
+        auto &snapshot = snapshots[*row];
+        if (!snapshot) {
+            snapshot = readInput(input, read);
+            if (!snapshot)
+                return missingInput(*row, input);
+        }
+        // CAN assignments can name several signals in one frame. Input values fill individual fields.
+        if (can && snapshot->value.contains(signalSeparators))
+            return CommandResult::failure(tr("%1 的输入值包含 CAN 信号分隔符").arg(snapshot->name));
+
+        if (json) {
+            if (!jsonValues.contains(part.text))
+                jsonValues.insert(part.text, jsonValue(snapshot->value));
+            continue;
+        }
+        text += snapshot->value;
+        if (packBytes && hexProblem.isEmpty()) {
+            const auto packed = input.dataType == kRawHex ? parseHex(snapshot->value)
+                                                         : packedPayload(snapshot->value, input.dataType, be);
+            if (packed) {
+                bytes += *packed;
+                if (layout)
+                    layout->partSizes.append(packed->size());
+            } else {
+                hexProblem = tr("%1 无法按 %2 编码，请检查输入值").arg(snapshot->name, translated(input.dataType));
+            }
+        }
+    }
+    if (!hasInput)
+        return CommandResult::failure(tr("发送模板至少需要引用一个输入列表变量，如 {p1}"));
+
+    CommandResult result;
+    if (textOnly)
+        result = textCommand(props, text, shared);
+    else if (json)
+        result = jsonCommand(props, jsonValues, shared);
+    else if (can)
+        result = canCommand(props, text, hexProblem.isEmpty() ? std::optional(bytes) : std::nullopt, hexProblem, layout,
+                            shared, true);
+    else if (hexProblem.isEmpty())
+        result = hexCommand(props, bytes, layout, shared);
+    else
+        return CommandResult::failure(hexProblem);
+    if (result.command) {
+        for (const auto &snapshot : snapshots)
+            if (snapshot)
+                result.command->inputValues.append(*snapshot);
+    }
+    return result;
 }
 
 } // namespace
 
-CommandResult encode(const QJsonObject &props, const QString &value)
+QString frameFieldConfigurationProblem(const QJsonObject &props, const QJsonObject &frameTemplates)
 {
-    const QString mode = prop(props, "commandMode", QStringLiteral("文本")); // i18n: value
-    const QString templ = prop(props, "commandTemplate", QStringLiteral("{value}"));
-    const QString header = prop(props, "frameHeader", QString());
-    const QString tail = prop(props, "frameTail", QString());
+    return usesFrameFields(props) ? mappedFrame(props, props.value(FrameTemplates::SendBindings), {}, nullptr,
+        FrameTemplates::sendSettings(frameTemplates, props), true, FieldEncoding::CheckBindings).error : QString();
+}
 
-    if (mode == QLatin1String("S7")) return s7FromProperties(props, value);
-    if (mode == QLatin1String("Modbus")) {
+CommandResult frameFromTemplateDefaults(const QJsonObject &settings)
+{
+    const QJsonObject properties{{QStringLiteral("commandMode"), QStringLiteral("HEX")}};
+    return mappedFrame(properties, QJsonArray{}, {}, nullptr, settings, true, FieldEncoding::DefaultsSample);
+}
+
+CommandResult encode(const QJsonObject &props, const QString &value, BinaryFrameLayout *layout,
+                     const QJsonObject &frameTemplates)
+{
+    if (layout)
+        *layout = {};
+    const QString selectedMode = prop(props, "commandMode", {});
+    const auto mode = commandMode(selectedMode);
+    const QString templ = prop(props, "commandTemplate", kPlaceholder);
+    const auto shared = FrameTemplates::sendSettings(frameTemplates, props);
+    const auto field = props.value(FrameTemplates::SendValueField).toString();
+    if ((mode == Mode::Hex || mode == Mode::Can) && !field.isEmpty())
+        return mappedFrame(props, QJsonArray{QJsonObject{{QStringLiteral("field"), field}, {QStringLiteral("value"), value}}},
+                           {}, layout, shared, false);
+
+    if (mode == Mode::S7)
+        return s7FromProperties(props, value);
+    if (mode == Mode::Modbus) {
         return modbusFromProperties(props, value);
     }
-    if (mode == QLatin1String("JSON")) {
-        return jsonCommand(props, value);
+    if (mode == Mode::Json) {
+        return jsonCommand(props, {{QStringLiteral("value"), jsonValue(value)}}, shared);
     }
-    if (mode == QLatin1String("CAN")) {
-        return canCommand(props, templ, value);
+    if (mode == Mode::Hex || mode == Mode::Can) {
+        const auto hexText = hexCommandText(props, templ, value, layout);
+        const QString numericError = QCoreApplication::translate("fhmi", "数值无效或超出数据类型范围");
+        if (mode == Mode::Can) {
+            auto payload = hexText ? parseHex(*hexText) : std::nullopt;
+            const QString error = payload ? QString() : hexText ? canHexError(*hexText) : numericError;
+            return canCommand(props, QString(templ).replace(kPlaceholder, value), std::move(payload), error, layout, shared);
+        }
+        return hexText ? hexCommand(props, parseHex(*hexText), layout, shared) : CommandResult::failure(numericError);
     }
 
-    EncodedCommand command;
-    command.route = {props.value(QStringLiteral("commandTargetId")).toString(),
-                     props.value(QStringLiteral("commandEndpoint")).toString()};
-    if (mode == QLatin1String("HEX")) {
-        const auto hexText = hexCommandText(props, templ, value);
-        if (!hexText) {
-            return CommandResult::failure(QCoreApplication::translate("fhmi", "数值无效或超出数据类型范围"));
+    if (mode != Mode::Text)
+        return CommandResult::failure(QCoreApplication::translate("fhmi", "未知发送模式：%1").arg(selectedMode));
+    return textCommand(props, QString(templ).replace(kPlaceholder, value), shared);
+}
+
+CommandResult buttonFromProperties(const QJsonObject &props, const InputValueReader &inputValue,
+                                   BinaryFrameLayout *layout, const QJsonObject &frameTemplates)
+{
+    if (layout)
+        *layout = {};
+    if (usesFrameFields(props))
+        return mappedFrame(props, props.value(FrameTemplates::SendBindings), inputValue, layout,
+                           FrameTemplates::sendSettings(frameTemplates, props), true);
+    const auto listMode = inputListMode(props);
+    if (!singleInputProperty(listMode).isEmpty()) {
+        const auto inputs = commandInputs(props);
+        std::optional<CommandInputValue> input;
+        if (!inputs.isEmpty()) {
+            input = readInput(inputs.first(), inputValue);
+            if (!input)
+                return missingInput(0, inputs.first());
         }
-        const auto frame = hexFrame(*hexText, header, tail);
-        if (!frame) {
-            return CommandResult::failure(hexError());
+        const auto value = input ? std::optional(input->value.trimmed()) : std::nullopt;
+        QJsonObject command = props;
+        if (listMode == InputListMode::ModbusValue && !command.contains(QStringLiteral("mbFunc")))
+            command.insert(QStringLiteral("mbFunc"), functionOptions({0x03}).first());
+        auto result = listMode == InputListMode::S7Value ? s7FromProperties(props, value)
+                                                        : modbusFromProperties(command, value);
+        if (input && result.command)
+            result.command->inputValues.append(*input);
+        return result;
+    }
+    if (listMode != InputListMode::None) {
+        const auto list = inputListProperty(props);
+        if (!list.isUndefined() && !list.isArray())
+            return CommandResult::failure(QCoreApplication::translate("fhmi", "输入列表必须是数组"));
+        const auto inputs = commandInputs(props);
+        if (!inputs.isEmpty()) {
+            QHash<QString, InputValue> values;
+            const InputValueReader read = [&values, &inputValue](const QString &id) -> std::optional<InputValue> {
+                const auto cached = values.constFind(id);
+                if (cached != values.cend())
+                    return *cached;
+                const auto value = inputValue ? inputValue(id) : std::nullopt;
+                if (value)
+                    values.insert(id, *value);
+                return value;
+            };
+            return listMode == InputListMode::Registers ? modbusWriteFromInputs(props, inputs, read)
+                                                        : templateFromInputs(props, listMode, inputs, read, layout,
+                                                                             FrameTemplates::sendSettings(frameTemplates, props));
         }
-        command.bytes = *frame;
-        return CommandResult::ok(command);
     }
 
-    if (mode != QStringLiteral("文本")) return CommandResult::failure(QCoreApplication::translate("fhmi", "未知发送模式：%1").arg(mode)); // i18n: value
-    QString text = templ.contains(QStringLiteral("{value}")) ? QString(templ).replace(QStringLiteral("{value}"), value)
-                                                             : templ;
-    text += newline(prop(props, "commandNewline", QStringLiteral("\\r\\n")));
-    command.bytes = text.toUtf8();
-    return CommandResult::ok(command);
+    if (listMode == InputListMode::Registers)
+        return modbusFromProperties(props);
+    const QString value = prop(props, "command", {}).trimmed();
+    return value.isEmpty() ? CommandResult{} : encode(props, value, layout, frameTemplates);
 }
 
 } // namespace fhmi::CommandEncoder

@@ -1,10 +1,19 @@
 #pragma once
 
+#include "core/data_source.h"
+
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
 
+#include <algorithm>
+#include <optional>
+
 namespace fhmi {
+
+namespace LinkParser {
+struct Format;
+}
 
 // A .uidp project: the same JSON document PyQt UI Designer reads and writes.
 //
@@ -34,6 +43,7 @@ class Project
     QJsonObject serial;
     QJsonObject bitProfiles;
     QJsonObject logic;
+    QJsonObject frameTemplates;
     QString filePath; // empty until saved or loaded
 
     static QString formatVersion(const QJsonArray &widgets, const QJsonObject &logic = {});
@@ -58,7 +68,29 @@ class Project
 
     QString parserType() const;
     QJsonObject parserConfig() const;
+    LinkParser::Format receiveFormat() const;
+    LinkParser::Format linkReceiveFormat(const QJsonObject &properties) const;
+    QStringList linkReceiveTemplateIds(const QJsonObject &properties) const;
+    QString linkReceiveTemplateId(const QJsonObject &properties) const;
 };
+
+// The configured connections that can serve a route, regardless of current connection state.
+QList<QPair<QString, QString>> routeConnections(const QJsonArray &widgets, const RouteFilter &filter,
+                                              bool needsEndpoint = false,
+                                              const QString &projectParser = QStringLiteral("line"));
+
+enum class RoutePurpose { Send, DataPoint };
+
+// Resolves a configured route. An empty automatic route can remain unresolved while drafting.
+std::optional<DataRoute> resolveProjectRoute(const QJsonArray &widgets, const QString &projectParser,
+                                             const RouteFilter &filter, DataRoute route, RoutePurpose purpose,
+                                             QString *error = nullptr);
+QString modbusRouteDescription(const QJsonObject &card, const Project &project);
+
+inline int chartCurveCount(const QJsonObject &properties)
+{
+    return std::clamp(properties.value(QStringLiteral("curveCount")).toInt(1), 1, 8);
+}
 
 // Walk a widget tree (depth first); return false from the visitor to stop.
 template <typename Visitor> bool visitWidgets(const QJsonArray &widgets, Visitor &&visit)

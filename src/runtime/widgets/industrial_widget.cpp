@@ -1,8 +1,8 @@
 #include "runtime/widgets/industrial_widget.h"
+#include "runtime/ui_helpers.h"
 
 #include "core/bit_profile.h"
 #include "core/i18n.h"
-#include "core/industrial_catalog.h"
 #include "runtime/widgets/display_widgets.h"
 #include <FluentQtWidgets/Theme.h>
 #include <QtCore/QJsonArray>
@@ -53,8 +53,7 @@ QJsonObject IndustrialWidget::bitProfile() const
 void IndustrialWidget::setBitProfiles(const QJsonObject &profiles)
 {
     m_bitProfiles = profiles;
-    if (!isLive() &&
-        (typeName() == QLatin1String("StatusWordPanel") || typeName() == QLatin1String("DigitalTimingChart"))) {
+    if (!isLive() && typeName() == QLatin1String("StatusWordPanel")) {
         setReading(prop("value").toVariant());
         return;
     }
@@ -69,7 +68,8 @@ void IndustrialWidget::setBitProfiles(const QJsonObject &profiles)
 void IndustrialWidget::setReading(const QVariant &value)
 {
     m_reading = bindingFloat(value);
-    if (typeName() == QLatin1String("BmsCellMatrix")) {
+    const QString mode = m_definition.value(QStringLiteral("mode")).toString();
+    if (mode == QLatin1String("cells")) {
         m_cells.clear();
         m_reading.reset();
         if (value.typeId() == QMetaType::QVariantList) {
@@ -90,7 +90,7 @@ void IndustrialWidget::setReading(const QVariant &value)
             else
                 m_cells.clear();
         }
-    } else if (typeName() == QLatin1String("DcPowerSupply")) {
+    } else if (mode == QLatin1String("supply")) {
         m_supply.clear();
         m_reading.reset();
         if (value.typeId() == QMetaType::QVariantMap) {
@@ -117,54 +117,38 @@ void IndustrialWidget::setReading(const QVariant &value)
 void IndustrialWidget::updateReadingDescription()
 {
     const QString description = readingText();
-    setToolTip(flag("showToolTip") ? description : QString());
+    if (flag("showToolTip"))
+        fluentToolTip(this, description);
+    else
+        setToolTip(QString());
     setAccessibleName(text("title"));
     setAccessibleDescription(description);
 }
 
 void IndustrialWidget::validateReading()
 {
-    const auto mode = m_definition.value(QStringLiteral("mode")).toString();
-    if (m_reading && (typeName() == QLatin1String("BmsCellMatrix") || typeName() == QLatin1String("DcPowerSupply")))
+    if (!m_reading)
         return;
-    if (m_reading &&
-        (typeName() == QLatin1String("StatusWordPanel") || typeName() == QLatin1String("DigitalTimingChart"))) {
-        const double maximum = bitProfile().value(QStringLiteral("width")).toInt(8) == 16 ? 65535 : 255;
-        if (*m_reading < 0 || *m_reading > maximum || std::floor(*m_reading) != *m_reading)
+    const QString mode = m_definition.value(QStringLiteral("mode")).toString();
+    const double reading = *m_reading;
+    if (mode == QLatin1String("encoder")) {
+        if (std::abs(reading) > 9007199254740991.0 || std::floor(reading) != reading)
             m_reading.reset();
         return;
     }
-    if (m_reading && typeName() == QLatin1String("RotaryEncoder")) {
-        if (std::abs(*m_reading) > 9007199254740991.0 || std::floor(*m_reading) != *m_reading)
-            m_reading.reset();
-        return;
-    }
-    if (m_reading && mode != QLatin1String("number")) {
-        const double maximum =
-            mode == QLatin1String("byte") || mode == QLatin1String("flags")
-                ? m_definition.value(QStringLiteral("maximum")).toDouble(mode == QLatin1String("byte") ? 255 : 15)
-            : mode == QLatin1String("bits") ? 7
-                                            : m_definition.value(QStringLiteral("states")).toArray().size() - 1;
-        if (*m_reading < 0 || *m_reading > maximum || std::floor(*m_reading) != *m_reading) {
-            m_reading.reset();
-        }
-    }
-    if (m_reading &&
-        ((typeName() == QLatin1String("Motor") && text("feedbackMode") == QStringLiteral("运行位") && // i18n: value
-          (*m_reading != 0 && *m_reading != 1)) ||
-         (typeName() == QLatin1String("Cylinder") &&
-          text("feedbackMode") == QStringLiteral("端位状态") && // i18n: value
-          (*m_reading != 0 && *m_reading != 1 && *m_reading != 2)))) {
+    int maximum = m_capabilities.sampleMaximum;
+    if (mode == QLatin1String("word"))
+        maximum = bitProfile().value(QStringLiteral("width")).toInt(8) == 16 ? 65535 : 255;
+    if (maximum >= 0 && (reading < 0 || reading > maximum || std::floor(reading) != reading))
         m_reading.reset();
-    }
 }
 
 void IndustrialWidget::apply()
 {
+    m_capabilities = industrialCapabilities(typeName(), text("feedbackMode"));
     if (!isLive()) {
-        setReading((typeName() == QLatin1String("BmsCellMatrix") || typeName() == QLatin1String("DcPowerSupply"))
-                       ? m_definition.value(QStringLiteral("value")).toVariant()
-                       : prop("value").toVariant());
+        setReading(m_capabilities.structuredInput ? m_definition.value(QStringLiteral("value")).toVariant()
+                                                  : prop("value").toVariant());
     }
     const bool hadReading = m_reading.has_value();
     validateReading();
@@ -176,19 +160,21 @@ void IndustrialWidget::apply()
     update();
 }
 
+void IndustrialWidget::bindingStatusChanged(BindingStatus status)
+{
+    if (status == BindingStatus::Stale)
+        m_previousEncoder.reset();
+    updateReadingDescription();
+    updateAnimation();
+    update();
+}
+
 void IndustrialWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
     const bool boolean = value.typeId() == QMetaType::Bool;
-    setReading(boolean && (typeName() == QLatin1String("RotaryEncoder") ||
-                           typeName() == QLatin1String("StatusWordPanel") ||
-                           typeName() == QLatin1String("DigitalTimingChart"))
+    setReading(boolean && (typeName() == QLatin1String("RotaryEncoder") || typeName() == QLatin1String("StatusWordPanel"))
                    ? QVariant()
                    : value);
-    if (typeName() == QLatin1String("DigitalTimingChart")) {
-        m_timingSamples.append(m_reading ? std::optional<quint32>(quint32(*m_reading)) : std::nullopt);
-        while (m_timingSamples.size() > 32)
-            m_timingSamples.removeFirst();
-    }
     if (typeName() == QLatin1String("RotaryEncoder")) {
         m_encoderDirection = m_reading && m_previousEncoder ? std::optional<int>(*m_reading > *m_previousEncoder   ? 1
                                                                                  : *m_reading < *m_previousEncoder ? -1
@@ -231,7 +217,7 @@ double IndustrialWidget::animationRate() const
     if (!active()) {
         return 0;
     }
-    if (typeName() == QLatin1String("Motor") && text("feedbackMode") == QStringLiteral("运行位")) { // i18n: value
+    if (typeName() == QLatin1String("Motor") && !m_capabilities.numericReadout) {
         return 0.55;
     }
     const auto motion = m_definition.value(QStringLiteral("motion")).toString();
@@ -251,7 +237,8 @@ bool IndustrialWidget::moving() const { return animationRate() != 0; }
 
 void IndustrialWidget::updateAnimation()
 {
-    if (isVisible() && !visibleRegion().isEmpty() && isLive() && context()->isActive() && moving()) {
+    if (isVisible() && !visibleRegion().isEmpty() && isLive() && context()->isActive() &&
+        bindingStatus() != BindingStatus::Stale && moving()) {
         if (!m_timer.isActive()) {
             m_animationClock.start();
             m_timer.start();
@@ -266,7 +253,6 @@ void IndustrialWidget::onAttached()
     m_reading.reset();
     m_cells.clear();
     m_supply.clear();
-    m_timingSamples.clear();
     m_previousEncoder.reset();
     m_encoderDirection.reset();
     setBitProfiles(context()->bitProfiles());
@@ -295,10 +281,16 @@ void IndustrialWidget::hideEvent(QHideEvent *event)
 
 QString IndustrialWidget::readingText() const
 {
+    const QString sample = sampleText();
+    return bindingStatus() == BindingStatus::Stale ? tr("旧值 · %1").arg(sample) : sample;
+}
+
+QString IndustrialWidget::sampleText() const
+{
     if (!m_reading) {
         return QString::fromUtf8("— · ") + (m_dataError ? tr("数据异常") : tr("待数据"));
     }
-    if (typeName() == QLatin1String("StatusWordPanel") || typeName() == QLatin1String("DigitalTimingChart"))
+    if (typeName() == QLatin1String("StatusWordPanel"))
         return QStringLiteral("0x%1").arg(
             QString::number(quint32(*m_reading), 16)
                 .rightJustified(bitProfile().value(QStringLiteral("width")).toInt() / 4, QLatin1Char('0'))
@@ -357,18 +349,8 @@ QString IndustrialWidget::readingText() const
         }
         return active.join(english ? QStringLiteral(", ") : QString::fromUtf8("、")); // i18n: ignore
     }
-    if (m_definition.value(QStringLiteral("mode")).toString() != QLatin1String("number")) {
-        const auto states =
-            m_definition.value(language() == kLanguageEnglish ? QStringLiteral("statesEn") : QStringLiteral("states"))
-                .toArray();
-        return states.at(int(*m_reading)).toString();
-    }
-    if (typeName() == QLatin1String("Motor") && text("feedbackMode") == QStringLiteral("运行位")) { // i18n: value
-        return *m_reading == 1 ? tr("运行") : tr("停止");
-    }
-    if (typeName() == QLatin1String("Cylinder") && text("feedbackMode") == QStringLiteral("端位状态")) { // i18n: value
-        return *m_reading == 0 ? tr("两端未到位") : *m_reading == 1 ? tr("缩回") : tr("伸出");
-    }
+    if (!m_capabilities.states.isEmpty())
+        return m_capabilities.states.at(int(*m_reading));
     QString reading = QLocale::c().toString(*m_reading, 'f', std::clamp(integer("decimals"), 0, 6));
     if (!text("unit").isEmpty()) {
         reading += QLatin1Char(' ') + text("unit");
@@ -410,8 +392,7 @@ QHash<QString, double> IndustrialWidget::svgDrivers() const
                        ? double(std::clamp((static_cast<long double>(value) - lo) / (static_cast<long double>(hi) - lo),
                                            0.0L, 1.0L))
                        : 0;
-    const bool cylinderEnds =
-        typeName() == QLatin1String("Cylinder") && text("feedbackMode") == QStringLiteral("端位状态"); // i18n: value
+    const bool cylinderEnds = typeName() == QLatin1String("Cylinder") && !m_capabilities.numericReadout;
     if (cylinderEnds) {
         level = known && value == 2 ? 1 : 0;
     }
@@ -461,7 +442,7 @@ bool IndustrialWidget::limitsEnabled() const
     const auto low = bindingFloat(prop("lowLimit").toVariant());
     const auto high = bindingFloat(prop("highLimit").toVariant());
     return m_definition.value(QStringLiteral("limits")).toArray().size() == 2 && flag("showLimits") && low && high &&
-           *low < *high;
+           industrialLimitsValid(*low, *high);
 }
 
 QByteArray IndustrialWidget::renderedSvg() const
@@ -507,7 +488,7 @@ QByteArray IndustrialWidget::renderedSvg() const
     const QString reading = !known ? QString::fromUtf8("—")
                             : (m_definition.value(QStringLiteral("mode")).toString() == QLatin1String("byte") ||
                                m_definition.value(QStringLiteral("mode")).toString() == QLatin1String("flags"))
-                                ? readingText()
+                                ? sampleText()
                                 : QLocale::c().toString(value, 'f', std::clamp(integer("decimals"), 0, 6));
     replace(QStringLiteral("reading"), reading.toHtmlEscaped());
     replace(QStringLiteral("degrees"), QString::number(known ? value : 0, 'g', 17));
@@ -577,47 +558,6 @@ QByteArray IndustrialWidget::renderedSvg() const
                            {QStringLiteral("lit"),
                             known && (quint32(value) & (1u << i)) ? QStringLiteral("1") : QStringLiteral("0")}});
         }
-    } else if (typeName() == QLatin1String("DigitalTimingChart")) {
-        const auto profile = bitProfile();
-        const int width = profile.value(QStringLiteral("width")).toInt();
-        const double h = 144.0 / width, step = 228.0 / 32;
-        const auto bits = profile.value(QStringLiteral("bits")).toArray();
-        const auto samples = !isLive() && m_timingSamples.isEmpty() && m_reading
-                                 ? QList<std::optional<quint32>>{quint32(*m_reading)}
-                                 : m_timingSamples;
-        for (int bit = 0; bit < width; ++bit) {
-            QString trace;
-            bool previous = false;
-            for (int i = 0; i < samples.size(); ++i) {
-                const auto sample = samples.at(i);
-                if (!sample) {
-                    previous = false;
-                    continue;
-                }
-                const double x = 82 + (32 - samples.size() + i) * step, y = (*sample & (1u << bit)) ? .2 * h : .8 * h;
-                if (!previous)
-                    trace += QStringLiteral("M %1 %2 ").arg(n(x), n(y));
-                else
-                    trace += QStringLiteral("V %1 ").arg(n(y));
-                trace += QStringLiteral("H %1 ").arg(n(x + step));
-                previous = true;
-            }
-            if (trace.isEmpty())
-                trace = QStringLiteral("M 82 %1").arg(n(.8 * h));
-            const auto entry = bits.at(bit).toObject();
-            items += item({{QStringLiteral("y"), n(8 + bit * h)},
-                           {QStringLiteral("h"), n(h)},
-                           {QStringLiteral("labelY"), n(.70 * h)},
-                           {QStringLiteral("fontSize"),
-                            n(nameSize(entry.value(QStringLiteral("name")).toString(), std::min(11.0, .77 * h), 70))},
-                           {QStringLiteral("name"), entry.value(QStringLiteral("name"))
-                                                        .toString()
-                                                        .toHtmlEscaped()
-                                                        .replace(QLatin1Char('{'), QStringLiteral("&#123;"))
-                                                        .replace(QLatin1Char('}'), QStringLiteral("&#125;"))},
-                           {QStringLiteral("color"), entry.value(QStringLiteral("color")).toString()},
-                           {QStringLiteral("trace"), trace}});
-        }
     } else if (typeName() == QLatin1String("BmsCellMatrix") && known) {
         const int count = m_cells.size(), columns = std::min(count, int(std::ceil(std::sqrt(2.0 * count)))),
                   rows = (count + columns - 1) / columns;
@@ -658,11 +598,12 @@ void IndustrialWidget::paintEvent(QPaintEvent *)
     painter.setPen(isDarkTheme() ? QColor("#e8edf4") : QColor("#273549"));
     const bool titleVisible = flag("showTitle");
     const bool valueVisible = flag("showValue");
+    const bool stale = bindingStatus() == BindingStatus::Stale;
     const bool centered = text("textLayout") == QStringLiteral("中心偏移"); // i18n: value
     const qreal lineHeight = std::max(22, painter.fontMetrics().height());
     const qreal gap = 2;
     const qreal top = !centered && titleVisible ? lineHeight + gap : 0;
-    const qreal bottom = !centered && valueVisible ? lineHeight + gap : 0;
+    const qreal bottom = stale || (!centered && valueVisible) ? lineHeight + gap : 0;
     const QRectF available(4, 4 + top, width() - 8, std::max<qreal>(1, height() - 8 - top - bottom));
     QRectF graphic = available;
     QSvgRenderer renderer(renderedSvg());
@@ -670,7 +611,11 @@ void IndustrialWidget::paintEvent(QPaintEvent *)
         QSizeF size = renderer.viewBoxF().size();
         size.scale(available.size(), Qt::KeepAspectRatio);
         graphic = QRectF(available.center() - QPointF(size.width() / 2, size.height() / 2), size);
+        painter.save();
+        if (stale)
+            painter.setOpacity(0.6);
         renderer.render(&painter, graphic);
+        painter.restore();
     }
     if (titleVisible) {
         const QRectF titleRect =
@@ -682,7 +627,12 @@ void IndustrialWidget::paintEvent(QPaintEvent *)
         painter.drawText(titleRect, Qt::AlignCenter,
                          painter.fontMetrics().elidedText(title, Qt::ElideRight, int(titleRect.width())));
     }
-    if (valueVisible) {
+    if (stale) {
+        const QRectF statusRect(4, graphic.bottom() + gap, width() - 8, lineHeight);
+        const QString status = valueVisible ? readingText() : tr("数据已过期");
+        painter.drawText(statusRect, Qt::AlignCenter,
+                         painter.fontMetrics().elidedText(status, Qt::ElideRight, int(statusRect.width())));
+    } else if (valueVisible) {
         const QRectF valueRect =
             centered ? QRectF(4 + integer("valueOffsetX"), height() / 2.0 + integer("valueOffsetY") - lineHeight / 2,
                               width() - 8, lineHeight)

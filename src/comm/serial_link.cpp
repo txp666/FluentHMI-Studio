@@ -12,6 +12,12 @@
 
 namespace fhmi {
 
+namespace {
+
+const QStringList kVirtualPorts{QStringLiteral("virtual:A"), QStringLiteral("virtual:B")};
+
+} // namespace
+
 #ifdef Q_OS_LINUX
 namespace {
 
@@ -33,7 +39,7 @@ QString permissionHint(const QString &portName)
 } // namespace
 #endif
 
-SerialLink::SerialLink(QObject *parent) : Link(parent)
+SerialLink::SerialLink(QObject *parent, VirtualSerialPair *virtualPair) : Link(parent), m_virtualPair(virtualPair)
 {
     connect(&m_port, &QSerialPort::readyRead, this, &SerialLink::onReadyRead);
     connect(&m_port, &QSerialPort::errorOccurred, this, &SerialLink::onError);
@@ -41,6 +47,7 @@ SerialLink::SerialLink(QObject *parent) : Link(parent)
 
 SerialLink::~SerialLink()
 {
+    releaseVirtualPort();
     m_port.close();
 }
 
@@ -61,10 +68,42 @@ QStringList SerialLink::availablePorts()
     return names;
 }
 
+QStringList SerialLink::selectablePorts()
+{
+    return availablePorts() + kVirtualPorts;
+}
+
+QString SerialLink::portLabel(const QString &name)
+{
+    const auto side = kVirtualPorts.indexOf(name);
+    return side < 0 ? name : tr("虚拟串口 %1").arg(side == 0 ? QLatin1Char('A') : QLatin1Char('B'));
+}
+
+bool SerialLink::isVirtualPort(const QString &name)
+{
+    return kVirtualPorts.contains(name);
+}
+
 bool SerialLink::open(const SerialSettings &settings, QString *error)
 {
     close();
     m_settings = settings;
+    const auto side = kVirtualPorts.indexOf(settings.portName);
+    if (side >= 0) {
+        if (!m_virtualPair || m_virtualPair->m_sides.at(side)) {
+            if (error)
+                *error = m_virtualPair ? tr("%1 已由另一张连接卡片打开").arg(portLabel(settings.portName))
+                                       : tr("虚拟串口需要工程内的连接卡片");
+            return false;
+        }
+        m_virtualSide = int(side);
+        m_virtualPair->m_sides.at(side) = this;
+        resetDefaultParser();
+        emit connectedChanged(true);
+        if (auto *peer = virtualPeer())
+            emit peer->canSendChanged();
+        return true;
+    }
     m_port.setPortName(settings.portName);
     m_port.setBaudRate(settings.baudRate);
 
@@ -117,26 +156,77 @@ bool SerialLink::open(const SerialSettings &settings, QString *error)
 
 void SerialLink::close()
 {
-    if (!m_port.isOpen()) {
+    if (!isConnected()) {
         return;
     }
-    m_port.close();
+    if (m_virtualSide >= 0)
+        releaseVirtualPort();
+    else
+        m_port.close();
     resetDefaultParser();
     emit connectedChanged(false);
 }
 
 QString SerialLink::description() const
 {
+    if (isVirtualPort(m_settings.portName))
+        return portLabel(m_settings.portName);
     return QStringLiteral("%1 @ %2").arg(m_settings.portName).arg(m_settings.baudRate);
 }
 
 bool SerialLink::isConnected() const
 {
-    return m_port.isOpen();
+    return (m_virtualSide >= 0 && m_virtualPair) || m_port.isOpen();
+}
+
+bool SerialLink::canSend() const
+{
+    return m_virtualSide >= 0 ? virtualPeer() != nullptr : m_port.isOpen();
+}
+
+quint64 SerialLink::sendSession(const QString &endpoint) const
+{
+    if (m_virtualSide < 0)
+        return Link::sendSession(endpoint);
+    const auto *peer = virtualPeer();
+    // Both ends use the same monotonically increasing generation counter.
+    return peer && endpoint.isEmpty() ? qMax(Link::sendSession({}), peer->Link::sendSession({})) : 0;
+}
+
+SerialLink *SerialLink::virtualPeer() const
+{
+    return m_virtualPair && m_virtualSide >= 0 ? m_virtualPair->m_sides.at(1 - m_virtualSide).data() : nullptr;
+}
+
+void SerialLink::releaseVirtualPort()
+{
+    if (!m_virtualPair || m_virtualSide < 0)
+        return;
+    const QPointer<SerialLink> peer = virtualPeer();
+    m_virtualPair->m_sides.at(m_virtualSide).clear();
+    m_virtualSide = -1;
+    if (peer) {
+        peer->resetDefaultParser();
+        if (peer)
+            emit peer->canSendChanged();
+    }
 }
 
 qint64 SerialLink::writeBytes(const QByteArray &bytes)
 {
+    if (m_virtualSide >= 0) {
+        auto *peer = virtualPeer();
+        if (!peer)
+            return -1;
+        // Deliver after the write returns, like readyRead on a physical port.
+        const QPointer<SerialLink> sender(this);
+        const auto session = sendSession({});
+        QMetaObject::invokeMethod(peer, [peer, session, sender, bytes] {
+            if (sender && sender->sendSession({}) == session && peer->sendSession({}) == session)
+                peer->deliver(peer->defaultParser(), bytes);
+        }, Qt::QueuedConnection);
+        return bytes.size();
+    }
     return m_port.write(bytes);
 }
 

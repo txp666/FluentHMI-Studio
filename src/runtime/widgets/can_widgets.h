@@ -43,6 +43,7 @@ class CanConfigCardWidget : public LinkCardBase
 
   private:
     CanSettings settings() const;
+    void resetAdapterOptions(bool restoreDefaults);
     void resetSamplePointOptions();
     // Shows the rows and enables the fields of the selected adapter.
     void updateAdapterUi();
@@ -90,9 +91,9 @@ class CanConfigCardWidget : public LinkCardBase
     FluentQt::CaptionLabel *m_hint = nullptr;   // SocketCAN's ip command, or ZLG's effective bit timing
     FluentQt::CaptionLabel *m_counters = nullptr;
     QPointer<QWidget> m_hintCaption; // its label in the grid, rebuilt by apply()
+    QPointer<QWidget> m_targetCaption;
     QTimer *m_statusTimer = nullptr;
     CanLink *m_link = nullptr;
-    QString m_shownStatus;
     QString m_connectionError;
 };
 
@@ -106,13 +107,16 @@ class CanMonitorWidget : public HmiWidget
     bool saveCsv(const QString &path, QString *error = nullptr);
 
   protected:
+    void showEvent(QShowEvent *event) override;
     void apply() override;
     void onAttached() override;
     void onDetached() override;
 
   private:
-    // A row is as tall as the lines of its data; only rows whose line count changed are resized.
-    void fitRowHeights();
+    void refreshRows();
+    void scheduleViewLayout();
+    // A row is as tall as the lines of its data. True when visible rows were resized.
+    bool fitRowHeights();
     // Reads the filter row into the proxy; a filter that does not parse filters nothing and says why.
     void updateFilter();
     void updateDisplayMode();
@@ -139,7 +143,9 @@ class CanMonitorWidget : public HmiWidget
     QPointer<QFileDialog> m_captureDialog;
     CanMonitorModel *m_model = nullptr;
     CanMonitorProxy *m_sorted = nullptr;
-    bool m_heightsQueued = false;
+    bool m_viewLayoutPending = false;
+    bool m_viewLayoutRunning = false;
+    bool m_followLogTail = true;
     QTimer *m_refresh = nullptr;
 };
 
