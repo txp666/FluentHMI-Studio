@@ -1,0 +1,372 @@
+{
+  "version": "1.3",
+  "appName": "17.9 同连接多种HEX帧",
+  "canvas": {
+    "width": 1120,
+    "height": 744,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line"
+  },
+  "widgets": [
+    {
+      "id": "lessonTitle",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 16,
+        "w": 1072,
+        "h": 38
+      },
+      "properties": {
+        "text": "17.9 同连接多种HEX帧",
+        "fontSize": 24,
+        "bold": true
+      }
+    },
+    {
+      "id": "lessonSteps",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 60,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "先连右侧，再连左侧。试单帧、三帧同发、分两次发一帧和坏 CRC，观察左侧是否交付。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "hmi",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 24,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "上位机 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39181,
+        "defaultMode": "客户端",
+        "receiveFrameTemplateId": "sample-frame"
+      }
+    },
+    {
+      "id": "device",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 568,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "模拟设备 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39181,
+        "defaultMode": "服务端",
+        "receiveFrameTemplateId": "sample-frame"
+      }
+    },
+    {
+      "id": "rpm",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 302,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "0x10 · 转速",
+        "value": "—",
+        "unit": "rpm",
+        "decimals": "0",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "HEX字节提取",
+        "sourceCardId": "hmi",
+        "frameHeader": "AA 55 03 10",
+        "byteOffset": 0,
+        "dataType": "uint16",
+        "byteOrder": "小端(LE)"
+      }
+    },
+    {
+      "id": "temperature",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 294,
+        "y": 302,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "0x30 · 温度",
+        "value": "—",
+        "unit": "°C",
+        "decimals": "1",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "HEX字节提取",
+        "sourceCardId": "hmi",
+        "frameHeader": "AA 55 03 30",
+        "byteOffset": 0,
+        "dataType": "int16",
+        "byteOrder": "大端(BE)",
+        "expression": "value * 0.1"
+      }
+    },
+    {
+      "id": "pressure",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 386,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "0x20 · 压力",
+        "value": "—",
+        "unit": "bar",
+        "decimals": "2",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "HEX字节提取",
+        "sourceCardId": "hmi",
+        "frameHeader": "AA 55 04 20",
+        "byteOffset": 0,
+        "dataType": "uint16",
+        "byteOrder": "大端(BE)",
+        "expression": "value * 0.01"
+      }
+    },
+    {
+      "id": "state",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 294,
+        "y": 386,
+        "w": 258,
+        "h": 70
+      },
+      "properties": {
+        "title": "0x20 · 状态",
+        "value": "—",
+        "unit": "",
+        "decimals": "0",
+        "fontSize": 20,
+        "displayStyle": "状态徽标",
+        "displayFormat": "枚举",
+        "textList": "1=运行|#107c10\n2=故障|#d13438"
+      },
+      "binding": {
+        "parseMode": "HEX字节提取",
+        "sourceCardId": "hmi",
+        "frameHeader": "AA 55 04 20",
+        "byteOffset": 2,
+        "dataType": "uint8",
+        "byteOrder": "大端(BE)"
+      }
+    },
+    {
+      "id": "sendA",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 302,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发 0x10 转速帧",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameTemplateId": "sample-frame",
+        "command": "10 DC 05",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendB",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 302,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发 0x20 压力状态帧",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameTemplateId": "sample-frame",
+        "command": "20 00 FA 02",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendC",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 350,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发 0x30 温度帧",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameTemplateId": "sample-frame",
+        "command": "30 FF 83",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendBatch",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 350,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "一次写入三种帧",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "command": "AA 55 04 20 01 77 01 E4 AA 55 03 30 00 C3 9C AA 55 03 10 FC 08 48",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendBad",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 398,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发坏 CRC 的转速帧",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "command": "AA 55 03 10 E7 03 B8",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendPart1",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 442,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "发上半帧",
+        "command": "AA 55 03 10",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "sendPart2",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 442,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "补齐下半帧",
+        "command": "DC 05 C5",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "dataType": "HEX字符串"
+      }
+    },
+    {
+      "id": "hmiLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 24,
+        "y": 490,
+        "w": 528,
+        "h": 230
+      },
+      "properties": {
+        "title": "上位机收发报文",
+        "sourceCardId": "hmi"
+      }
+    },
+    {
+      "id": "deviceLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 568,
+        "y": 490,
+        "w": 528,
+        "h": 230
+      },
+      "properties": {
+        "title": "模拟设备收发报文",
+        "sourceCardId": "device"
+      }
+    }
+  ],
+  "frameTemplates": {
+    "sample-frame": {
+      "name": "共用长度与 CRC8",
+      "parser": "hex",
+      "parserConfig": {
+        "header": "AA 55",
+        "footer": "",
+        "lengthOffset": 2,
+        "lengthSize": 1,
+        "lengthCovers": "数据",
+        "checksum": "CRC8",
+        "checksumStart": 2,
+        "fields": [
+          [
+            "length",
+            0,
+            1,
+            "uint8"
+          ],
+          [
+            "cmd",
+            1,
+            1,
+            "uint8"
+          ]
+        ]
+      },
+      "sample": "AA 55 03 10 DC 05 C5"
+    }
+  }
+}

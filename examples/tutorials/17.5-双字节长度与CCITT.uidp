@@ -1,0 +1,306 @@
+{
+  "version": "1.3",
+  "appName": "17.5 双字节长度与CCITT",
+  "canvas": {
+    "width": 1120,
+    "height": 740,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line"
+  },
+  "widgets": [
+    {
+      "id": "lessonTitle",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 16,
+        "w": 1072,
+        "h": 38
+      },
+      "properties": {
+        "text": "17.5 双字节长度与CCITT",
+        "fontSize": 24,
+        "bold": true
+      }
+    },
+    {
+      "id": "lessonSteps",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 60,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "先连右侧，再连左侧。两项填完后点按钮，在收包试解析中检查整帧长度和 CRC16-CCITT。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "hmi",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 24,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "上位机 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39178,
+        "defaultMode": "客户端",
+        "receiveFrameTemplateId": "sample-frame"
+      }
+    },
+    {
+      "id": "device",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 568,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "模拟设备 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39178,
+        "defaultMode": "服务端",
+        "receiveFrameTemplateId": "sample-frame"
+      }
+    },
+    {
+      "id": "positionInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 24,
+        "y": 298,
+        "w": 257,
+        "h": 36
+      },
+      "properties": {
+        "title": "位置 int32",
+        "text": "-123456",
+        "inputOnly": true
+      }
+    },
+    {
+      "id": "ratioInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 292,
+        "y": 298,
+        "w": 260,
+        "h": 36
+      },
+      "properties": {
+        "title": "比例 float64",
+        "text": "1.25",
+        "inputOnly": true
+      }
+    },
+    {
+      "id": "sendLength",
+      "type": "PushButton",
+      "geometry": {
+        "x": 24,
+        "y": 346,
+        "w": 238,
+        "h": 36
+      },
+      "properties": {
+        "text": "生成长度、校验并发送",
+        "commandMode": "HEX",
+        "commandTargetId": "hmi",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameTemplateId": "sample-frame",
+        "sendUseTemplateFields": true,
+        "sendFrameFieldBindings": [
+          {
+            "field": "position",
+            "inputId": "positionInput"
+          },
+          {
+            "field": "ratio",
+            "inputId": "ratioInput"
+          }
+        ]
+      }
+    },
+    {
+      "id": "frameLength",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 568,
+        "y": 298,
+        "w": 254,
+        "h": 76
+      },
+      "properties": {
+        "title": "读回整帧字节数",
+        "value": "—",
+        "unit": "B",
+        "decimals": "0",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "device",
+        "key": "frameBytes"
+      }
+    },
+    {
+      "id": "position",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 836,
+        "y": 298,
+        "w": 260,
+        "h": 76
+      },
+      "properties": {
+        "title": "小端 int32",
+        "value": "—",
+        "unit": "",
+        "decimals": "0",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "device",
+        "key": "position"
+      }
+    },
+    {
+      "id": "drift",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 568,
+        "y": 388,
+        "w": 254,
+        "h": 76
+      },
+      "properties": {
+        "title": "int8 默认值",
+        "value": "—",
+        "unit": "",
+        "decimals": "0",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "device",
+        "key": "drift"
+      }
+    },
+    {
+      "id": "ratio",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 836,
+        "y": 388,
+        "w": 260,
+        "h": 76
+      },
+      "properties": {
+        "title": "大端 float64",
+        "value": "—",
+        "unit": "",
+        "decimals": "2",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "device",
+        "key": "ratio"
+      }
+    },
+    {
+      "id": "hmiLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 24,
+        "y": 482,
+        "w": 528,
+        "h": 230
+      },
+      "properties": {
+        "title": "上位机收发报文",
+        "sourceCardId": "hmi"
+      }
+    },
+    {
+      "id": "deviceLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 568,
+        "y": 482,
+        "w": 528,
+        "h": 230
+      },
+      "properties": {
+        "title": "模拟设备收发报文",
+        "sourceCardId": "device"
+      }
+    }
+  ],
+  "frameTemplates": {
+    "sample-frame": {
+      "name": "双字节整帧长度",
+      "parser": "hex",
+      "parserConfig": {
+        "header": "BE EF",
+        "footer": "EC",
+        "lengthOffset": 2,
+        "lengthSize": 2,
+        "lengthEndian": "小端(LE)",
+        "lengthCovers": "整帧",
+        "checksum": "CRC16-CCITT",
+        "checksumStart": 2,
+        "checksumEndian": "大端(BE)",
+        "fields": [
+          [
+            "frameBytes",
+            0,
+            2,
+            "uint16",
+            "小端(LE)"
+          ],
+          [
+            "position",
+            2,
+            4,
+            "int32",
+            "小端(LE)"
+          ],
+          [
+            "drift",
+            6,
+            1,
+            "int8"
+          ],
+          [
+            "ratio",
+            7,
+            8,
+            "float64",
+            "大端(BE)"
+          ]
+        ],
+        "sendDefaults": {
+          "drift": "-7"
+        },
+        "sendRequiredFields": [
+          "position",
+          "ratio"
+        ]
+      },
+      "sample": "BE EF 14 00 C0 1D FE FF F9 3F F4 00 00 00 00 00 00 FD 61 EC"
+    }
+  }
+}

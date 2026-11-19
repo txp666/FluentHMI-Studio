@@ -92,23 +92,43 @@ LedWidget::LedWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, 
 
 void LedWidget::apply()
 {
-    m_label->setText(text("label"));
-    m_on = flag("on");
-    update();
+    if (!isBound()) {
+        m_on = flag("on");
+        m_known = true;
+    }
+    bindingStatusChanged(bindingStatus());
 }
 
 void LedWidget::applyBoundValue(const QVariant &value, const BindingEntry &binding)
 {
-    if (const auto on = bindingLed(value, binding.ledOnValue, binding.ledOffValue)) {
+    const auto on = bindingLed(value, binding.ledOnValue, binding.ledOffValue);
+    const bool knownChanged = m_known != on.has_value();
+    m_known = on.has_value();
+    if (on)
         m_on = *on;
-        m_known = true;
-        setAccessibleDescription({});
-        update();
-    } else if (binding.parseMode == ParseMode::DataPoint) {
-        m_known = false;
-        setAccessibleDescription(tr("数据未知"));
+    if (knownChanged) {
+        bindingStatusChanged(bindingStatus());
+    } else {
         update();
     }
+}
+
+void LedWidget::bindingStatusChanged(BindingStatus status)
+{
+    QString detail;
+    if (status == BindingStatus::Waiting) {
+        detail = tr("待采集");
+    } else if (status == BindingStatus::Stale) {
+        detail = tr("数据已过期");
+    } else if (!m_known) {
+        detail = tr("数据未知");
+    }
+    QString label = text("label");
+    if (!detail.isEmpty())
+        label = label.isEmpty() ? detail : QStringLiteral("%1 · %2").arg(label, detail);
+    m_label->setText(label);
+    setAccessibleDescription(detail);
+    update();
 }
 
 void LedWidget::paintEvent(QPaintEvent *)
@@ -120,7 +140,8 @@ void LedWidget::paintEvent(QPaintEvent *)
     const qreal glowRadius = std::min<qreal>(d * 0.8, height() / 2.0);
     const QRectF dot(glowRadius + 1 - d / 2, (height() - d) / 2, d, d);
     const QColor color = ledColor(text("color"));
-    if (m_known && m_on) {
+    const bool available = !isBound() || bindingStatus() == BindingStatus::Live;
+    if (available && m_known && m_on) {
         QRadialGradient glow(dot.center(), glowRadius);
         QColor halo = color;
         halo.setAlpha(90);
@@ -191,7 +212,7 @@ void NumericDisplayWidget::apply()
     m_unit->setVisible(!enumeration && (!badge || !m_unit->text().isEmpty()));
     m_unit->setMinimumHeight(m_unit->fontMetrics().height());
     if (!isLive())
-        m_reading = prop("value").toVariant();
+        m_reading = formatDisplayValue(prop("value").toVariant(), text("displayFormat"), text("decimals"));
     m_enumEntries = enumeration ? parseValueText(text("textList")) : QHash<QString, ValueText>();
     m_value->setPixelFontSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
     QFont font = m_value->font();

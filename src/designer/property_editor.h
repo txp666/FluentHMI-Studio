@@ -14,6 +14,7 @@ class QToolButton;
 class QVBoxLayout;
 
 namespace FluentQt {
+class ComboBox;
 class SpinBox;
 } // namespace FluentQt
 
@@ -21,6 +22,8 @@ namespace fhmi {
 
 class CanvasItem;
 class DesignScene;
+struct FrameSource;
+struct ReceivedField;
 
 // Edits the selected canvas item (ID, geometry, properties, data binding), or the
 // project itself when nothing is selected.
@@ -52,6 +55,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     void message(const QString &title, const QString &content, bool error);
 
   private:
+    enum class ReceiveTarget { Defaults, Connection, Binding, Curve, Observer };
     using Commit = std::function<void(const QJsonValue &)>;
     using ConfigRead = std::function<QJsonObject()>;
     // The edited config, and the key of the row that changed it.
@@ -69,12 +73,39 @@ class PropertyEditor : public FluentQt::ScrollArea
     // The project's icon beside its name: choose an image or go back to the default.
     QWidget *createIconButton(QWidget *nameField);
     void buildItemForm();
+    void buildItemProperties();
+    void addItemProperties(QFormLayout *form, const QList<const PropDef *> &properties);
+    void editPropertyRows(const PropDef &def);
+    void addS7Rows(QFormLayout *form, const PropDef &def);
     void addPageRows(QFormLayout *form);
-    void buildBindingForm();
+    void buildBindingForm(QFormLayout *form);
+    void addCanBindingRow(QFormLayout *form, bool curve);
+    void updateCanBindingRow(const QJsonObject &binding, bool curve);
+    void showSendPreview();
+    void editFrameTemplate();
+    void editTransmitFormat();
+    void updateDefaultFrameTemplate(const QJsonObject &previous);
     // The parserConfig rows, the same for the project's default frame format and a link card's
     // own; `prefix` keeps the card's row keys apart from its properties'. Every edit hands
     // `write` the whole config `read` returns, with that one key changed.
     void addFrameRows(QFormLayout *form, const QString &prefix, const ConfigRead &read, const ConfigWrite &write);
+    void addReceivePreviewRow(QFormLayout *form, const QString &key);
+    void addReceiveEditorRow(QFormLayout *form, const QString &key, ReceiveTarget target);
+    void addReceiveTemplateRow(QFormLayout *form, const QString &key, ReceiveTarget target);
+    void addTemplateChoiceRow(QFormLayout *form, const QString &key, const QString &label,
+                              const std::function<void(const QString &)> &choose, const std::function<void()> &manage,
+                              const std::function<void()> &chooseGroup = {});
+    bool updateReceiveTemplateRow(const QString &key, ReceiveTarget target, bool active = true);
+    bool updateTemplateFieldPicker(const QString &row, ReceiveTarget target, FluentQt::ComboBox *mode,
+                                   const QString &parseMode, const QString &currentField);
+    void manageFrameTemplates(const LinkParser::Format &seed, const QString &selected);
+    void setReceiveTemplate(ReceiveTarget target, const QString &id);
+    bool setReceiveTemplates(ReceiveTarget target, const QStringList &ids);
+    FrameSource receiveSource(ReceiveTarget target) const;
+    void bindReceiveField(ReceiveTarget target, const ReceivedField &field, const QString &sourceId);
+    void openReceiveEditor(ReceiveTarget target, QWidget *anchor);
+    void applyProjectDraft(const Project &draft);
+    void addDataPoint(QJsonObject binding, const QString &suggestedName, CanvasItem *boundItem = nullptr);
     void setFrameRowsVisible(const QString &prefix, const QString &mode);
     // The frame format a link card's rows show: its own, or the project's while its own is
     // empty and the modes match, as the card frames at run time.
@@ -87,8 +118,10 @@ class PropertyEditor : public FluentQt::ScrollArea
     // `detail` tells apart edits of one property that are not one step (the rows of a card's frame format).
     void commitProperty(const QString &name, const QJsonValue &value, const QString &detail = QString());
     void commitBinding(const QString &field);
+    void refreshNumericRows();
     void updateVisibility();
     void setRowVisible(const QString &key, bool visible);
+    void setModbusReadFields(const QJsonObject &binding, const QString &typeRow, const QString &orderRow);
     void updateRouteEndpoint(const QString &connection, const QString &endpoint, bool active = true);
 
     QPointer<CanvasItem> m_item;

@@ -11,6 +11,7 @@
 #include <QtCore/QPointer>
 #include <QtCore/QQueue>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -37,7 +38,10 @@ class CanLink : public Link
         QByteArray signalMask;
         QByteArray initialData;
         quint64 connectionGeneration = 0;
+        bool updateImage = true;
     };
+    // Re-prepare later sends in the same frame slot. An invalid input skips the tick.
+    using PeriodicFrameReader = std::function<std::optional<Prepared>(QString *error)>;
 
     explicit CanLink(QObject *parent = nullptr);
     ~CanLink() override;
@@ -60,10 +64,26 @@ class CanLink : public Link
 
     // Resolves a command without sending anything, so a command goes to every CAN link or to none.
     std::optional<Prepared> prepare(const CanCommand &command, QString *error) const;
-    // Queues a command. The transmit image and period change only after adapter submission.
+    bool canCommit(const Prepared &prepared, QString *error) const;
+    // Queues a command. The transmit image and period change only after adapter confirmation.
     bool commit(const Prepared &prepared, QString *error);
-    // A frame as typed in a DataSendCard: sent once, outside the transmit table.
+    // A diagnostic raw frame does not change the signal write baseline.
     bool sendFrame(const CanFrame &frame, QString *error);
+    std::optional<Prepared> prepareRawFrame(const CanFrame &frame, QString *error) const;
+    bool startPeriodic(const Prepared &prepared, quint64 task, const QString &owner, int intervalMs, QString *error,
+                       PeriodicFrameReader readFrame = {});
+    void stopPeriodic(quint64 task);
+    struct LegacyCycle
+    {
+        quint64 task;
+        CanFrame frame;
+        int intervalMs;
+        quint64 submitted;
+        quint64 skipped;
+        bool paused;
+    };
+    QList<LegacyCycle> legacyCycles() const;
+    bool stopLegacyCycles(quint64 task = 0);
 
     // What the link decodes with while connected; null before.
     std::shared_ptr<const CanSignalSet> signalSet() const { return m_signals; }
@@ -78,6 +98,8 @@ class CanLink : public Link
     void frameDecoded(const fhmi::CanFrame &frame, const fhmi::Message &message);
     void busStateChanged(fhmi::CanBusState state);
     void lifecycleChanged();
+    void periodicResult(quint64 task, fhmi::SendStatus status, const QString &error);
+    void legacyCyclesChanged();
 
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
@@ -97,19 +119,36 @@ class CanLink : public Link
     {
         quint64 id = 0;
         std::optional<int> periodMs; // unset for a repeat of the already confirmed image
+        quint64 task = 0;
+    };
+    struct Periodic
+    {
+        Prepared command;
+        quint64 task;
+        QString owner;
+        int intervalMs;
+        PeriodicFrameReader readFrame;
+        bool started = false;
     };
     struct Entry
     {
         std::optional<CanFrame> frame;
         QTimer *timer = nullptr;
+        int legacyInterval = 0;
+        quint64 legacyTask = 0;
+        quint64 legacySubmitted = 0;
+        quint64 legacySkipped = 0;
+        std::optional<Periodic> periodic;
         Submission submission;
         QQueue<QueuedCommand> queue;
     };
 
     std::optional<CanFrame> composeFrame(const Prepared &prepared, QString *error) const;
     bool checkSendAvailable(QString *error) const;
-    bool submitFrame(CanFrame frame, std::optional<int> periodMs, QString *error);
-    void finishSubmission(const CanFrame &frame, bool accepted);
+    bool queueCommand(Prepared prepared, QString *error);
+    bool submitFrame(CanFrame frame, std::optional<int> periodMs, QString *error, quint64 task = 0);
+    void finishSubmission(const CanFrame &frame, bool accepted, const QString &error = {});
+    void updateCycleTimer(quint64 key, Entry &entry);
     void dispatchNext(quint64 key);
     void recordLoad(const QList<CanFrame> &frames);
     void onReceived(const QList<CanFrame> &frames);

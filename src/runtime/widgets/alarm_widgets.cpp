@@ -103,7 +103,8 @@ void AlarmBannerWidget::refresh()
     int active = 0, pending = 0, unknown = 0, level = 0;
     QString latest;
     QDateTime when;
-    for (const auto &s : context()->projectData()->alarms()) {
+    const auto &alarms = context()->projectData()->alarms();
+    for (const auto &s : alarms) {
         if (!s.known)
             ++unknown;
         if (s.active)
@@ -116,7 +117,7 @@ void AlarmBannerWidget::refresh()
             latest = s.text;
         }
     }
-    QString label = tr("%1 条活动 · %2 条未确认").arg(active).arg(pending);
+    QString label = alarms.isEmpty() ? tr("未配置报警") : tr("%1 条活动 · %2 条未确认").arg(active).arg(pending);
     if (level)
         label += tr(" · 最高 %1 级：%2").arg(level).arg(latest);
     if (unknown)
@@ -134,7 +135,8 @@ AlarmListWidget::AlarmListWidget(const WidgetMeta &meta, QWidget *parent) : HmiW
     m_layout->addLayout(m_bar);
     m_mode = new FluentQt::ComboBox(this);
     m_mode->setObjectName(QStringLiteral("alarmMode"));
-    m_mode->addItems({tr("当前报警"), tr("历史记录")});
+    m_mode->addItem(tr("当前报警"), QIcon(), QStringLiteral("current"));
+    m_mode->addItem(tr("历史记录"), QIcon(), QStringLiteral("history"));
     m_bar->addWidget(m_mode);
     m_ack = new FluentQt::PushButton(tr("确认所选"), this);
     m_ack->setObjectName(QStringLiteral("alarmAcknowledgeSelected"));
@@ -172,7 +174,7 @@ AlarmListWidget::AlarmListWidget(const WidgetMeta &meta, QWidget *parent) : HmiW
     m_state = new FluentQt::ComboBox(m_filters);
     m_state->setObjectName(QStringLiteral("alarmFilterState"));
     m_state->addItems(
-        {tr("全部状态"), tr("活动"), tr("未确认"), tr("已恢复"), tr("数据未知"), tr("已消音"), tr("已确认")});
+        {tr("全部状态"), tr("活动"), tr("未确认"), tr("已恢复待确认"), tr("数据未知"), tr("已消音"), tr("已确认")});
     m_criteria->addWidget(m_state);
     m_event = new FluentQt::ComboBox(m_filters);
     m_event->setObjectName(QStringLiteral("alarmFilterEvent"));
@@ -268,6 +270,7 @@ AlarmListWidget::~AlarmListWidget() { delete m_filterDialog; }
 void AlarmListWidget::apply() { refresh(); }
 void AlarmListWidget::onAttached()
 {
+    rememberViewOption(m_mode, QStringLiteral("mode"));
     live(connect(context()->projectData(), &ProjectData::alarmsChanged, this, [this] { refresh(); }));
     live(connect(context()->projectData(), &ProjectData::historyChanged, this, [this] {
         if (m_mode->currentIndex() == 1)
@@ -413,7 +416,7 @@ bool AlarmListWidget::matchesFilter(const QString &id, const QString &text, int 
                 return false;
             break;
         case 3:
-            if (!state->known || state->active)
+            if (!state->known || state->active || state->acknowledged)
                 return false;
             break;
         case 4:

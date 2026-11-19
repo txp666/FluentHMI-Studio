@@ -1,0 +1,443 @@
+{
+  "version": "1.3",
+  "appName": "17.6 Modbus混合寄存器",
+  "canvas": {
+    "width": 1120,
+    "height": 828,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line"
+  },
+  "widgets": [
+    {
+      "id": "lessonTitle",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 16,
+        "w": 1072,
+        "h": 38
+      },
+      "properties": {
+        "text": "17.6 Modbus混合寄存器",
+        "fontSize": 24,
+        "bold": true
+      }
+    },
+    {
+      "id": "lessonSteps",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 60,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "先连接右侧从站，再连接左侧主站。Kp 回车写单个寄存器，按钮批量写，开关写线圈。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "hmi",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 24,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "上位机 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39179,
+        "defaultMode": "客户端",
+        "defaultParser": "modbus_tcp",
+        "modbusSlave": 1,
+        "modbusRole": "主站",
+        "modbusPeriod": 250
+      }
+    },
+    {
+      "id": "device",
+      "type": "TcpConfigCard",
+      "geometry": {
+        "x": 568,
+        "y": 94,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "模拟设备 · TCP",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39179,
+        "defaultMode": "服务端",
+        "defaultParser": "modbus_tcp",
+        "modbusSlave": 1,
+        "modbusRole": "从站",
+        "slaveHrStart": 100,
+        "slaveHrCount": 4,
+        "slaveCoCount": 4,
+        "slaveInit": "hr100=100\nhr101=0\nhr102=0\nhr103=0\nco0=0\nir10=253\ndi0=1",
+        "slaveIrStart": 10,
+        "slaveIrCount": 2,
+        "slaveDiStart": 0,
+        "slaveDiCount": 2
+      }
+    },
+    {
+      "id": "kpInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 24,
+        "y": 298,
+        "w": 168,
+        "h": 36
+      },
+      "properties": {
+        "title": "Kp（回车）",
+        "text": "400",
+        "inputOnly": false,
+        "commandMode": "Modbus",
+        "commandTargetId": "hmi",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "mbFunc": "06 写单寄存器",
+        "mbAddress": 100,
+        "mbSlave": 1,
+        "mbDataType": "uint16"
+      }
+    },
+    {
+      "id": "kiInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 204,
+        "y": 298,
+        "w": 168,
+        "h": 36
+      },
+      "properties": {
+        "title": "Ki float32",
+        "text": "0.25",
+        "inputOnly": true
+      }
+    },
+    {
+      "id": "kdInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 384,
+        "y": 298,
+        "w": 168,
+        "h": 36
+      },
+      "properties": {
+        "title": "Kd int16",
+        "text": "-12",
+        "inputOnly": true
+      }
+    },
+    {
+      "id": "writePid",
+      "type": "PushButton",
+      "geometry": {
+        "x": 24,
+        "y": 346,
+        "w": 216,
+        "h": 36
+      },
+      "properties": {
+        "text": "FC16 写入 100–103",
+        "commandMode": "Modbus",
+        "commandTargetId": "hmi",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "mbFunc": "16 写多个寄存器",
+        "mbAddress": 100,
+        "mbSlave": 1,
+        "mbRegOrder": "大端(AB CD)",
+        "commandInputs": [
+          {
+            "inputId": "kpInput",
+            "dataType": "uint16"
+          },
+          {
+            "inputId": "kiInput",
+            "dataType": "float32"
+          },
+          {
+            "inputId": "kdInput",
+            "dataType": "int16"
+          }
+        ]
+      }
+    },
+    {
+      "id": "coilSwitch",
+      "type": "ToggleSwitch",
+      "geometry": {
+        "x": 262,
+        "y": 346,
+        "w": 290,
+        "h": 36
+      },
+      "properties": {
+        "label": "线圈 0（FC05）",
+        "commandMode": "Modbus",
+        "commandTargetId": "hmi",
+        "mbArea": "线圈",
+        "mbAddress": 0,
+        "mbSlave": 1,
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "线圈回读"
+      }
+    },
+    {
+      "id": "kpRead",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 396,
+        "w": 254,
+        "h": 56
+      },
+      "properties": {
+        "title": "Kp · HR100",
+        "value": "—",
+        "unit": "",
+        "decimals": "0",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "Kp回读"
+      }
+    },
+    {
+      "id": "kiRead",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 292,
+        "y": 396,
+        "w": 260,
+        "h": 56
+      },
+      "properties": {
+        "title": "Ki · HR101–102",
+        "value": "—",
+        "unit": "",
+        "decimals": "2",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "Ki回读"
+      }
+    },
+    {
+      "id": "kdRead",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 460,
+        "w": 254,
+        "h": 56
+      },
+      "properties": {
+        "title": "Kd · HR103",
+        "value": "—",
+        "unit": "",
+        "decimals": "0",
+        "fontSize": 20
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "Kd回读"
+      }
+    },
+    {
+      "id": "coilRead",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 292,
+        "y": 460,
+        "w": 260,
+        "h": 56
+      },
+      "properties": {
+        "title": "线圈 0 回读",
+        "value": "—",
+        "unit": "",
+        "decimals": "0",
+        "fontSize": 20,
+        "displayStyle": "状态徽标",
+        "displayFormat": "枚举",
+        "textList": "0=关闭|#64748b\n1=开启|#107c10"
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "线圈回读"
+      }
+    },
+    {
+      "id": "irRead",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 524,
+        "w": 254,
+        "h": 56
+      },
+      "properties": {
+        "title": "输入寄存器 IR10 · FC04",
+        "value": "—",
+        "decimals": "0",
+        "fontSize": 20,
+        "unit": ""
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "输入寄存器回读"
+      }
+    },
+    {
+      "id": "diRead",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 292,
+        "y": 524,
+        "w": 260,
+        "h": 56
+      },
+      "properties": {
+        "title": "离散输入 DI0 · FC02",
+        "value": "—",
+        "decimals": "0",
+        "fontSize": 20,
+        "unit": ""
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "离散输入回读"
+      }
+    },
+    {
+      "id": "registers",
+      "type": "ModbusSlaveTable",
+      "geometry": {
+        "x": 568,
+        "y": 299,
+        "w": 528,
+        "h": 281
+      },
+      "properties": {
+        "sourceCardId": "device",
+        "mbArea": "保持寄存器"
+      }
+    },
+    {
+      "id": "hmiLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 24,
+        "y": 592,
+        "w": 528,
+        "h": 212
+      },
+      "properties": {
+        "title": "上位机收发报文",
+        "sourceCardId": "hmi"
+      }
+    },
+    {
+      "id": "deviceLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 568,
+        "y": 592,
+        "w": 528,
+        "h": 212
+      },
+      "properties": {
+        "title": "模拟设备收发报文",
+        "sourceCardId": "device"
+      }
+    }
+  ],
+  "logic": {
+    "points": [
+      {
+        "name": "Kp回读",
+        "binding": {
+          "parseMode": "Modbus",
+          "sourceCardId": "hmi",
+          "mbArea": "保持寄存器",
+          "mbRegIndex": 100,
+          "mbDataType": "uint16",
+          "mbSlaveFilter": 1
+        }
+      },
+      {
+        "name": "Ki回读",
+        "binding": {
+          "parseMode": "Modbus",
+          "sourceCardId": "hmi",
+          "mbArea": "保持寄存器",
+          "mbRegIndex": 101,
+          "mbDataType": "float32",
+          "mbSlaveFilter": 1
+        }
+      },
+      {
+        "name": "Kd回读",
+        "binding": {
+          "parseMode": "Modbus",
+          "sourceCardId": "hmi",
+          "mbArea": "保持寄存器",
+          "mbRegIndex": 103,
+          "mbDataType": "int16",
+          "mbSlaveFilter": 1
+        }
+      },
+      {
+        "name": "线圈回读",
+        "binding": {
+          "parseMode": "Modbus",
+          "sourceCardId": "hmi",
+          "mbArea": "线圈",
+          "mbRegIndex": 0,
+          "mbDataType": "uint16",
+          "mbSlaveFilter": 1
+        }
+      },
+      {
+        "name": "输入寄存器回读",
+        "binding": {
+          "parseMode": "Modbus",
+          "sourceCardId": "hmi",
+          "mbArea": "输入寄存器",
+          "mbRegIndex": 10,
+          "mbDataType": "uint16",
+          "mbSlaveFilter": 1
+        }
+      },
+      {
+        "name": "离散输入回读",
+        "binding": {
+          "parseMode": "Modbus",
+          "sourceCardId": "hmi",
+          "mbArea": "离散输入",
+          "mbRegIndex": 0,
+          "mbDataType": "uint16",
+          "mbSlaveFilter": 1
+        }
+      }
+    ]
+  }
+}

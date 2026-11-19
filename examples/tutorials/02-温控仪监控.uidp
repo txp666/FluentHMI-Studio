@@ -159,7 +159,7 @@
         "minimum": 0,
         "maximum": 100,
         "value": 40,
-        "sendOnChange": false,
+        "sendOnChange": true,
         "commandMode": "Modbus",
         "commandTemplate": "{value}",
         "frameHeader": "",

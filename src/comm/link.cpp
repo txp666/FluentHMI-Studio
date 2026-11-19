@@ -5,6 +5,7 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QTimer>
+#include <algorithm>
 
 namespace fhmi {
 
@@ -13,7 +14,10 @@ Link::Link(QObject *parent)
 {
     qRegisterMetaType<DataSource>();
     connect(this, &Link::connectedChanged, this, [this](bool connected) {
+        m_sendSession = nextDataStream();
         if (!connected) {
+            for (auto *timer : std::as_const(m_idleTimers))
+                timer->stop();
             const auto streams = std::exchange(m_streams, {});
             for (const auto &stream : streams) emit streamClosed({m_connectionId, stream.id, stream.endpoint, textEncoding(), isCan(), false});
             m_endpointRequests.clear();
@@ -50,6 +54,11 @@ DataSource Link::dataSource(Parser *parser)
     return {m_connectionId, stream.id, stream.endpoint, textEncoding(), isCan(), false};
 }
 
+DataSource Link::eventSource(const QString &endpoint) const
+{
+    return {m_connectionId, 0, endpoint, textEncoding(), isCan(), false};
+}
+
 bool Link::ownsStream(quint64 streamId, const QString &endpoint) const
 {
     for (const auto &stream : m_streams) {
@@ -59,9 +68,41 @@ bool Link::ownsStream(quint64 streamId, const QString &endpoint) const
     return false;
 }
 
+FrameProgress Link::frameProgress(quint64 streamId) const
+{
+    for (auto it = m_streams.cbegin(); it != m_streams.cend(); ++it) {
+        if (it->id == streamId && it.key())
+            return it.key()->frameProgress();
+    }
+    return {};
+}
+
 bool Link::canSendTo(const QString &endpoint) const
 {
     return isConnected() && canSend() && (endpoint.isEmpty() || sendEndpoints().contains(endpoint));
+}
+
+quint64 Link::sendSession(const QString &endpoint) const
+{
+    return canSendTo(endpoint) ? m_sendSession : 0;
+}
+
+quint64 Link::streamIdForEndpoint(const QString &endpoint) const
+{
+    for (const auto &stream : m_streams) {
+        if (stream.endpoint == endpoint)
+            return stream.id;
+    }
+    return 0;
+}
+
+SendStatus Link::sendPeriodic(const QByteArray &bytes, const QString &endpoint)
+{
+    if (!canSendTo(endpoint))
+        return SendStatus::Failed;
+    if (hasPendingWrite(endpoint))
+        return SendStatus::Busy;
+    return send(bytes, endpoint) ? SendStatus::Submitted : SendStatus::Failed;
 }
 
 void Link::registerStream(Parser *parser, const QString &endpoint)
@@ -73,7 +114,7 @@ void Link::registerStream(Parser *parser, const QString &endpoint)
 qint64 Link::writeTo(const QByteArray &bytes, const QString &endpoint)
 {
     if (!endpoint.isEmpty()) {
-        emit errorOccurred(tr("此连接没有可指定的子通道"));
+        emit errorOccurred(tr("此连接没有可指定的子通道"), endpoint);
         return WriteFailureReported;
     }
     return writeBytes(bytes);
@@ -95,7 +136,8 @@ bool Link::send(const QByteArray &bytes, const QString &endpoint)
         return false;
     }
     if (written != bytes.size()) {
-        emit errorOccurred(written < 0 ? tr("写入失败") : tr("只写入了 %1/%2 字节").arg(written).arg(bytes.size()));
+        emit errorOccurred(written < 0 ? tr("写入失败") : tr("只写入了 %1/%2 字节").arg(written).arg(bytes.size()),
+                           endpoint);
         return false;
     }
     for (const auto &target : targets) {
@@ -111,10 +153,9 @@ bool Link::send(const QByteArray &bytes, const QString &endpoint)
 
 std::unique_ptr<Parser> Link::makeParser(const QString &type, const QJsonObject &config, QString *error, const std::shared_ptr<ModbusRequests> &requests) const
 {
-    if (m_slave && type == QLatin1String("modbus")) {
-        return std::make_unique<ModbusRtuRequestFramer>();
-    }
-    if (m_slave && type == QLatin1String("modbus_tcp")) {
+    if (m_slave && LinkParser::supportsModbusSlave(type)) {
+        if (type == QLatin1String("modbus"))
+            return std::make_unique<ModbusRtuRequestFramer>();
         return std::make_unique<ModbusTcpRequestFramer>();
     }
     return createParser(type, config, error, requests);
@@ -158,7 +199,7 @@ ModbusSlave *Link::modbusSlave() const
 
 bool Link::answersModbus() const
 {
-    return m_slave && (m_parserType == QLatin1String("modbus") || m_parserType == QLatin1String("modbus_tcp"));
+    return m_slave && LinkParser::supportsModbusSlave(m_parserType);
 }
 
 std::unique_ptr<Parser> Link::createStreamParser(const QString &endpoint)
@@ -166,29 +207,54 @@ std::unique_ptr<Parser> Link::createStreamParser(const QString &endpoint)
     return makeParser(m_parserType, m_parserConfig, nullptr, requestsFor(endpoint));
 }
 
-void Link::deliver(Parser *parser, const QByteArray &bytes)
+void Link::deliver(Parser *parser, const QByteArray &bytes, Boundary boundary)
 {
     if (bytes.isEmpty()) {
         return;
     }
+    const auto source = dataSource(parser);
     if (!parser) {
-        emit rawReceived(bytes, dataSource(parser));
+        emit wireReceived(bytes, source);
+        publishUnit(bytes, {}, source);
         return;
     }
+    auto units = parser->frames(bytes);
+    if (boundary == Boundary::Message && parser->flushOnMessage())
+        units += parser->flush();
+    emit wireReceived(bytes, source);
+    if (!ownsStream(source.stream))
+        return;
+    reportFramingState(parser, source);
+    if (ownsStream(source.stream))
+        deliverUnits(parser, units, boundary);
+}
+
+void Link::reportFramingState(Parser *parser, const DataSource &source)
+{
     if (const int idle = parser->idleTimeout(); idle > 0) {
         QTimer *&timer = m_idleTimers[parser];
         if (!timer) {
             timer = new QTimer(this);
             timer->setSingleShot(true);
-            connect(timer, &QTimer::timeout, this, [this, parser]() { deliverUnits(parser, parser->flush()); });
+            connect(timer, &QTimer::timeout, this, [this, parser] {
+                const auto source = dataSource(parser);
+                const auto units = parser->flush();
+                reportFramingState(parser, source);
+                if (ownsStream(source.stream))
+                    deliverUnits(parser, units);
+            });
         }
         timer->start(idle);
+    } else if (auto *timer = m_idleTimers.value(parser)) {
+        timer->stop();
     }
-    deliverUnits(parser, parser->frames(bytes));
+    if (const auto notice = parser->takeFrameNotice())
+        emit frameRejected(*notice, source);
 }
 
-void Link::deliverUnits(Parser *parser, const QList<QByteArray> &units)
+void Link::deliverUnits(Parser *parser, const QList<QByteArray> &units, Boundary boundary)
 {
+    const auto source = dataSource(parser);
     if (answersModbus()) {
         // Every request is answered, and its reply queued, before anything is emitted: a slot may drop the
         // stream, and its replies with it. A reply goes out after its request was reported.
@@ -196,23 +262,48 @@ void Link::deliverUnits(Parser *parser, const QList<QByteArray> &units)
             answer(parser, unit);
         }
         for (const QByteArray &unit : units) {
-            emit rawReceived(unit, dataSource(parser));
+            if (!ownsStream(source.stream))
+                return;
+            publishUnit(unit, {}, source);
         }
         sendNextReply();
         return;
     }
-    // Snapshot source as well: a callback can disconnect and replace this stream.
-    const DataSource source = dataSource(parser);
-    QList<QList<Message>> messages;
+    const QByteArray terminator = boundary == Boundary::Message && parserType() == QLatin1String("line")
+        ? lineTerminator(parserConfig()) : QByteArray();
+    // Parse before emitting signals, which may disconnect and replace this stream.
+    QList<QList<DecodedRecord>> records;
+    records.reserve(units.size());
     for (const QByteArray &unit : units) {
-        messages.append(parser->parse(unit));
+        auto parsed = parser->decodeRecords(terminator.isEmpty() || unit.endsWith(terminator) ? unit : unit + terminator);
+        for (auto &record : parsed)
+            annotateMessage(record.values, source);
+        records.append(std::move(parsed));
     }
     for (int i = 0; i < units.size(); ++i) {
-        emit rawReceived(units.at(i), source);
-        for (const Message &message : messages.at(i)) {
-            emit messageReceived(message, source);
-        }
+        if (!ownsStream(source.stream))
+            break;
+        publishUnit(units.at(i), records.at(i), source);
     }
+}
+
+void Link::publishUnit(const QByteArray &bytes, const QList<DecodedRecord> &records, const DataSource &source)
+{
+    emit rawReceived(bytes, source);
+    qsizetype offset = 0;
+    for (const auto &record : records) {
+        if (!ownsStream(source.stream))
+            return;
+        emit messageReceived(record.values, source);
+        if (!ownsStream(source.stream))
+            return;
+        // A message transport can supply a synthetic line terminator to the decoder.
+        const auto end = std::min(record.end, bytes.size());
+        emit unitReceived(bytes.mid(offset, end - offset), record.values, source);
+        offset = end;
+    }
+    if (offset < bytes.size() && ownsStream(source.stream))
+        emit unitReceived(bytes.mid(offset), {}, source);
 }
 
 void Link::dropStream(Parser *parser)
@@ -241,7 +332,7 @@ qint64 Link::writeReply(Parser *, const QByteArray &bytes)
 void Link::answer(Parser *parser, const QByteArray &frame)
 {
     const ModbusFraming framing = m_parserType == QLatin1String("modbus_tcp") ? ModbusFraming::Tcp : ModbusFraming::Rtu;
-    auto result = std::make_shared<ModbusSlaveAnswer>(m_slave->request(framing, frame));
+    auto result = std::make_shared<ModbusSlaveAnswer>(m_slave->request(framing, frame, dataSource(parser).endpoint));
     if (!result->reply.isEmpty()) {
         const qint64 delay = m_slave->settings().delayMs;
         m_replies.append({parser, result->reply, result, QDateTime::currentMSecsSinceEpoch() + delay});
@@ -264,9 +355,10 @@ void Link::sendNextReply()
             }
             const PendingReply reply = m_replies.takeFirst();
             if (writeReply(reply.stream, reply.bytes) == reply.bytes.size()) {
-                emit bytesSent(reply.bytes, dataSource(reply.stream));
+                const auto source = dataSource(reply.stream);
+                emit bytesSent(reply.bytes, source);
                 if (m_slave) {
-                    m_slave->replied(*reply.answer);
+                    m_slave->replied(*reply.answer, source.endpoint);
                 }
             }
             sendNextReply();

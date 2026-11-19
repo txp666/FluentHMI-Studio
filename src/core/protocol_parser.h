@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QtCore/QByteArray>
+#include <QtCore/QByteArrayView>
 #include <QtCore/QJsonObject>
 #include <QtCore/QList>
 #include <QtCore/QString>
@@ -8,9 +9,13 @@
 #include <QtCore/QVariantMap>
 
 #include <QtCore/QHash>
+#include <QtCore/QSet>
 
+#include "core/hex_utils.h"
 #include "core/message.h"
 
+#include <algorithm>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -19,6 +24,13 @@ namespace fhmi {
 
 namespace LinkParser {
 inline const QString Inherit = QStringLiteral("项目设置"); // i18n: value
+inline const QString HexGroup = QStringLiteral("hex_group");
+inline const QString GroupTemplates = QStringLiteral("templates");
+
+inline bool isHex(QStringView type)
+{
+    return type == QLatin1String("hex") || type == HexGroup;
+}
 
 inline bool inheritsProject(QStringView selection)
 {
@@ -29,7 +41,51 @@ inline QString effectiveType(const QString &selection, const QString &projectTyp
 {
     return inheritsProject(selection) ? projectType : selection;
 }
+
+struct Format
+{
+    QString type;
+    QJsonObject settings;
+};
+
+inline Format effectiveFormat(const QString &selection, const QJsonObject &settings, const Format &project)
+{
+    if (inheritsProject(selection) || (settings.isEmpty() && selection == project.type))
+        return project;
+    return {selection, settings};
+}
+
+inline bool hasEditableFraming(QStringView type)
+{
+    return type == QLatin1String("line") || type == QLatin1String("hex");
+}
+
+inline bool supportsModbusSlave(QStringView type)
+{
+    return type == QLatin1String("modbus") || type == QLatin1String("modbus_tcp");
+}
 } // namespace LinkParser
+
+struct FrameNotice
+{
+    enum class Reason { Length, Timeout, Checksum, Footer };
+    Reason reason;
+    QByteArray sample;
+    qsizetype received;
+    int expected;
+};
+
+struct FrameProgress
+{
+    qsizetype received = 0;
+    int expected = 0;
+};
+
+struct DecodedRecord
+{
+    Message values;
+    qsizetype end; // bytes through the end of this record in the current input
+};
 
 // Incremental frame parsers, in two steps. frames() cuts the bytes a link read into complete
 // raw units (keeping partial input for the next call); parse() turns one unit into messages.
@@ -42,13 +98,17 @@ class Parser
     virtual ~Parser() = default;
     // The complete raw units in these bytes; by default the bytes as they came.
     virtual QList<QByteArray> frames(const QByteArray &data) { return {data}; }
-    virtual QList<Message> parse(const QByteArray &unit) = 0;
+    virtual QList<DecodedRecord> decodeRecords(const QByteArray &unit) = 0;
+    QList<Message> parse(const QByteArray &unit);
     // parse() of every unit frames() returns, in arrival order.
     QList<Message> feed(const QByteArray &data);
     // The units the buffer holds once the line has gone quiet; the buffer is empty afterwards.
     virtual QList<QByteArray> flush() { return {}; }
     // Milliseconds of silence after which the link calls flush(); 0 = never.
     virtual int idleTimeout() const { return 0; }
+    virtual bool flushOnMessage() const { return false; }
+    virtual std::optional<FrameNotice> takeFrameNotice() { return {}; }
+    virtual FrameProgress frameProgress() const { return {}; }
     virtual void reset() = 0;
 };
 
@@ -87,6 +147,7 @@ const QStringList &encodings();    // utf-8, gbk, ascii
 // The bytes a line parser built from this parserConfig ends its records with: the terminator in
 // the record encoding (UTF-8 for "ascii", which cannot spell anything else).
 QByteArray lineTerminator(const QJsonObject &config);
+std::optional<QByteArray> buildLineFrame(const QString &body, const QJsonObject &config, QString *error = nullptr);
 
 // Text records: JSON values, key=value pairs, or bare CSV (named ch0, ch1, ...). A record ends
 // at the terminator; a JSON object or array ends where its brackets close, so pretty-printed
@@ -98,7 +159,7 @@ class LineParser : public Parser
     explicit LineParser(LineFrameConfig config = {}, int maxBuffer = 65536);
 
     // Buffers by itself: a unit is the bytes as read.
-    QList<Message> parse(const QByteArray &data) override;
+    QList<DecodedRecord> decodeRecords(const QByteArray &data) override;
     void reset() override;
 
     static QVariant autoNumber(const QString &text);
@@ -126,52 +187,73 @@ struct HexField
     bool littleEndian = false;
 };
 
-enum class HexChecksum
-{
-    None,
-    Sum,         // the low 8 bits of the byte sum
-    Xor,         // all bytes XORed
-    Crc8,        // polynomial 0x07, initial 0x00, not reflected, no final XOR
-    Crc16Modbus, // reflected 0x8005 (0xA001), initial 0xFFFF
-    Crc16Ccitt,  // CRC-16/CCITT-FALSE: 0x1021, initial 0xFFFF, not reflected
-};
-
 // Bytes the checksum takes on the wire: 0, 1 or 2.
 int hexChecksumSize(HexChecksum kind);
 quint16 hexChecksum(HexChecksum kind, const QByteArray &data);
 
 // The spellings .uidp files use for these settings, in the order the designer lists them.
 namespace HexOptions {
+inline constexpr int LengthRecoveryMs = 1000;
 const QStringList &checksums();    // 无, 和校验, 异或, CRC8, CRC16-Modbus, CRC16-CCITT
 const QStringList &byteOrders();   // 大端(BE), 小端(LE)
 const QStringList &lengthCovers(); // 数据, 长度字段之后, 整帧
 const QStringList &fieldTypes();
+int fieldSize(const QString &type); // 0 for ASCII and HEX
 } // namespace HexOptions
 
 // Every key of a "hex" parserConfig. The defaults keep projects that only set header, footer
 // and fields framing exactly as they did.
 struct HexFrameConfig
 {
-    enum class LengthCovers
-    {
-        Data,       // the length counts the data after the length field, not checksum or footer
-        AfterField, // everything after the length field
-        Frame,      // the whole frame, header included
-    };
+    using LengthCovers = HexFrameLayout::LengthCovers;
 
     QByteArray header = QByteArray::fromHex("AA55"); // empty: no header
     QByteArray footer = QByteArray::fromHex("55AA"); // empty: no footer
+    QByteArray matchBytes;                         // optional discriminator in addition to the header
+    int matchOffset = 0;                            // from the first byte of the frame
     int lengthOffset = -1;                           // from the frame's first byte; -1 = no length field
     int lengthSize = 1;                              // 1 or 2
     bool lengthLittleEndian = false;
     LengthCovers lengthCovers = LengthCovers::Data;
     int fixedLength = 0; // the whole frame; 0 = not fixed
+    int maxFrameLength = 65536;
     HexChecksum checksum = HexChecksum::None;
     int checksumStart = 0; // checked from this frame offset up to the checksum bytes
     bool checksumLittleEndian = false;
     int idleTimeout = 0; // ms
     QList<HexField> fields;
+
+    HexFrameLayout layout() const;
+    bool hasBoundary() const { return fixedLength > 0 || lengthOffset >= 0 || !footer.isEmpty(); }
+    qsizetype identificationEnd() const
+    {
+        return std::max(header.size(), matchBytes.isEmpty() ? qsizetype(0) : matchOffset + matchBytes.size());
+    }
 };
+
+std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString *error = nullptr);
+
+enum class HexFrameMatch { No, Partial, Yes };
+HexFrameMatch matchHexFrame(QByteArrayView sample, const HexFrameConfig &config);
+
+struct HexFrameVariant
+{
+    QString id;
+    QString name;
+    HexFrameConfig frame;
+    QSet<QString> unqualifiedFields;
+};
+
+std::optional<QList<HexFrameVariant>> hexFrameVariants(const QJsonObject &settings, QString *error = nullptr);
+QString hexTemplateFieldKey(const QString &templateId, const QString &name);
+
+// Compose application bytes using the same length and checksum conventions as reception.
+// A configured length field is inserted at its offset from the start of the frame.
+std::optional<QByteArray> buildHexFrame(const QByteArray &body, const QByteArray &header, const QByteArray &footer,
+                                      const QJsonObject &settings, QString *error = nullptr,
+                                      HexFrameLayout *layout = nullptr);
+std::optional<QByteArray> buildHexFrame(const QByteArray &body, const QJsonObject &settings,
+                                      QString *error = nullptr, HexFrameLayout *layout = nullptr);
 
 // Binary frames: a header to synchronise on, then a fixed length, a length field or a footer
 // to end the frame (or a silence, when none is set), optionally checksummed. frames() returns
@@ -179,26 +261,41 @@ struct HexFrameConfig
 class HexFrameParser : public Parser
 {
   public:
+    enum class Issue { None, Header, Identifier, Length, Footer, ChecksumRange, Checksum };
     explicit HexFrameParser(HexFrameConfig config);
 
     QList<QByteArray> frames(const QByteArray &data) override;
-    QList<Message> parse(const QByteArray &frame) override;
+    QList<DecodedRecord> decodeRecords(const QByteArray &frame) override;
     QList<QByteArray> flush() override;
-    int idleTimeout() const override { return m_config.idleTimeout; }
-    void reset() override { m_buf.clear(); }
+    int idleTimeout() const override { return m_buffer.idleMs; }
+    bool flushOnMessage() const override { return m_buffer.flushOnMessage; }
+    std::optional<FrameNotice> takeFrameNotice() override { return std::exchange(m_buffer.notice, {}); }
+    FrameProgress frameProgress() const override { return m_buffer.progress(); }
+    void reset() override { m_buffer = {}; }
+    int declaredLength(QByteArrayView buffer) const;
+    Issue sampleIssue(const QByteArray &frame, QByteArray *calculatedChecksum = nullptr) const;
 
   private:
-    static constexpr int MaxFrame = 65536;
-
-    // The length of the frame m_buf starts with: > 0 once known, 0 when these bytes cannot
-    // start a frame, -1 while more bytes are needed.
-    int frameLength() const;
-    // Whether a frame has room for its header, checksum and footer, ends in the footer and
-    // passes its checksum.
-    bool valid(const QByteArray &frame) const;
+    friend class HexFrameGroupParser;
+    struct Buffer
+    {
+        QByteArray bytes;
+        int expected = 0;
+        int idleMs = 0;
+        bool flushOnMessage = false;
+        std::optional<FrameNotice> notice;
+        FrameProgress progress() const { return expected ? FrameProgress{bytes.size(), expected} : FrameProgress{}; }
+    };
+    // A partial match carries the timeout of the candidate header/discriminator, even before the length is known.
+    using Matcher = std::function<QPair<const HexFrameParser *, std::optional<int>>(QByteArrayView)>;
+    static QList<QByteArray> scan(Buffer &buffer, const Matcher &match, bool expired);
+    int incompleteTimeout() const;
+    bool validLength(int length) const;
+    QList<QByteArray> scan(bool expired);
+    Issue trailerIssue(const QByteArray &frame, QByteArray *calculatedChecksum = nullptr) const;
 
     HexFrameConfig m_config;
-    QByteArray m_buf;
+    Buffer m_buffer;
 };
 
 // Read requests recently sent over one link, so a response can be named by register address.
@@ -244,7 +341,7 @@ class ModbusRtuParser : public Parser
   public:
     explicit ModbusRtuParser(QStringList fields = {}, std::shared_ptr<ModbusRequests> requests = nullptr);
 
-    QList<Message> parse(const QByteArray &data) override;
+    QList<DecodedRecord> decodeRecords(const QByteArray &data) override;
     void reset() override { m_buf.clear(); }
 
     static int frameLength(const QByteArray &buf, int from = 0);
@@ -262,7 +359,7 @@ class ModbusTcpParser : public Parser
   public:
     explicit ModbusTcpParser(QStringList fields = {}, std::shared_ptr<ModbusRequests> requests = nullptr);
 
-    QList<Message> parse(const QByteArray &data) override;
+    QList<DecodedRecord> decodeRecords(const QByteArray &data) override;
     void reset() override { m_buf.clear(); }
 
     static int frameLength(const QByteArray &buf);
@@ -281,7 +378,7 @@ class ModbusAsciiParser : public Parser
   public:
     explicit ModbusAsciiParser(QStringList fields = {}, std::shared_ptr<ModbusRequests> requests = nullptr);
 
-    QList<Message> parse(const QByteArray &data) override;
+    QList<DecodedRecord> decodeRecords(const QByteArray &data) override;
     void reset() override { m_buf.clear(); }
 
   private:

@@ -1,8 +1,10 @@
 #include "studio/designer_page.h"
 
+#include "core/frame_templates.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
+#include "designer/project_frame_templates.h"
 #include "designer/widget_palette.h"
 #include "runtime/hmi_widget.h"
 #include "core/s7.h"
@@ -19,6 +21,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QMimeData>
+#include <QtCore/QSet>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QTimer>
 #include <QtGui/QAction>
@@ -214,7 +217,48 @@ std::optional<QJsonObject> clipboardDocument(const QByteArray &content, bool pla
     selection.insert(QStringLiteral("version"), object.contains(QStringLiteral("version"))
                                                     ? object.value(QStringLiteral("version"))
                                                     : QJsonValue(Project::formatVersion(widgets)));
+    if (object.contains(QStringLiteral("frameTemplates")))
+        selection.insert(QStringLiteral("frameTemplates"), object.value(QStringLiteral("frameTemplates")));
     return selection;
+}
+
+QJsonObject referencedFrameTemplates(const QJsonObject &library, const QJsonArray &widgets)
+{
+    QJsonObject templates;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const auto props = widget.value(QStringLiteral("properties")).toObject();
+        auto ids = FrameTemplates::receiveIds(props);
+        ids.append(props.value(FrameTemplates::SendId).toString());
+        for (const auto &id : ids) {
+            if (library.contains(id))
+                templates.insert(id, library.value(id));
+        }
+        return true;
+    });
+    return templates;
+}
+
+QJsonArray copyTemplateReferences(const Project &project, QJsonArray widgets)
+{
+    for (qsizetype i = 0; i < widgets.size(); ++i) {
+        auto widget = widgets.at(i).toObject();
+        if (supportsRouteTransport(widget.value(QStringLiteral("type")).toString(), RouteTransport::Bytes)) {
+            auto props = widget.value(QStringLiteral("properties")).toObject();
+            // A copied card keeps the template it used, including one inherited from the source project.
+            if (FrameTemplates::receiveIds(props).isEmpty()) {
+                const auto id = project.linkReceiveTemplateId(props);
+                if (!id.isEmpty()) {
+                    props.insert(FrameTemplates::ReceiveId, id);
+                    widget.insert(QStringLiteral("properties"), props);
+                }
+            }
+        }
+        if (widget.contains(QStringLiteral("children")))
+            widget.insert(QStringLiteral("children"),
+                          copyTemplateReferences(project, widget.value(QStringLiteral("children")).toArray()));
+        widgets[i] = widget;
+    }
+    return widgets;
 }
 
 QString rebasedPath(const QString &path, const QDir &from, const QDir &to)
@@ -435,6 +479,7 @@ void DesignerPage::fitCanvas()
 void DesignerPage::applyProjectSettings()
 {
     m_scene->setCanvasSize(QSize(m_project.canvasWidth, m_project.canvasHeight));
+    m_scene->setProjectParser(m_project.parserType());
     m_scene->setBitProfiles(m_project.bitProfiles);
     m_scene->setGridSize(m_project.gridSize);
 }
@@ -601,14 +646,15 @@ void DesignerPage::updateEditActions()
 
 void DesignerPage::copy()
 {
-    const QJsonArray widgets = m_scene->selectionJson();
+    const auto widgets = copyTemplateReferences(m_project, m_scene->selectionJson());
     if (widgets.isEmpty()) {
         return;
     }
-    const QByteArray json =
-        QJsonDocument(QJsonObject{{QStringLiteral("version"), Project::formatVersion(widgets)},
-                                  {QStringLiteral("widgets"), widgets}})
-            .toJson(QJsonDocument::Compact);
+    QJsonObject document{{QStringLiteral("version"), Project::formatVersion(widgets)}, {QStringLiteral("widgets"), widgets}};
+    const auto templates = referencedFrameTemplates(m_project.frameTemplates, widgets);
+    if (!templates.isEmpty())
+        document.insert(QStringLiteral("frameTemplates"), templates);
+    const QByteArray json = QJsonDocument(document).toJson(QJsonDocument::Compact);
     auto *mime = new QMimeData;
     mime->setData(QLatin1String(WidgetsClipboardType), json);
     mime->setText(QString::fromUtf8(json));
@@ -629,8 +675,21 @@ void DesignerPage::paste()
         document = clipboardDocument(content, true);
     }
     // Checked as opening a project checks them; a link card's frame format against this project's mode.
-    if (document)
-        document->insert(QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()}});
+    if (document) {
+        document->insert(QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()},
+                                                               {QStringLiteral("parserConfig"), m_project.parserConfig()}});
+        const auto library = document->value(QStringLiteral("frameTemplates"));
+        if (library.isUndefined() || library.isObject()) {
+            auto definitions = library.toObject();
+            auto missing = referencedFrameTemplates(m_project.frameTemplates,
+                                                      document->value(QStringLiteral("widgets")).toArray());
+            for (const auto &id : definitions.keys())
+                missing.remove(id);
+            mergeFrameTemplateLibrary(definitions, missing);
+            if (!definitions.isEmpty())
+                document->insert(QStringLiteral("frameTemplates"), definitions);
+        }
+    }
     Project clipboard;
     QString error;
     if (!document || !Project::fromJson(*document, &clipboard, &error, true) || clipboard.widgets.isEmpty()) {
@@ -643,7 +702,10 @@ void DesignerPage::paste()
     m_pasteCount = content == m_pasteContent && target == m_pasteTarget ? m_pasteCount + 1 : 1;
     m_pasteContent = content;
     m_pasteTarget = target;
-    m_scene->paste(clipboard.widgets, container, m_pasteCount);
+    const auto previous = m_project.frameTemplates;
+    m_project.frameTemplates = importClipboardFrameTemplates(clipboard, previous);
+    if (m_scene->paste(clipboard.widgets, container, m_pasteCount).isEmpty())
+        m_project.frameTemplates = previous;
 }
 
 bool DesignerPage::maybeSave()

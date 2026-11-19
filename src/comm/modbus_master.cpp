@@ -38,15 +38,13 @@ std::optional<ModbusNeed> modbusNeed(const BindingEntry &binding)
     if (table.isEmpty()) {
         return std::nullopt; // not a register table: nothing to read
     }
-    const bool wide = binding.mbDataType == QLatin1String("uint32") || binding.mbDataType == QLatin1String("int32") ||
-                      binding.mbDataType == QLatin1String("float32");
     ModbusNeed need;
     need.widgetId = binding.widgetId;
     need.route = binding.route();
     need.slave = binding.mbSlaveFilter;
     need.table = table;
     need.address = binding.mbRegIndex;
-    need.count = wide && !isBitTable(table) ? 2 : 1;
+    need.count = !isBitTable(table) && CommandEncoder::usesRegisterOrder(binding.mbDataType) ? 2 : 1;
     need.period = binding.mbPeriod;
     return need;
 }

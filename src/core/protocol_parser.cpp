@@ -7,12 +7,15 @@
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSet>
+#include <QtCore/QUrl>
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstring>
 #include <string_view>
+#include <vector>
 
 namespace fhmi {
 
@@ -77,6 +80,16 @@ int fixedPduLength(int fc)
 }
 
 } // namespace
+
+QList<Message> Parser::parse(const QByteArray &unit)
+{
+    auto records = decodeRecords(unit);
+    QList<Message> messages;
+    messages.reserve(records.size());
+    for (auto &record : records)
+        messages.append(std::move(record.values));
+    return messages;
+}
 
 QList<Message> Parser::feed(const QByteArray &data)
 {
@@ -655,12 +668,29 @@ QByteArray encodeText(const QString &text, const QString &encoding)
     return encoding == QLatin1String("gbk") ? encodeGbk(text) : text.toUtf8();
 }
 
+bool isAscii(QStringView text)
+{
+    return std::all_of(text.begin(), text.end(), [](QChar ch) { return ch.unicode() < 128; });
+}
+
 } // namespace
 
 QByteArray lineTerminator(const QJsonObject &config)
 {
     return encodeText(config.value(QStringLiteral("terminator")).toString(QStringLiteral("\n")),
                       config.value(QStringLiteral("encoding")).toString(QStringLiteral("utf-8")).toLower());
+}
+
+std::optional<QByteArray> buildLineFrame(const QString &body, const QJsonObject &config, QString *error)
+{
+    const auto encoding = config.value(QStringLiteral("encoding")).toString(QStringLiteral("utf-8")).toLower();
+    const auto terminator = config.value(QStringLiteral("terminator")).toString(QStringLiteral("\n"));
+    if (encoding == QLatin1String("ascii") && (!isAscii(body) || !isAscii(terminator))) {
+        if (error)
+            *error = QCoreApplication::translate("fhmi", "发送内容或行结束符包含 ASCII 无法编码的字符");
+        return std::nullopt;
+    }
+    return encodeText(body, encoding) + encodeText(terminator, encoding);
 }
 
 LineParser::LineParser(LineFrameConfig config, int maxBuffer) : m_config(std::move(config)), m_maxBuffer(maxBuffer)
@@ -691,10 +721,10 @@ QString LineParser::decode(const QByteArray &bytes, const QString &encoding)
     return encoding == QLatin1String("gbk") ? decodeGbk(bytes) : decodeUtf8(bytes);
 }
 
-QList<Message> LineParser::parse(const QByteArray &data)
+QList<DecodedRecord> LineParser::decodeRecords(const QByteArray &data)
 {
     m_buf += data;
-    QList<Message> results;
+    QList<DecodedRecord> results;
     while (true) {
         if (m_discarding) {
             const qsizetype end = m_buf.indexOf(m_terminator);
@@ -729,7 +759,7 @@ QList<Message> LineParser::parse(const QByteArray &data)
                     m_buf.remove(0, m_terminator.size());
                 }
                 if (!parsed.isEmpty()) {
-                    results.append(std::move(parsed));
+                    results.append({std::move(parsed), data.size() - m_buf.size()});
                 }
                 continue;
             }
@@ -740,7 +770,7 @@ QList<Message> LineParser::parse(const QByteArray &data)
             if (!text.isEmpty()) {
                 Message parsed = parseRecord(text, raw);
                 if (!parsed.isEmpty()) {
-                    results.append(std::move(parsed));
+                    results.append({std::move(parsed), data.size() - m_buf.size()});
                 }
             }
             continue;
@@ -922,12 +952,7 @@ const QStringList &fieldTypes()
     return names;
 }
 
-} // namespace HexOptions
-
-namespace {
-
-// Bytes a fixed-size field type takes; 0 for ASCII / HEX, which take any length.
-int fieldTypeSize(const QString &type)
+int fieldSize(const QString &type)
 {
     static const QHash<QString, int> sizes = {{QStringLiteral("uint8"), 1},   {QStringLiteral("int8"), 1},
                                               {QStringLiteral("uint16"), 2},  {QStringLiteral("int16"), 2},
@@ -935,6 +960,10 @@ int fieldTypeSize(const QString &type)
                                               {QStringLiteral("float32"), 4}, {QStringLiteral("float64"), 8}};
     return sizes.value(type, 0);
 }
+
+} // namespace HexOptions
+
+namespace {
 
 quint64 readUnsigned(const char *bytes, int size, bool littleEndian)
 {
@@ -946,122 +975,245 @@ quint64 readUnsigned(const char *bytes, int size, bool littleEndian)
     return value;
 }
 
+QByteArray encodeUnsigned(quint16 value, int size, bool littleEndian)
+{
+    if (size == 1)
+        return QByteArray(1, char(value));
+    const char high = char(value >> 8);
+    const char low = char(value);
+    const char bytes[] = {littleEndian ? low : high, littleEndian ? high : low};
+    return QByteArray(bytes, sizeof(bytes));
+}
+
 } // namespace
+
+namespace {
+
+struct MatchBytes
+{
+    qsizetype offset;
+    QByteArrayView bytes;
+};
+
+bool differentAtSharedByte(MatchBytes first, MatchBytes second)
+{
+    const auto from = std::max(first.offset, second.offset);
+    const auto to = std::min(first.offset + first.bytes.size(), second.offset + second.bytes.size());
+    return from < to && first.bytes.sliced(from - first.offset, to - from) !=
+                           second.bytes.sliced(from - second.offset, to - from);
+}
+
+bool canShareFrameStart(const HexFrameConfig &first, const HexFrameConfig &second)
+{
+    for (const auto a : {MatchBytes{0, first.header}, MatchBytes{first.matchOffset, first.matchBytes}})
+        for (const auto b : {MatchBytes{0, second.header}, MatchBytes{second.matchOffset, second.matchBytes}})
+            if (differentAtSharedByte(a, b))
+                return false;
+    return true;
+}
+
+} // namespace
+
+HexFrameMatch matchHexFrame(QByteArrayView sample, const HexFrameConfig &config)
+{
+    const MatchBytes actual{0, sample};
+    if (differentAtSharedByte(actual, {0, config.header}) ||
+        differentAtSharedByte(actual, {config.matchOffset, config.matchBytes}))
+        return HexFrameMatch::No;
+    return sample.size() < config.identificationEnd() ? HexFrameMatch::Partial : HexFrameMatch::Yes;
+}
 
 HexFrameParser::HexFrameParser(HexFrameConfig config) : m_config(std::move(config)) {}
 
-int HexFrameParser::frameLength() const
+int HexFrameParser::declaredLength(QByteArrayView buffer) const
 {
     const HexFrameConfig &c = m_config;
-    if (c.fixedLength > 0) {
-        return m_buf.size() >= c.fixedLength ? c.fixedLength : -1;
-    }
+    if (c.fixedLength > 0)
+        return c.fixedLength;
     if (c.lengthOffset >= 0) {
         const int fieldEnd = c.lengthOffset + c.lengthSize;
-        if (m_buf.size() < fieldEnd) {
+        if (buffer.size() < fieldEnd) {
             return -1;
         }
-        const int value = int(readUnsigned(m_buf.constData() + c.lengthOffset, c.lengthSize, c.lengthLittleEndian));
-        const int trailer = hexChecksumSize(c.checksum) + int(c.footer.size());
-        int length = value;
-        if (c.lengthCovers == HexFrameConfig::LengthCovers::AfterField) {
-            length = fieldEnd + value;
-        } else if (c.lengthCovers == HexFrameConfig::LengthCovers::Data) {
-            length = fieldEnd + value + trailer;
-        }
-        // A length that cannot hold the frame's own parts is noise that looked like a header.
-        if (length < fieldEnd + trailer || length < c.header.size() || length > MaxFrame) {
-            return 0;
-        }
-        return m_buf.size() >= length ? length : -1;
+        const int value = int(readUnsigned(buffer.constData() + c.lengthOffset, c.lengthSize, c.lengthLittleEndian));
+        return int(c.layout().lengthBase()) + value;
     }
+    if (c.footer.isEmpty())
+        return -1;
     // The footer is searched for after the header, as before length fields existed.
-    const int end = int(m_buf.indexOf(c.footer, c.header.size()));
+    const int end = int(buffer.indexOf(c.footer, c.header.size()));
     return end < 0 ? -1 : end + int(c.footer.size());
 }
 
-bool HexFrameParser::valid(const QByteArray &frame) const
+bool HexFrameParser::validLength(int length) const
+{
+    const auto &config = m_config;
+    const auto lengthEnd = config.fixedLength == 0 && config.lengthOffset >= 0
+        ? qsizetype(config.lengthOffset + config.lengthSize) : 0;
+    return length <= config.maxFrameLength &&
+           length >= std::max(config.identificationEnd(), lengthEnd) +
+                     config.footer.size() + hexChecksumSize(config.checksum);
+}
+
+HexFrameParser::Issue HexFrameParser::trailerIssue(const QByteArray &frame, QByteArray *calculatedChecksum) const
 {
     const HexFrameConfig &c = m_config;
-    const int size = hexChecksumSize(c.checksum);
-    const int at = int(frame.size() - c.footer.size()) - size; // where the checksum bytes start
-    if (at < c.header.size()) {
-        return false;
+    const auto layout = c.layout();
+    const auto at = layout.checksumOffset(frame.size());
+    if (at < c.identificationEnd()) {
+        return Issue::Length;
     }
     if (!c.footer.isEmpty() && !frame.endsWith(c.footer)) {
-        return false;
+        return Issue::Footer;
     }
-    if (!size) {
-        return true;
+    if (layout.checksumSize == 0) {
+        return Issue::None;
     }
     if (c.checksumStart > at) {
-        return false;
+        return Issue::ChecksumRange;
     }
     const quint16 expected = hexChecksum(c.checksum, frame.mid(c.checksumStart, at - c.checksumStart));
-    return readUnsigned(frame.constData() + at, size, c.checksumLittleEndian) == expected;
+    if (calculatedChecksum)
+        *calculatedChecksum = encodeUnsigned(expected, layout.checksumSize, c.checksumLittleEndian);
+    return readUnsigned(frame.constData() + at, layout.checksumSize, c.checksumLittleEndian) == expected ? Issue::None
+                                                                                                       : Issue::Checksum;
+}
+
+HexFrameParser::Issue HexFrameParser::sampleIssue(const QByteArray &frame, QByteArray *calculatedChecksum) const
+{
+    if (calculatedChecksum)
+        calculatedChecksum->clear();
+    const auto &config = m_config;
+    if (!frame.startsWith(config.header))
+        return Issue::Header;
+    if (matchHexFrame(frame, config) == HexFrameMatch::No)
+        return Issue::Identifier;
+    if (frame.isEmpty() || frame.size() > config.maxFrameLength)
+        return Issue::Length;
+    if ((config.fixedLength > 0 || config.lengthOffset >= 0) && declaredLength(frame) != frame.size())
+        return Issue::Length;
+    if (!config.footer.isEmpty() && !frame.endsWith(config.footer))
+        return Issue::Footer;
+    if (config.hasBoundary() && (declaredLength(frame) != frame.size() || !validLength(int(frame.size()))))
+        return Issue::Length;
+    return trailerIssue(frame, calculatedChecksum);
 }
 
 QList<QByteArray> HexFrameParser::frames(const QByteArray &data)
 {
-    const HexFrameConfig &c = m_config;
-    const bool ends = c.fixedLength > 0 || c.lengthOffset >= 0 || !c.footer.isEmpty();
-    m_buf += data;
-    QList<QByteArray> out;
-    while (!m_buf.isEmpty()) {
-        if (!c.header.isEmpty()) {
-            const int start = int(m_buf.indexOf(c.header));
-            if (start < 0) {
-                const int keep = int(c.header.size()) - 1;
-                m_buf = keep ? m_buf.right(keep) : QByteArray();
-                break;
-            }
-            m_buf.remove(0, start);
-        }
-        // Only a silence ends the frame without an end rule; flush() hands it out.
-        const int length = ends ? frameLength() : -1;
-        if (length < 0) {
-            if (m_buf.size() > MaxFrame) {
-                // Too long without a frame: drop from the front, on to the next header. One cut
-                // ends where dropping a byte at a time and looking for the header again would.
-                m_buf.remove(0, m_buf.size() - MaxFrame);
-                continue;
-            }
-            break;
-        }
-        if (length == 0) {
-            m_buf.remove(0, 1); // resync: past this header's first byte, on to the next header
-            continue;
-        }
-        if (length > MaxFrame) {
-            m_buf.remove(0, length); // a footer found too far away ends an overlong frame, dropped whole
-            continue;
-        }
-        const QByteArray frame = m_buf.left(length);
-        if (!valid(frame)) {
-            m_buf.remove(0, 1);
-            continue;
-        }
-        out.append(frame);
-        m_buf.remove(0, length);
-    }
-    return out;
+    m_buffer.bytes += data;
+    return scan(false);
 }
 
 QList<QByteArray> HexFrameParser::flush()
 {
-    const HexFrameConfig &c = m_config;
-    const QByteArray rest = m_buf;
-    m_buf.clear();
-    // With an end rule, what is left is half a frame. Without one, the silence ends the frame,
-    // which then starts with the header: frames() dropped whatever came before it.
-    if (c.fixedLength > 0 || c.lengthOffset >= 0 || !c.footer.isEmpty() || rest.isEmpty() ||
-        !rest.startsWith(c.header) || !valid(rest)) {
-        return {};
-    }
-    return {rest};
+    return scan(true);
 }
 
-QList<Message> HexFrameParser::parse(const QByteArray &frame)
+QList<QByteArray> HexFrameParser::scan(bool expired)
+{
+    return scan(m_buffer, [this](QByteArrayView bytes) {
+        const auto result = matchHexFrame(bytes, m_config);
+        return qMakePair(result == HexFrameMatch::Yes ? this : nullptr,
+                         result == HexFrameMatch::Partial ? std::optional{incompleteTimeout()} : std::nullopt);
+    }, expired);
+}
+
+int HexFrameParser::incompleteTimeout() const
+{
+    // An in-range but corrupt length cannot be distinguished from fragmented input until the link goes quiet.
+    if (m_config.idleTimeout > 0)
+        return m_config.idleTimeout;
+    return m_config.fixedLength == 0 && m_config.lengthOffset >= 0 ? HexOptions::LengthRecoveryMs : 0;
+}
+
+QList<QByteArray> HexFrameParser::scan(Buffer &state, const Matcher &match, bool expired)
+{
+    state.expected = 0;
+    state.idleMs = 0;
+    state.flushOnMessage = false;
+    const QByteArrayView buffered(state.bytes);
+    qsizetype consumed = 0;
+    QList<QByteArray> frames;
+    using Reason = FrameNotice::Reason;
+    struct Rejection
+    {
+        Reason reason;
+        qsizetype start;
+        int expected;
+    };
+    std::optional<Rejection> rejected;
+    // Keep one representative rejected span per read, ending before the next recovered frame.
+    const auto remember = [&](Reason reason, int expected) {
+        if (!rejected && !state.notice)
+            rejected = Rejection{reason, consumed, expected};
+    };
+    const auto finishRejection = [&] {
+        if (!rejected || state.notice)
+            return;
+        const auto size = consumed - rejected->start;
+        const auto sample = buffered.sliced(rejected->start, std::min<qsizetype>(size, 2048));
+        state.notice = FrameNotice{rejected->reason, sample.toByteArray(), size, rejected->expected};
+    };
+    while (consumed < buffered.size()) {
+        const auto remaining = buffered.sliced(consumed);
+        const auto [parser, partialTimeout] = match(remaining);
+        if (!parser) {
+            if (partialTimeout) {
+                if (!expired) {
+                    state.expected = -1;
+                    state.idleMs = *partialTimeout;
+                    break;
+                }
+                remember(Reason::Timeout, -1);
+            }
+            ++consumed;
+            continue;
+        }
+        const auto &config = parser->m_config;
+        const bool onSilence = !config.hasBoundary();
+        const int declared = parser->declaredLength(remaining);
+        const int length = onSilence && expired ? int(remaining.size()) : declared;
+        if ((length >= 0 && !parser->validLength(length)) ||
+            (length < 0 && remaining.size() > config.maxFrameLength)) {
+            remember(Reason::Length, declared);
+            // With only a delimiter, the next record starts beyond an overlong delimited record.
+            if (!config.identificationEnd() && config.lengthOffset < 0 && length > 0) {
+                consumed += length;
+                continue;
+            }
+        } else if (length < 0 || length > remaining.size()) {
+            if (!expired) {
+                state.expected = declared;
+                state.idleMs = parser->incompleteTimeout();
+                state.flushOnMessage = onSilence;
+                break;
+            }
+            remember(Reason::Timeout, declared);
+        } else {
+            auto frame = remaining.first(length).toByteArray();
+            const auto issue = parser->trailerIssue(frame);
+            if (issue == Issue::None) {
+                finishRejection();
+                frames.append(std::move(frame));
+                consumed += length;
+                continue;
+            }
+            remember(issue == Issue::Footer ? Reason::Footer : issue == Issue::Length ? Reason::Length : Reason::Checksum,
+                     declared);
+        }
+        if (!config.identificationEnd() && config.footer.isEmpty() && config.checksum == HexChecksum::None) {
+            consumed = buffered.size(); // no marker to tell a new frame from payload
+        } else {
+            ++consumed;
+        }
+    }
+    finishRejection();
+    state.bytes.remove(0, consumed);
+    return frames;
+}
+
+QList<DecodedRecord> HexFrameParser::decodeRecords(const QByteArray &frame)
 {
     // Fields count from the first byte after the header and stop before the checksum and footer.
     const int from = int(m_config.header.size());
@@ -1073,7 +1225,7 @@ QList<Message> HexFrameParser::parse(const QByteArray &frame)
             continue;
         }
         const QByteArray raw = payload.mid(field.offset, field.length);
-        const int size = fieldTypeSize(field.type);
+        const int size = HexOptions::fieldSize(field.type);
         const quint64 bits = size ? readUnsigned(raw.constData(), size, field.littleEndian) : 0;
         if (field.type == QLatin1String("uint8") || field.type == QLatin1String("uint16") ||
             field.type == QLatin1String("uint32")) {
@@ -1110,8 +1262,88 @@ QList<Message> HexFrameParser::parse(const QByteArray &frame)
     if (result.isEmpty()) {
         return {};
     }
-    return {result};
+    return {{std::move(result), frame.size()}};
 }
+
+class HexFrameGroupParser final : public Parser
+{
+  public:
+    explicit HexFrameGroupParser(QList<HexFrameVariant> variants)
+    {
+        m_readers.reserve(variants.size());
+        for (auto &variant : variants) {
+            const auto prefix = hexTemplateFieldKey(variant.id, {});
+            m_readers.push_back({HexFrameParser(std::move(variant.frame)), prefix,
+                                 std::move(variant.unqualifiedFields)});
+        }
+    }
+
+    QList<QByteArray> frames(const QByteArray &bytes) override
+    {
+        m_buffer.bytes += bytes;
+        return scan(false);
+    }
+
+    QList<DecodedRecord> decodeRecords(const QByteArray &frame) override
+    {
+        const int index = match(frame).first;
+        if (index < 0)
+            return {};
+        auto &reader = m_readers[index];
+        const auto decoded = reader.parser.decodeRecords(frame);
+        if (decoded.isEmpty())
+            return {};
+        Message result;
+        const auto &message = decoded.first().values;
+        for (auto it = message.constBegin(); it != message.constEnd(); ++it) {
+            result.insert(reader.prefix + it.key(), it.value());
+            if (reader.aliases.contains(it.key()))
+                result.insert(it.key(), it.value());
+        }
+        return {{std::move(result), frame.size()}};
+    }
+
+    QList<QByteArray> flush() override { return scan(true); }
+    int idleTimeout() const override { return m_buffer.idleMs; }
+    bool flushOnMessage() const override { return m_buffer.flushOnMessage; }
+    std::optional<FrameNotice> takeFrameNotice() override { return std::exchange(m_buffer.notice, {}); }
+    FrameProgress frameProgress() const override { return m_buffer.progress(); }
+    void reset() override { m_buffer = {}; }
+
+  private:
+    struct Reader
+    {
+        HexFrameParser parser;
+        QString prefix;
+        QSet<QString> aliases;
+    };
+
+    QList<QByteArray> scan(bool expired)
+    {
+        return HexFrameParser::scan(m_buffer, [this](QByteArrayView bytes) {
+            const auto [index, partialTimeout] = match(bytes);
+            const HexFrameParser *parser = index < 0 ? nullptr : &m_readers[index].parser;
+            return qMakePair(parser, partialTimeout);
+        }, expired);
+    }
+
+    QPair<int, std::optional<int>> match(QByteArrayView bytes) const
+    {
+        std::optional<int> partialTimeout;
+        for (int i = 0; i < int(m_readers.size()); ++i) {
+            const auto &parser = m_readers[i].parser;
+            const auto result = matchHexFrame(bytes, parser.m_config);
+            if (result == HexFrameMatch::Yes)
+                return {i, std::nullopt};
+            if (result == HexFrameMatch::Partial)
+                partialTimeout = std::max(partialTimeout.value_or(0), parser.incompleteTimeout());
+        }
+        return {-1, partialTimeout};
+    }
+
+    std::vector<Reader> m_readers;
+    HexFrameParser::Buffer m_buffer;
+};
 
 // ---------------------------------------------------------------------------
 // Modbus
@@ -1227,10 +1459,10 @@ int ModbusRtuParser::frameLength(const QByteArray &buf, int from)
     return pdu ? pdu + 3 : 0; // with the slave address and the CRC
 }
 
-QList<Message> ModbusRtuParser::parse(const QByteArray &data)
+QList<DecodedRecord> ModbusRtuParser::decodeRecords(const QByteArray &data)
 {
     m_buf += data;
-    QList<Message> results;
+    QList<DecodedRecord> results;
     while (m_buf.size() >= 5) {
         const int length = frameLength(m_buf);
         if (length <= 0) {
@@ -1263,8 +1495,8 @@ QList<Message> ModbusRtuParser::parse(const QByteArray &data)
         m_buf.remove(0, length);
         const int slave = quint8(frame.at(0));
         const int fc = quint8(frame.at(1));
-        results.append(modbusResponse(slave, fc, frame.mid(2, length - 4), m_fields,
-                                      m_requests->take(slave, fc, -1, &m_answered)));
+        results.append({modbusResponse(slave, fc, frame.mid(2, length - 4), m_fields,
+                                       m_requests->take(slave, fc, -1, &m_answered)), data.size() - m_buf.size()});
     }
     return results;
 }
@@ -1293,10 +1525,10 @@ int ModbusTcpParser::frameLength(const QByteArray &buf)
     return 6 + length;
 }
 
-QList<Message> ModbusTcpParser::parse(const QByteArray &data)
+QList<DecodedRecord> ModbusTcpParser::decodeRecords(const QByteArray &data)
 {
     m_buf += data;
-    QList<Message> results;
+    QList<DecodedRecord> results;
     while (m_buf.size() >= 9) { // the shortest ADU is an exception response
         const int length = frameLength(m_buf);
         if (!length) {
@@ -1313,7 +1545,8 @@ QList<Message> ModbusTcpParser::parse(const QByteArray &data)
             continue;
         const int slave = quint8(frame.at(6));
         const int fc = quint8(frame.at(7));
-        results.append(modbusResponse(slave, fc, frame.mid(8), m_fields, m_requests->take(slave, fc, transaction)));
+        results.append({modbusResponse(slave, fc, frame.mid(8), m_fields, m_requests->take(slave, fc, transaction)),
+                        data.size() - m_buf.size()});
     }
     return results;
 }
@@ -1324,12 +1557,12 @@ ModbusAsciiParser::ModbusAsciiParser(QStringList fields, std::shared_ptr<ModbusR
 {
 }
 
-QList<Message> ModbusAsciiParser::parse(const QByteArray &data)
+QList<DecodedRecord> ModbusAsciiParser::decodeRecords(const QByteArray &data)
 {
     // ':' + 2 digits for each of up to 254 bytes (slave, function code, count, 250 data, LRC) + CR LF.
     constexpr qsizetype MaxFrame = 1 + 2 * 254 + 2;
     m_buf += data;
-    QList<Message> results;
+    QList<DecodedRecord> results;
     while (true) {
         const qsizetype start = m_buf.indexOf(':');
         if (start < 0) {
@@ -1355,8 +1588,8 @@ QList<Message> ModbusAsciiParser::parse(const QByteArray &data)
         m_buf.remove(0, end + 2);
         const int slave = quint8(body->at(0));
         const int fc = quint8(body->at(1));
-        results.append(
-            modbusResponse(slave, fc, body->mid(2), m_fields, m_requests->take(slave, fc, -1, &m_answered)));
+        results.append({modbusResponse(slave, fc, body->mid(2), m_fields, m_requests->take(slave, fc, -1, &m_answered)),
+                        data.size() - m_buf.size()});
     }
     return results;
 }
@@ -1610,34 +1843,21 @@ std::optional<LineFrameConfig> lineFrameConfig(const QJsonObject &config, QStrin
         return fail(QCoreApplication::translate("fhmi", "编码只能是 utf-8、gbk 或 ascii"));
     }
     out.encoding = encoding.toString(out.encoding).toLower();
+    if (out.encoding == QLatin1String("ascii") && !isAscii(out.terminator))
+        return fail(QCoreApplication::translate("fhmi", "ASCII 行结束符只能包含 ASCII 字符"));
     return out;
 }
 
-std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString *error)
+bool readHexLayout(const QJsonObject &config, HexFrameConfig &out, QString *error)
 {
     const auto fail = [error](const QString &text) {
         setError(error, text);
-        return std::nullopt;
+        return false;
     };
-    HexFrameConfig out;
-    const auto header = delimiterSetting(config, "header", "AA55");
-    const auto footer = delimiterSetting(config, "footer", "55AA");
     const auto lengthOffset = intSetting(config, "lengthOffset", -1);
     const auto lengthSize = intSetting(config, "lengthSize", 1);
     const auto fixedLength = intSetting(config, "fixedLength", 0);
     const auto checksumStart = intSetting(config, "checksumStart", 0);
-    const auto idleTimeout = intSetting(config, "idleTimeout", 0);
-
-    // Something has to end a frame; a setting that is present but invalid is reported below.
-    if (footer && footer->isEmpty() && lengthOffset && *lengthOffset < 0 && fixedLength && *fixedLength == 0 &&
-        idleTimeout && *idleTimeout == 0) {
-        return fail(QCoreApplication::translate("fhmi", "HEX 帧需要帧尾、长度字段、固定帧长或空闲超时之一来分帧"));
-    }
-    if (!header || !footer) {
-        return fail(QCoreApplication::translate("fhmi", "HEX 帧头或帧尾不是十六进制"));
-    }
-    out.header = *header;
-    out.footer = *footer;
     if (fixedLength && *fixedLength > 0 && lengthOffset && *lengthOffset >= 0) {
         return fail(QCoreApplication::translate("fhmi", "固定帧长和长度字段只能选一个"));
     }
@@ -1649,6 +1869,7 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
         return value.isUndefined() || (value.isString() && options.contains(value.toString()));
     };
     if (!lengthOffset || *lengthOffset < -1 || !lengthSize || (*lengthSize != 1 && *lengthSize != 2) ||
+        *lengthOffset > 65536 - *lengthSize ||
         !stringIn("lengthEndian", HexOptions::byteOrders()) || !stringIn("lengthCovers", HexOptions::lengthCovers())) {
         return fail(QCoreApplication::translate("fhmi", "HEX 长度字段设置无效"));
     }
@@ -1669,10 +1890,58 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
     out.checksumStart = *checksumStart;
     out.checksumLittleEndian =
         config.value(QStringLiteral("checksumEndian")).toString() == HexOptions::byteOrders().at(1);
+    return true;
+}
+
+} // namespace
+
+std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString *error)
+{
+    const auto fail = [error](const QString &text) {
+        setError(error, text);
+        return std::nullopt;
+    };
+    HexFrameConfig out;
+    const auto header = delimiterSetting(config, "header", "AA55");
+    const auto footer = delimiterSetting(config, "footer", "55AA");
+    const auto lengthOffset = intSetting(config, "lengthOffset", -1);
+    const auto fixedLength = intSetting(config, "fixedLength", 0);
+    const auto idleTimeout = intSetting(config, "idleTimeout", 0);
+    const auto maxFrameLength = intSetting(config, "maxFrameLength", 65536);
+    if (footer && footer->isEmpty() && lengthOffset && *lengthOffset < 0 && fixedLength && *fixedLength == 0 &&
+        idleTimeout && *idleTimeout == 0) {
+        return fail(QCoreApplication::translate("fhmi", "HEX 帧需要帧尾、长度字段、固定帧长或空闲超时之一来分帧"));
+    }
+    if (!header || !footer)
+        return fail(QCoreApplication::translate("fhmi", "HEX 帧头或帧尾不是十六进制"));
+    out.header = *header;
+    out.footer = *footer;
+    if (!readHexLayout(config, out, error))
+        return std::nullopt;
+    if (!maxFrameLength || *maxFrameLength < 1 || *maxFrameLength > 65536 || *maxFrameLength < out.fixedLength)
+        return fail(QCoreApplication::translate("fhmi", "最大帧长须为 1–65536 字节，且不能小于固定帧长"));
+    out.maxFrameLength = *maxFrameLength;
+    const auto match = delimiterSetting(config, "matchBytes", "");
+    const auto matchOffset = intSetting(config, "matchOffset", 0);
+    if (!match || (!match->isEmpty() && (!matchOffset || *matchOffset < 0 || *matchOffset > 65535)))
+        return fail(QCoreApplication::translate("fhmi", "HEX 命令字位置或匹配值无效"));
+    if (!match->isEmpty()) {
+        out.matchBytes = *match;
+        out.matchOffset = *matchOffset;
+        const int maximum = out.fixedLength > 0 ? out.fixedLength : out.maxFrameLength;
+        if (out.identificationEnd() + out.footer.size() + hexChecksumSize(out.checksum) > maximum)
+            return fail(QCoreApplication::translate("fhmi", "HEX 命令字超出了帧的有效数据范围"));
+        if (differentAtSharedByte({0, out.header}, {out.matchOffset, out.matchBytes}))
+            return fail(QCoreApplication::translate("fhmi", "HEX 命令字与帧头重叠且内容不同"));
+    }
     if (!idleTimeout || *idleTimeout < 0 || *idleTimeout > 60000) {
         return fail(QCoreApplication::translate("fhmi", "HEX 空闲超时无效"));
     }
     out.idleTimeout = *idleTimeout;
+    const auto firstPayloadEnd = std::max(out.identificationEnd(),
+        out.fixedLength == 0 && out.lengthOffset >= 0 ? qsizetype(out.lengthOffset + out.lengthSize) : 0);
+    if (firstPayloadEnd + out.footer.size() + hexChecksumSize(out.checksum) > out.maxFrameLength)
+        return fail(QCoreApplication::translate("fhmi", "最大帧长无法容纳当前帧格式"));
 
     const QJsonValue fieldList = config.value(QStringLiteral("fields"));
     if (!fieldList.isUndefined() && !fieldList.isNull() && !fieldList.isArray()) {
@@ -1693,7 +1962,7 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
         const auto offset = number(1);
         const auto length = number(2);
         const QString type = item.at(3).toString();
-        const int size = fieldTypeSize(type);
+        const int size = HexOptions::fieldSize(type);
         const bool endianOk =
             item.size() == 4 || (item.at(4).isString() && HexOptions::byteOrders().contains(item.at(4).toString()));
         if ((item.size() != 4 && item.size() != 5) || !offset || *offset < 0 || !length || *length <= 0 ||
@@ -1706,7 +1975,108 @@ std::optional<HexFrameConfig> hexFrameConfig(const QJsonObject &config, QString 
     return out;
 }
 
-} // namespace
+HexFrameLayout HexFrameConfig::layout() const
+{
+    return {header.size(), footer.size(), hexChecksumSize(checksum), lengthOffset,
+            lengthOffset >= 0 ? lengthSize : 0, checksumStart, checksum, lengthCovers};
+}
+
+QString hexTemplateFieldKey(const QString &templateId, const QString &name)
+{
+    return QString::fromLatin1(QUrl::toPercentEncoding(templateId, {}, ".")) + u'.' + name;
+}
+
+std::optional<QList<HexFrameVariant>> hexFrameVariants(const QJsonObject &settings, QString *error)
+{
+    const auto fail = [error](const QString &text) {
+        setError(error, text);
+        return std::nullopt;
+    };
+    const auto tr = [](const char *text) { return QCoreApplication::translate("fhmi", text); };
+    const auto list = settings.value(LinkParser::GroupTemplates).toArray();
+    if (list.size() < 2)
+        return fail(tr("请选择至少两个 HEX 接收模板"));
+    QList<HexFrameVariant> variants;
+    QSet<QString> ids;
+    QSet<QString> qualified;
+    QHash<QString, int> uses;
+    for (const auto &item : list) {
+        const auto entry = item.toObject();
+        const auto id = entry.value(QStringLiteral("id")).toString();
+        if (id.isEmpty() || ids.contains(id))
+            return fail(tr("接收模板 ID 不能为空或重复"));
+        ids.insert(id);
+        const auto name = entry.value(QStringLiteral("name")).toString(id);
+        QString problem;
+        auto config = hexFrameConfig(entry.value(QStringLiteral("parserConfig")).toObject(), &problem);
+        if (!config)
+            return fail(tr("模板 %1 · %2").arg(name, problem));
+        if (config->identificationEnd() == 0)
+            return fail(tr("接收模板 %1 需要帧头或命令字").arg(name));
+        for (const auto &variant : variants)
+            if (canShareFrameStart(variant.frame, *config))
+                return fail(tr("模板 %1 与 %2 的匹配规则重叠，请用不同帧头或同一位置的不同命令字区分")
+                                .arg(variant.name, name));
+        for (const auto &field : config->fields) {
+            qualified.insert(hexTemplateFieldKey(id, field.name));
+            ++uses[field.name];
+        }
+        variants.append({id, name, std::move(*config), {}});
+    }
+    for (auto &variant : variants)
+        for (const auto &field : variant.frame.fields)
+            if (uses.value(field.name) == 1 && !qualified.contains(field.name))
+                variant.unqualifiedFields.insert(field.name);
+    return variants;
+}
+
+std::optional<QByteArray> buildHexFrame(const QByteArray &body, const QByteArray &header, const QByteArray &footer,
+                                      const QJsonObject &settings, QString *error, HexFrameLayout *layout)
+{
+    const auto tr = [](const char *text) { return QCoreApplication::translate("fhmi", text); };
+    const auto fail = [error](const QString &text) {
+        setError(error, text);
+        return std::nullopt;
+    };
+    HexFrameConfig config;
+    if (!readHexLayout(settings, config, error))
+        return std::nullopt;
+    config.header = header;
+    config.footer = footer;
+    const auto framing = config.layout();
+    QByteArray frame = header + body;
+    const qsizetype total = frame.size() + framing.footerSize + framing.checksumSize + framing.lengthSize;
+    const int maximum = settings.value(QStringLiteral("maxFrameLength")).toInt();
+    if (maximum > 0 && total > maximum)
+        return fail(tr("组帧后为 %1 字节，超出最大帧长 %2").arg(total).arg(maximum));
+    if (config.fixedLength && total != config.fixedLength)
+        return fail(tr("组帧后为 %1 字节，固定帧长为 %2 字节").arg(total).arg(config.fixedLength));
+
+    if (config.lengthOffset >= 0) {
+        if (config.lengthOffset < header.size() || config.lengthOffset > frame.size())
+            return fail(tr("长度字段位置须在帧头之后、数据末尾以内"));
+        const qsizetype length = total - framing.lengthBase();
+        const int maximum = config.lengthSize == 1 ? 0xFF : 0xFFFF;
+        if (length < 0 || length > maximum)
+            return fail(tr("长度 %1 超出 %2 字节字段的范围").arg(length).arg(config.lengthSize));
+        frame.insert(config.lengthOffset, encodeUnsigned(quint16(length), config.lengthSize, config.lengthLittleEndian));
+    }
+    if (const int size = hexChecksumSize(config.checksum)) {
+        if (config.checksumStart > frame.size())
+            return fail(tr("校验起点超出了数据范围"));
+        frame += encodeUnsigned(hexChecksum(config.checksum, frame.mid(config.checksumStart)), size, config.checksumLittleEndian);
+    }
+    if (layout)
+        *layout = framing;
+    return frame + footer;
+}
+
+std::optional<QByteArray> buildHexFrame(const QByteArray &body, const QJsonObject &settings,
+                                      QString *error, HexFrameLayout *layout)
+{
+    const auto config = hexFrameConfig(settings, error);
+    return config ? buildHexFrame(body, config->header, config->footer, settings, error, layout) : std::nullopt;
+}
 
 std::unique_ptr<Parser> createParser(const QString &type, const QJsonObject &config, QString *error,
                                      std::shared_ptr<ModbusRequests> requests)
@@ -1724,6 +2094,10 @@ std::unique_ptr<Parser> createParser(const QString &type, const QJsonObject &con
             return nullptr;
         }
         return std::make_unique<HexFrameParser>(std::move(*settings));
+    }
+    if (type == LinkParser::HexGroup) {
+        auto variants = hexFrameVariants(config, error);
+        return variants ? std::make_unique<HexFrameGroupParser>(std::move(*variants)) : nullptr;
     }
     if (type == QLatin1String("modbus")) {
         return std::make_unique<ModbusRtuParser>(fieldNames(config), std::move(requests));

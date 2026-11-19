@@ -22,6 +22,7 @@ QString prefix(const QString &area); // "hr", "ir", "co", "di"; empty for anythi
 } // namespace ModbusArea
 
 namespace ParseMode {
+inline const QString None = QStringLiteral("未绑定");         // i18n: value
 inline const QString DataPoint = QStringLiteral("工程数据点"); // i18n: value
 inline const QString KeyValue = QStringLiteral("键值匹配");    // i18n: value
 inline const QString JsonPath = QStringLiteral("JSON路径");    // i18n: value
@@ -29,16 +30,19 @@ inline const QString HexBytes = QStringLiteral("HEX字节提取"); // i18n: valu
 inline const QString S7 = QStringLiteral("S7");
 inline const QString Modbus = QStringLiteral("Modbus");
 inline const QString CanSignal = QStringLiteral("CAN信号"); // i18n: value
+inline const QString CanField = QStringLiteral("CAN 信号名称"); // i18n: value
 } // namespace ParseMode
 
 inline RouteTransport bindingRouteTransport(QStringView mode)
 {
-    if (mode == ParseMode::CanSignal)
+if (mode == ParseMode::CanSignal || mode == ParseMode::CanField)
         return RouteTransport::Can;
     if (mode == ParseMode::S7)
         return RouteTransport::S7;
     return mode == ParseMode::HexBytes || mode == ParseMode::Modbus ? RouteTransport::Bytes : RouteTransport::Any;
 }
+
+bool supportsBindingMode(const QString &typeName, QStringView mode);
 
 // Which bit a CAN信号 binding's canStartBit names. Fixed values in the file, not translated.
 namespace CanByteOrder {
@@ -48,11 +52,32 @@ inline const QString MotorolaLsb = QStringLiteral("Motorola LSB"); // the LSB in
 inline QStringList options() { return {Intel, MotorolaMsb, MotorolaLsb}; }
 } // namespace CanByteOrder
 
+// The bit layout of a raw CAN binding, independently of whether its CAN ID has been set.
+std::optional<CanSignalDef> canBitField(const QJsonObject &binding, QString *error = nullptr);
+
 // Why a CAN信号 binding (the widget's "binding" object) reads nothing: its ID does not parse, its byte order is
 // unknown, or its signal does not fit a frame. Empty when it is fine.
 QString canSignalProblem(const QJsonObject &binding);
 
-// The synthetic binding a RealtimeChart's curve describes with its _curve_{curve}_* properties, defaults filled in.
+namespace TimingSource {
+inline const QString Property = QStringLiteral("timingSource");
+inline const QString StateWord = QStringLiteral("状态字"); // i18n: value
+inline const QString Channels = QStringLiteral("逐路绑定"); // i18n: value
+
+inline bool usesChannels(const QJsonObject &properties)
+{
+    return properties.value(Property).toString() == Channels;
+}
+} // namespace TimingSource
+
+inline bool isTimingChart(QStringView type) { return type == QLatin1String("DigitalTimingChart"); }
+inline bool usesChartSeries(QStringView type, const QJsonObject &properties)
+{
+    return type == QLatin1String("RealtimeChart") || (isTimingChart(type) && TimingSource::usesChannels(properties));
+}
+
+// Curves and individually bound timing channels share the _curve_{curve}_* properties.
+QString chartCurveName(const QJsonObject &props, int curve);
 // The runtime builds the curve from it and the property panel judges it (canSignalProblem).
 QJsonObject chartCurveBinding(const QJsonObject &props, int curve);
 
@@ -68,6 +93,15 @@ std::optional<double> bindingFloat(const QVariant &value); // finite only
 std::optional<bool> bindingBoolean(const QVariant &value); // true/on/yes, false/off/no, or a number
 std::optional<bool> bindingLed(const QVariant &value, const QString &onValue, const QString &offValue);
 QVariant bindingDecimals(const QVariant &value, const QString &places);
+QVariant formatDisplayValue(const QVariant &value, const QString &format, const QString &decimals);
+
+const QStringList &rawBindingDataTypes();
+
+struct BindingByteRange
+{
+    qsizetype offset;
+    qsizetype size;
+};
 
 // One binding: a data source in the incoming stream -> one widget property.
 class BindingEntry
@@ -120,6 +154,7 @@ class BindingEntry
 
     // An invalid QVariant means "no value in this message".
     QVariant extractFromParsed(const Message &data) const;
+    std::optional<BindingByteRange> rawByteRange(const QByteArray &raw) const;
     QVariant extractFromRaw(const QByteArray &raw) const;
     QList<QVariant> extractAllFromRaw(const QByteArray &raw, quint64 stream = 0, bool keepInvalid = false);
     // A CAN信号 binding's physical value (raw × factor + offset) in a received frame; invalid for another ID, a
@@ -129,6 +164,7 @@ class BindingEntry
     void resetStream(quint64 stream);
 
     QVariant evaluate(const QVariant &raw) const;
+    QVariant evaluateStrict(const QVariant &raw) const;
     // Charts require a finite source before applying an expression; bad results retain that source.
     std::optional<double> chartSample(const QVariant &raw) const;
     QVariant formatValue(const QVariant &value) const;
@@ -137,7 +173,6 @@ class BindingEntry
 
   private:
     QVariant extractModbus(const Message &data) const;
-    std::optional<QByteArray> stripFrame(const QByteArray &raw) const;
 
     QHash<quint64, RawFrameBuffer> m_rawFrames;
 };

@@ -32,6 +32,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QLocale>
 #include <QtCore/QSaveFile>
+#include <QtCore/QScopedValueRollback>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QTimer>
@@ -108,6 +109,7 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_zlgModel = comboOf(this, enumOptions(meta, "zlgModel"));
     m_device = comboOf(this, numbers(15));
     m_zlgChannel = comboOf(this, numbers(7));
+    m_zlgChannel->setObjectName(QStringLiteral("canZlgChannel"));
     // A ZLG model sits beside the adapter, its device index and channel in the channel row: in one row the three
     // would not fit a 380 px card.
     for (FluentQt::ComboBox *combo : {m_adapter, m_zlgModel}) {
@@ -180,13 +182,17 @@ CanConfigCardWidget::CanConfigCardWidget(const WidgetMeta &meta, QWidget *parent
     m_statusTimer->setInterval(kStatusRefreshMs);
     connect(m_statusTimer, &QTimer::timeout, this, &CanConfigCardWidget::showConnection);
     connect(m_adapter, &FluentQt::ComboBox::currentIndexChanged, this, [this]() {
+        resetAdapterOptions(false);
         resetSamplePointOptions();
         updateAdapterUi();
         if (isLive()) {
             refreshChannels();
         }
     });
-    connect(m_zlgModel, &FluentQt::ComboBox::currentIndexChanged, this, &CanConfigCardWidget::updateAdapterUi);
+    connect(m_zlgModel, &FluentQt::ComboBox::currentIndexChanged, this, [this]() {
+        resetAdapterOptions(false);
+        updateAdapterUi();
+    });
     connect(m_customTiming, &QLineEdit::textChanged, this, &CanConfigCardWidget::updateAdapterUi);
     connect(m_calculate, &QPushButton::clicked, this, &CanConfigCardWidget::showTimingCalculator);
     connect(m_fd, &QCheckBox::toggled, this, &CanConfigCardWidget::updateAdapterUi);
@@ -218,15 +224,14 @@ QWidget *CanConfigCardWidget::row(std::initializer_list<QPair<QWidget *, int>> w
 
 void CanConfigCardWidget::apply()
 {
+    const QSignalBlocker adapterBlock(m_adapter), modelBlock(m_zlgModel);
     m_title->setText(text("title"));
     selectValue(m_adapter, text("defaultAdapter"));
     selectValue(m_zlgModel, text("zlgModel"));
     selectValue(m_device, QString::number(std::clamp(integer("defaultDeviceIndex"), 0, 15)));
-    selectValue(m_zlgChannel, QString::number(std::clamp(integer("defaultChannel"), 0, 7)));
-    selectValue(m_bitrate, text("defaultBitrate"));
+    resetAdapterOptions(true);
     resetSamplePointOptions();
     m_fd->setChecked(flag("canFd"));
-    selectValue(m_dataBitrate, text("defaultDataBitrate"));
     selectValue(m_dataSamplePoint, text("defaultDataSamplePoint"));
     m_customTiming->setText(text("zlgCustomTiming"));
     updatePolling();
@@ -244,6 +249,7 @@ void CanConfigCardWidget::apply()
     m_hintCaption = m_fieldLabels.last();
     // The channel comes last so that 连接 ends its row, as on the other cards, whichever adapter hides which rows.
     addField(tr("通道"), m_targetRow);
+    m_targetCaption = m_fieldLabels.last();
     finishFields();
     updateAdapterUi();
 }
@@ -279,6 +285,26 @@ CanSettings CanConfigCardWidget::settings() const
     return s;
 }
 
+void CanConfigCardWidget::resetAdapterOptions(bool restoreDefaults)
+{
+    const auto caps = CanAdapter::caps(selectedValue(m_adapter), selectedValue(m_zlgModel));
+    const auto replace = [restoreDefaults](FluentQt::ComboBox *combo, const QStringList &options,
+                                           const QString &configured, const QString &fallback) {
+        const QString current = restoreDefaults ? configured : selectedValue(combo);
+        const QSignalBlocker blocker(combo);
+        combo->clear();
+        addValueItems(combo, options);
+        if (!selectValue(combo, current))
+            selectValue(combo, fallback);
+    };
+    replace(m_zlgChannel, numbers(caps.channelCount > 0 ? caps.channelCount - 1 : 7),
+            QString::number(integer("defaultChannel")), QStringLiteral("0"));
+    replace(m_bitrate, caps.nominalBitrates.isEmpty() ? enumOptions(meta(), "defaultBitrate") : caps.nominalBitrates,
+            text("defaultBitrate"), QStringLiteral("500k"));
+    replace(m_dataBitrate, caps.dataBitrates.isEmpty() ? enumOptions(meta(), "defaultDataBitrate") : caps.dataBitrates,
+            text("defaultDataBitrate"), QStringLiteral("2M"));
+}
+
 void CanConfigCardWidget::resetSamplePointOptions()
 {
     const QSignalBlocker blocker(m_samplePoint);
@@ -296,7 +322,9 @@ void CanConfigCardWidget::updateAdapterUi()
     const auto timing = CanAdapter::timingOverrides(adapter, configured.customTiming);
     const bool zlg = adapter == CanAdapter::Zlg;
     const bool compact = text("displayMode") == QStringLiteral("简洁"); // i18n: value
-    m_channelRow->setVisible(!zlg);
+    m_channelRow->setVisible(!zlg && caps.channelList);
+    if (m_targetCaption)
+        m_targetCaption->setVisible(zlg || caps.channelList);
     m_zlgRow->setVisible(zlg);
     m_zlgModel->setVisible(zlg);
     m_detect->setVisible(zlg);
@@ -359,10 +387,10 @@ void CanConfigCardWidget::updateAdapterUi()
         }
     }
     if (compact && configured.fd && !socketCan) {
-        if (summary.isEmpty())
+        if (summary.isEmpty() && caps.bitrate)
             summary = CanAdapter::bitrateText(configured.bitrate) + QLatin1Char('/') +
                       CanAdapter::bitrateText(configured.dataBitrate);
-        summary.prepend(QStringLiteral("CAN FD · "));
+        summary = summary.isEmpty() ? QStringLiteral("CAN FD") : QStringLiteral("CAN FD · ") + summary;
     }
     m_calculate->setVisible(calculator);
     m_calculate->setEnabled(editable && calculator);
@@ -388,6 +416,8 @@ void CanConfigCardWidget::refreshChannels(bool announce)
         return;
     if (adapter == CanAdapter::Zlg && !announce)
         return; // saved device choices stay stable
+    if (adapter == CanAdapter::Virtual)
+        return;
     const QString current = m_channel->currentText();
     const int listed = m_channel->findText(current);
     const bool wasListed = listed >= 0 && m_channel->itemData(listed).isValid();
@@ -1250,7 +1280,11 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     connect(m_displayMode, &FluentQt::ComboBox::currentIndexChanged, this, [this]() { updateDisplayMode(); });
     connect(m_maxMessages, qOverload<int>(&QSpinBox::valueChanged), this,
             [this](int maximum) { m_model->setMaximumRows(maximum); });
-    connect(m_autoScroll, &QCheckBox::toggled, this, &CanMonitorWidget::scheduleViewLayout);
+    connect(m_autoScroll, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (enabled)
+            m_followLogTail = true;
+        scheduleViewLayout();
+    });
     connect(m_view, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         auto *menu = new FluentQt::RoundMenu(this);
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
@@ -1264,19 +1298,14 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     connect(m_typeFilter, &FluentQt::ComboBox::currentIndexChanged, this, [this]() { updateFilter(); });
     m_refresh = new QTimer(this);
     m_refresh->setInterval(kMonitorRefreshMs);
-    connect(m_refresh, &QTimer::timeout, m_model, [this]() {
-        const bool changed = m_model->refresh();
-#ifdef FHMI_CAN_DIAGNOSTICS
-        if (changed) {
-            CanDiagnostics::record("monitor_updated", {{"monitor", QString::number(quintptr(m_model), 16)},
-                                                         {"rows", m_model->rowCount()}});
-        }
-#endif
-        if (changed)
-            scheduleViewLayout();
+    connect(m_refresh, &QTimer::timeout, this, &CanMonitorWidget::refreshRows);
+    auto *scroll = m_view->verticalScrollBar();
+    connect(scroll, &QScrollBar::valueChanged, this, [this, scroll](int value) {
+        if (!m_viewLayoutRunning)
+            m_followLogTail = value == scroll->maximum();
+        scheduleViewLayout();
     });
-    connect(m_view->verticalScrollBar(), &QScrollBar::valueChanged, this, &CanMonitorWidget::scheduleViewLayout);
-    connect(m_view->verticalScrollBar(), &QScrollBar::rangeChanged, this, &CanMonitorWidget::scheduleViewLayout);
+    connect(scroll, &QScrollBar::rangeChanged, this, &CanMonitorWidget::scheduleViewLayout);
     // Whatever moves or changes a row (a new one, a longer frame, a sort) can change which height it needs.
     for (auto signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
         connect(m_sorted, signal, this, &CanMonitorWidget::scheduleViewLayout);
@@ -1356,6 +1385,7 @@ void CanMonitorWidget::updateRecording()
 void CanMonitorWidget::updateDisplayMode()
 {
     const bool scrolling = m_displayMode->currentIndex() == 1;
+    const bool startsScrolling = scrolling && m_autoScroll->isHidden();
     m_model->setScrolling(scrolling);
     m_view->setColumnHidden(CanMonitorModel::Period, scrolling);
     m_view->setColumnHidden(CanMonitorModel::Count, scrolling);
@@ -1363,13 +1393,15 @@ void CanMonitorWidget::updateDisplayMode()
     m_sorted->sort(scrolling ? -1 : CanMonitorModel::Id, Qt::AscendingOrder);
     m_autoScroll->setEnabled(scrolling);
     m_autoScroll->setVisible(scrolling);
+    if (startsScrolling)
+        m_followLogTail = true;
     scheduleViewLayout();
 }
 
 bool CanMonitorWidget::saveCsv(const QString &path, QString *error)
 {
     // Include frames waiting for the next repaint; the proxy supplies the user's filter and sort order.
-    m_model->refresh();
+    refreshRows();
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         if (error) {
@@ -1426,6 +1458,37 @@ void CanMonitorWidget::showEvent(QShowEvent *event)
     scheduleViewLayout();
 }
 
+void CanMonitorWidget::refreshRows()
+{
+    const bool reading = m_view->isVisible() && m_displayMode->currentIndex() == 1 &&
+                         (!m_autoScroll->isChecked() || !m_followLogTail);
+    const QPersistentModelIndex top = reading ? m_sorted->index(m_view->rowAt(0), 0) : QModelIndex();
+    const bool hadTop = top.isValid();
+    const int offset = hadTop && m_view->verticalScrollMode() == QAbstractItemView::ScrollPerPixel
+        ? -m_view->visualRect(top).top() : 0;
+    const QScopedValueRollback<bool> layingOut(m_viewLayoutRunning, true);
+    const bool changed = m_model->refresh();
+#ifdef FHMI_CAN_DIAGNOSTICS
+    if (changed) {
+        CanDiagnostics::record("monitor_updated", {{"monitor", QString::number(quintptr(m_model), 16)},
+                                                     {"rows", m_model->rowCount()}});
+    }
+#endif
+    if (!changed)
+        return;
+    if (hadTop) {
+        // Keep the same visible row when the rolling limit evicts older records.
+        auto *scroll = m_view->verticalScrollBar();
+        if (!top.isValid()) {
+            scroll->setValue(scroll->minimum());
+        } else if (top.row() != m_view->rowAt(0)) {
+            m_view->scrollTo(top, QAbstractItemView::PositionAtTop);
+            scroll->setValue(scroll->value() + offset);
+        }
+    }
+    scheduleViewLayout();
+}
+
 void CanMonitorWidget::scheduleViewLayout()
 {
     if (!isVisible() || m_viewLayoutPending)
@@ -1435,7 +1498,8 @@ void CanMonitorWidget::scheduleViewLayout()
     // still receive frames while the page is hidden.
     QTimer::singleShot(0, this, [this]() {
         if (m_view->isVisible()) {
-            const bool follow = m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked();
+            const QScopedValueRollback<bool> layingOut(m_viewLayoutRunning, true);
+            const bool follow = m_displayMode->currentIndex() == 1 && m_autoScroll->isChecked() && m_followLogTail;
             if (follow)
                 m_view->scrollToBottom();
             const bool resized = fitRowHeights();
@@ -1529,7 +1593,7 @@ void CanMonitorWidget::apply()
         fit(CanMonitorModel::Direction, advance(QStringLiteral("00"))),
         fit(CanMonitorModel::Type, advance(QStringLiteral("FD BRS"))),
         fit(CanMonitorModel::Length, advance(QStringLiteral("00"))),
-        fit(CanMonitorModel::Data, advance(QStringLiteral("DD DD DD DD DD DD DD DD"))),
+        fit(CanMonitorModel::Data, advance(QStringLiteral("DD DD DD DD DD DD DD DD DD DD DD DD"))),
         fit(CanMonitorModel::Period, advance(QStringLiteral("0000.0"))),
         fit(CanMonitorModel::Count, advance(QStringLiteral("0,000,000"))),
         fit(CanMonitorModel::Name, advance(QStringLiteral("MessageName_00"))),
@@ -1543,6 +1607,9 @@ void CanMonitorWidget::apply()
 
 void CanMonitorWidget::onAttached()
 {
+    rememberViewOption(m_displayMode, QStringLiteral("displayMode"));
+    rememberViewOption(m_maxMessages, QStringLiteral("maxMessages"));
+    rememberViewOption(m_autoScroll, QStringLiteral("autoScroll"));
     // The first CAN link to connect starts afresh; a second card connecting keeps what the first one has shown.
     live(connect(context()->hub(), &CommHub::canLinkConnected, this, [this](CanLink *link) {
         if (!receiveRoute().accepts(link ? link->dataSource() : DataSource{})) return;

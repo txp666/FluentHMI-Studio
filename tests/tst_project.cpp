@@ -1,6 +1,8 @@
 #include "core/project.h"
+#include "core/command_encoder.h"
 #include "core/project_logic.h"
 #include "core/expression.h"
+#include "core/frame_templates.h"
 #include "core/widget_meta.h"
 
 #include <QtCore/QDirIterator>
@@ -104,6 +106,13 @@ class TestProject : public QObject
         project.widgets = {QJsonObject{{"id", "publish"}, {"type", "PushButton"},
                                         {"properties", QJsonObject{{"commandMode", "文本"}, {"commandEndpoint", "*"}}}}};
         QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.2"));
+
+        project.widgets = {QJsonObject{{"id", "can"}, {"type", "CanConfigCard"}},
+            QJsonObject{{"id", "send"}, {"type", "DataSendCard"}, {"properties", QJsonObject{{"commandTargetId", "can"}}}}};
+        auto oldCanSendCard = project.toJson();
+        oldCanSendCard.insert("version", "1.3");
+        QVERIFY2(Project::fromJson(oldCanSendCard, &loaded, &error), qPrintable(error));
+        QVERIFY(!Project::validate(loaded.toJson(), &error)); // Choose the CAN format before saving the new configuration.
     }
 
     void registryHasEveryDesignerWidget()
@@ -164,6 +173,22 @@ class TestProject : public QObject
         QVERIFY(!migrated.value("properties").toObject().contains("commandTargetId"));
         QVERIFY(!migrated.value("binding").toObject().contains("sourceCardId"));
         QCOMPARE(restored.toJson().value("version").toString(), QStringLiteral("1.1"));
+
+        QJsonObject draftSlider{{"type", "Slider"}, {"id", "slider"}};
+        QJsonObject sliderProps{{"sendOnChange", false}, {"commandMode", "S7"}, {"commandTargetId", "deleted"}};
+        draftSlider.insert("properties", sliderProps);
+        const QJsonObject chart{{"type", "RealtimeChart"}, {"id", "chart"},
+            {"properties", QJsonObject{{"curveCount", 1}, {"_curve_1_parseMode", "S7"},
+                {"_curve_1_sourceCardId", "deleted"}}}};
+        project.widgets = {draftSlider, chart};
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.0"));
+        QVERIFY2(Project::fromJson(project.toJson(), &restored, &error), qPrintable(error));
+        QCOMPARE(restored.widgets, project.widgets);
+
+        sliderProps.insert("sendOnChange", true);
+        draftSlider.insert("properties", sliderProps);
+        project.widgets = {draftSlider, chart};
+        QVERIFY(!Project::validate(project.toJson(), &error));
     }
 
     void canOutputConfigurationNeedsCapableRuntime()
@@ -250,10 +275,10 @@ class TestProject : public QObject
             << QByteArray(R"json({"widgets":[{"type":"TcpConfigCard","id":"tcp","properties":{"defaultParser":"hex",
                 "parserConfig":{"checksum":"CRC32"}}}]})json")
             << QStringLiteral("卡片 tcp: HEX 校验设置无效");
-        QTest::newRow("project mode")
+        QTest::newRow("inherited format ignores dormant override")
             << QByteArray(R"json({"serial":{"parser":"hex","parserConfig":{}},"widgets":[{"type":"MqttConfigCard",
                 "id":"mqtt","properties":{"parserConfig":{"footer":""}}}]})json")
-            << QStringLiteral("卡片 mqtt: HEX 帧需要帧尾、长度字段、固定帧长或空闲超时之一来分帧");
+            << QString();
         QTest::newRow("line")
             << QByteArray(R"json({"widgets":[{"type":"VBoxLayout","children":[{"type":"SerialConfigCard","id":"s",
                 "properties":{"defaultParser":"line","parserConfig":{"separator":""}}}]}]})json")
@@ -338,6 +363,58 @@ class TestProject : public QObject
             QCOMPARE(project.widgets, document.value("widgets").toArray());
         }
         QVERIFY(!WidgetRegistry::instance().find("ModbusConfigCard"));
+    }
+
+    void modbusSlaveRoutesUseEffectiveParser()
+    {
+        const QJsonObject explicitAscii{{"type", "SerialConfigCard"}, {"id", "ascii"},
+            {"properties", QJsonObject{{"defaultParser", "modbus_ascii"}, {"modbusRole", "从站"}}}};
+        const QJsonObject inherited{{"type", "TcpConfigCard"}, {"id", "inherited"},
+            {"properties", QJsonObject{{"modbusRole", "从站"}}}};
+        Project project;
+        project.serial.insert("parser", "modbus_tcp");
+        project.widgets = {explicitAscii, inherited};
+        auto framed = inherited;
+        framed.insert("properties", QJsonObject{{"defaultParser", "modbus_tcp"}, {FrameTemplates::ReceiveId, "hex"}});
+        project.frameTemplates.insert("hex", FrameTemplates::Entry{"Frame", {"hex", {}}, {}}.toJson());
+        QCOMPARE(modbusRouteDescription(framed, project), QStringLiteral("Modbus RTU over TCP"));
+        QString error;
+        QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
+        const auto sources = routeConnections(project.widgets, RouteTransport::ModbusSlave, false, project.parserType());
+        QCOMPARE(sources.size(), 1);
+        QCOMPARE(sources.front().first, QStringLiteral("inherited"));
+        QVERIFY(routeConnections(project.widgets, RouteTransport::ModbusSlave, false,
+                                 QStringLiteral("modbus_ascii")).isEmpty());
+
+        const auto table = [](const QString &source) {
+            return QJsonObject{{"type", "ModbusSlaveTable"}, {"id", "table"},
+                {"properties", QJsonObject{{"sourceCardId", source}}}};
+        };
+        project.widgets.append(table(QStringLiteral("inherited")));
+        QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
+        project.widgets.replace(2, table(QStringLiteral("ascii")));
+        QVERIFY(!Project::validate(project.toJson(), &error));
+    }
+
+    void legacyInputSourcesResolveWithoutGuessing()
+    {
+        const QJsonObject button{{"type", "PushButton"}, {"id", "send"}, {"properties", QJsonObject{
+            {"commandTemplate", "{gain}"}, {"commandInputs", QJsonArray{QJsonObject{{"inputId", "@data:gain"}}}}}}};
+        const QJsonObject input{{"type", "LineEdit"}, {"id", "@data:gain"}};
+        const auto binding = [](const Project &p) {
+            return CommandEncoder::commandInputIds(p.widgets.first().toObject().value("properties").toObject()).value(0);
+        };
+        Project source, loaded;
+        QString error;
+        source.widgets = {button, input};
+        QVERIFY2(Project::fromJson(source.toJson(), &loaded, &error), qPrintable(error));
+        QCOMPARE(binding(loaded), widgetInputId("@data:gain"));
+        source.logic = {{"points", QJsonArray{QJsonObject{{"name", "gain"}, {"initialValue", 1500}}}}};
+        QVERIFY2(Project::fromJson(source.toJson(), &loaded, &error), qPrintable(error));
+        QCOMPARE(binding(loaded), QStringLiteral("@data:gain"));
+        source.widgets.removeLast();
+        QVERIFY2(Project::fromJson(source.toJson(), &loaded, &error), qPrintable(error));
+        QCOMPARE(binding(loaded), pointInputId("gain"));
     }
 
     // Each link card carries the Modbus poller's settings right after its parser mode and before its frame

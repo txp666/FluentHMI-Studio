@@ -2,8 +2,13 @@
 #include "runtime/widgets/industrial_widget.h"
 
 #include "comm/modbus_slave.h"
+#include "core/bit_profile.h"
+#include "core/command_encoder.h"
+#include "core/project_logic.h"
+#include "core/protocol_parser.h"
 #include "designer/canvas_item.h"
 #include "runtime/widgets/data_widgets.h"
+#include "runtime/widgets/digital_timing_widget.h"
 #include "runtime/widgets/display_widgets.h"
 
 #include <QtCore/QDir>
@@ -23,6 +28,21 @@ namespace fhmi {
 
 namespace {
 
+void applyBitProfiles(CanvasItem *item, const QJsonObject &profiles)
+{
+    const QString key = QStringLiteral("bitProfile");
+    if (!item->meta().prop(key))
+        return;
+    if (auto *timing = dynamic_cast<DigitalTimingChartWidget *>(item->widget()))
+        timing->setBitProfiles(profiles);
+    else if (auto *widget = dynamic_cast<IndustrialWidget *>(item->widget()))
+        widget->setBitProfiles(profiles);
+    const int maximum = (1 << bitProfileWidth(profiles, item->propertyValue(key).toString())) - 1;
+    const QString value = QStringLiteral("value");
+    if (item->propertyValue(value).toInt() > maximum)
+        item->setPropertyValue(value, maximum);
+}
+
 // The usual id for a new widget: the type with a lower-case initial and the first free number.
 QString freeId(const QString &typeName, const QSet<QString> &used)
 {
@@ -34,6 +54,33 @@ QString freeId(const QString &typeName, const QSet<QString> &used)
             return candidate;
         }
     }
+}
+
+QPointF siblingPosition(const QRectF &bounds, const QSizeF &size, const QPointF &preferred,
+                        const QList<QRectF> &occupied, qreal spacing)
+{
+    const qreal lastX = std::max(bounds.left(), bounds.right() - size.width());
+    const qreal lastY = std::max(bounds.top(), bounds.bottom() - size.height());
+    const qreal firstX = std::clamp(preferred.x(), bounds.left(), lastX);
+    const qreal firstY = std::max(preferred.y(), bounds.top());
+    QList<qreal> columns{firstX, bounds.left(), lastX};
+    for (const auto &rect : occupied)
+        columns.append(rect.right() + spacing);
+
+    for (const qreal x : columns) {
+        for (const qreal y : {firstY, bounds.top()}) {
+            QRectF candidate(QPointF(x, y), size);
+            while (bounds.contains(candidate)) {
+                const auto overlap = std::find_if(occupied.cbegin(), occupied.cend(), [&candidate](const QRectF &rect) {
+                    return candidate.intersects(rect);
+                });
+                if (overlap == occupied.cend())
+                    return candidate.topLeft();
+                candidate.moveTop(overlap->bottom() + spacing);
+            }
+        }
+    }
+    return {firstX, std::min(firstY, lastY)};
 }
 
 // Relative image paths made absolute, so the widgets still find their images in another project.
@@ -84,20 +131,25 @@ QJsonObject withFreeIds(QJsonObject widget, const QSet<QString> &taken, QSet<QSt
     return widget;
 }
 
-QJsonObject remapConnections(QJsonObject widget,const QHash<QString,QString> &ids)
+QJsonObject remapWidgetReferences(QJsonObject widget, const QHash<QString, QString> &ids)
 {
     auto binding=widget.value(QStringLiteral("binding")).toObject();
     const QString source=binding.value(QStringLiteral("sourceCardId")).toString();
     if(ids.contains(source)){binding.insert(QStringLiteral("sourceCardId"),ids.value(source));widget.insert(QStringLiteral("binding"),binding);}
     auto props=widget.value(QStringLiteral("properties")).toObject();
-    for(const QString &key:{QStringLiteral("sourceCardId"),QStringLiteral("commandTargetId"),QStringLiteral("_curve_0_sourceCardId"),QStringLiteral("_curve_1_sourceCardId"),
+    for(const QString &key:{QStringLiteral("sourceCardId"),QStringLiteral("commandTargetId"),
+                           QStringLiteral("_curve_0_sourceCardId"),QStringLiteral("_curve_1_sourceCardId"),
                            QStringLiteral("_curve_2_sourceCardId"),QStringLiteral("_curve_3_sourceCardId"),QStringLiteral("_curve_4_sourceCardId"),
                            QStringLiteral("_curve_5_sourceCardId"),QStringLiteral("_curve_6_sourceCardId"),QStringLiteral("_curve_7_sourceCardId")}) {
         const QString id=props.value(key).toString();if(ids.contains(id))props.insert(key,ids.value(id));
     }
+    CommandEncoder::mapInputIds(props, [&](const QString &id) {
+        const auto replacement = ids.constFind(widgetIdForInput(id));
+        return pointNameForInput(id).isEmpty() && replacement != ids.cend() ? widgetInputId(*replacement) : id;
+    });
     widget.insert(QStringLiteral("properties"),props);
     auto children=widget.value(QStringLiteral("children")).toArray();
-    for(int i=0;i<children.size();++i)children[i]=remapConnections(children.at(i).toObject(),ids);
+    for(int i=0;i<children.size();++i)children[i]=remapWidgetReferences(children.at(i).toObject(),ids);
     if(!children.isEmpty())widget.insert(QStringLiteral("children"),children);
     return widget;
 }
@@ -126,10 +178,8 @@ void DesignScene::setCanvasSize(const QSize &size)
 void DesignScene::setGridSize(int size)
 {
     m_gridSize = std::max(1, size);
-    for (CanvasItem *item : topLevelItems()) {
-        if (auto *widget = dynamic_cast<IndustrialWidget *>(item->widget())) widget->setBitProfiles(m_bitProfiles);
-    item->setGridSize(m_gridSize);
-    }
+    for (CanvasItem *item : topLevelItems())
+        item->setGridSize(m_gridSize);
     update();
 }
 
@@ -145,6 +195,14 @@ void DesignScene::setAssetBaseDir(const QString &dir)
     for (CanvasItem *item : topLevelItems()) {
         item->setAssetBaseDir(dir);
     }
+}
+
+void DesignScene::setProjectParser(const QString &parser)
+{
+    if (m_projectParser == parser)
+        return;
+    m_projectParser = parser;
+    refreshSlaveTables();
 }
 
 void DesignScene::drawBackground(QPainter *painter, const QRectF &rect)
@@ -177,12 +235,14 @@ void DesignScene::drawBackground(QPainter *painter, const QRectF &rect)
 void DesignScene::setBitProfiles(const QJsonObject &profiles)
 {
     m_bitProfiles = profiles;
-    for (auto *item : allItems()) if (auto *widget = dynamic_cast<IndustrialWidget *>(item->widget())) widget->setBitProfiles(profiles);
+    for (auto *item : allItems())
+        applyBitProfiles(item, m_bitProfiles);
 }
 
 void DesignScene::adopt(CanvasItem *item)
 {
     item->setGridSize(m_gridSize);
+    applyBitProfiles(item, m_bitProfiles);
     connect(item, &CanvasItem::changed, this, [this](CanvasItem *changed) {
         reparentAfterMove(changed);
         emit itemPropertiesChanged(changed);
@@ -222,8 +282,11 @@ void DesignScene::refreshSlaveTables()
     const QList<CanvasItem *> items = allItems();
     QList<const CanvasItem *> slaves;
     for (const CanvasItem *item : items) {
+        const QString parser = LinkParser::effectiveType(item->propertyValue(QStringLiteral("defaultParser")).toString(),
+                                                         m_projectParser);
         if (supportsRouteTransport(item->typeName(), RouteTransport::ModbusSlave) &&
-            item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave) {
+            item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave &&
+            LinkParser::supportsModbusSlave(parser)) {
             slaves.append(item);
         }
     }
@@ -232,15 +295,18 @@ void DesignScene::refreshSlaveTables()
             continue;
         auto *table = static_cast<ModbusSlaveTableWidget *>(item->widget());
         const auto route = table->receiveRoute();
-        const auto card = std::find_if(slaves.cbegin(), slaves.cend(), [&route](const CanvasItem *slave) {
-            return route.endpoint.isEmpty() && route.acceptsConnection(slave->widgetId());
-        });
-        if (card == slaves.cend()) {
-            table->showDesign(nullptr);
+        QList<const CanvasItem *> matched;
+        for (const CanvasItem *slave : slaves) {
+            if (route.endpoint.isEmpty() && route.acceptsConnection(slave->widgetId()))
+                matched.append(slave);
+        }
+        if (matched.size() != 1) {
+            table->showDesign(nullptr, matched.size() > 1);
             continue;
         }
-        auto props = (*card)->meta().defaultProperties();
-        const auto own = (*card)->properties();
+        const CanvasItem *card = matched.first();
+        auto props = card->meta().defaultProperties();
+        const auto own = card->properties();
         for (auto it = own.begin(); it != own.end(); ++it)
             props.insert(it.key(), it.value());
         table->showDesign(&props);
@@ -338,7 +404,7 @@ bool DesignScene::renameItem(CanvasItem *item, const QString &id, QString *error
     const QString previous=item->widgetId();
     item->setWidgetId(trimmed);
     for(auto *widget:allItems()) {
-        const auto updated=remapConnections(widget->toJson(),{{previous,trimmed}});
+        const auto updated=remapWidgetReferences(widget->toJson(),{{previous,trimmed}});
         widget->setBinding(updated.value(QStringLiteral("binding")).toObject());
         const auto props=updated.value(QStringLiteral("properties")).toObject();
         for(auto it=props.begin();it!=props.end();++it)
@@ -349,23 +415,59 @@ bool DesignScene::renameItem(CanvasItem *item, const QString &id, QString *error
     return true;
 }
 
-CanvasItem *DesignScene::createItem(const QString &typeName, const QPointF &scenePos)
+CanvasItem *DesignScene::insertItem(const WidgetMeta &meta, const QJsonObject &properties, const QPointF &scenePos)
 {
-    if (!WidgetRegistry::instance().find(typeName)) {
-        return nullptr;
-    }
-    const WidgetMeta *meta = WidgetRegistry::instance().find(typeName);
-    auto *item = new CanvasItem(typeName, meta->newWidgetProperties(), uniqueId(typeName), m_assetBaseDir);
-    const qreal g = m_gridSize;
-    item->setPos(std::round(scenePos.x() / g) * g, std::round(scenePos.y() / g) * g);
+    auto *item = new CanvasItem(meta.typeName, properties, uniqueId(meta.typeName), m_assetBaseDir);
+    item->setPos(scenePos);
     addItem(item);
     adopt(item);
+    return item;
+}
+
+CanvasItem *DesignScene::createItem(const QString &typeName, const QPointF &scenePos)
+{
+    const WidgetMeta *meta = WidgetRegistry::instance().find(typeName);
+    if (!meta) {
+        return nullptr;
+    }
+    const qreal g = m_gridSize;
+    const QPointF snapped(std::round(scenePos.x() / g) * g, std::round(scenePos.y() / g) * g);
+    auto *item = insertItem(*meta, meta->newWidgetProperties(), snapped);
     if (CanvasItem *container = containerAt(scenePos, item)) {
         container->addChild(item);
     }
     clearSelection();
     item->setSelected(true);
     emit modified();
+    return item;
+}
+
+CanvasItem *DesignScene::insertSibling(const CanvasItem &anchor, const QString &typeName, const QJsonObject &initialProperties)
+{
+    const WidgetMeta *meta = WidgetRegistry::instance().find(typeName);
+    if (!meta)
+        return nullptr;
+    auto properties = meta->newWidgetProperties();
+    for (auto it = initialProperties.constBegin(); it != initialProperties.constEnd(); ++it)
+        properties.insert(it.key(), it.value());
+
+    CanvasItem *container = anchor.containerParent();
+    QPointF position = anchor.pos();
+    if (!container || container->isFreeLayout()) {
+        QRectF bounds(QPointF(), container ? container->size() : QSizeF(m_canvasSize));
+        if (container)
+            bounds.setTop(container->widget()->contentTop());
+        QList<QRectF> occupied;
+        for (const auto *sibling : container ? container->containerChildren() : topLevelItems()) {
+            if (sibling->tabIndex() == anchor.tabIndex())
+                occupied.append(QRectF(sibling->pos(), sibling->size()));
+        }
+        const QPointF preferred(anchor.x(), anchor.y() + anchor.size().height() + m_gridSize);
+        position = siblingPosition(bounds, QSizeF(meta->defaultWidth, meta->defaultHeight), preferred, occupied, m_gridSize);
+    }
+    auto *item = insertItem(*meta, properties, container ? container->mapToScene(position) : position);
+    if (container)
+        container->addChild(item, anchor.tabIndex(), &position);
     return item;
 }
 
@@ -450,7 +552,7 @@ QList<CanvasItem *> DesignScene::paste(const QJsonArray &widgets, CanvasItem *co
     if (pasted.isEmpty()) {
         return {};
     }
-    for(auto &widget:pasted)widget=remapConnections(widget,remap);
+    for(auto &widget:pasted)widget=remapWidgetReferences(widget,remap);
     const qreal shift = qreal(m_gridSize) * step;
     const QSizeF area = container ? container->size() : QSizeF(m_canvasSize);
     QPointF topLeft = container ? QPointF(shift, shift) : bounds.topLeft() + QPointF(shift, shift);

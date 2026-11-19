@@ -5,12 +5,16 @@
 
 #include "core/chart_file.h"
 #include "core/hex_utils.h"
+#include "core/manual_command.h"
 #include "core/protocol_parser.h"
 #include "runtime/runtime_context.h"
+#include "runtime/receive_frame_preview.h"
 #include "runtime/ui_helpers.h"
+#include "runtime/widgets/chart_viewport.h"
 #include "runtime/widgets/display_widgets.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
+#include <FluentQtWidgets/Layout/FlowLayout.h>
 #include <FluentQtWidgets/StyleSheet.h>
 #include <FluentQtWidgets/Theme.h>
 #include <FluentQtWidgets/Views/ItemViews.h>
@@ -18,7 +22,6 @@
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/LineEdit.h>
-#include <FluentQtWidgets/Widgets/RealtimePlotWidget.h>
 #include <FluentQtWidgets/Widgets/Selection.h>
 #include <FluentQtWidgets/Widgets/SmoothScrollDelegate.h>
 
@@ -27,10 +30,14 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSaveFile>
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QTimer>
+#include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QTextBlock>
+#include <QtGui/QTextCursor>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QHBoxLayout>
@@ -40,6 +47,7 @@
 #include <QtWidgets/QTextEdit>
 #include <QtWidgets/QVBoxLayout>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <iterator>
@@ -78,6 +86,21 @@ QString messageText(const Message &message)
     }
     return parts.join(QStringLiteral(", "));
 }
+
+QString withSource(const QString &text, const DataSource &source)
+{
+    QString name = source.connectionId;
+    if (!source.endpoint.isEmpty())
+        name += name.isEmpty() ? source.endpoint : QLatin1Char('/') + source.endpoint;
+    return name.isEmpty() ? text : QStringLiteral("[%1] %2").arg(name, text);
+}
+
+bool acceptsEvent(const DataRoute &route, const DataSource &source)
+{
+    return source.endpoint.isEmpty() ? route.acceptsConnection(source.connectionId) : route.accepts(source);
+}
+
+const QString kTimeField = QStringLiteral("@time");
 
 } // namespace
 
@@ -127,12 +150,6 @@ constexpr int kRefreshMs = 33;
 // A header entry starts wide enough for its name and this, so typical readings never move the others.
 const char *const kSampleReading = "-0000.00";
 
-// PyQt UI Designer's _CURVE_COLORS and _DARK_CURVE_COLORS.
-const QColor kCurveColors[] = {{0, 120, 212},  {244, 67, 54}, {76, 175, 80}, {255, 152, 0},
-                               {156, 39, 176}, {0, 188, 212}, {121, 85, 72}, {96, 125, 139}};
-const QColor kDarkCurveColors[] = {{74, 163, 223},  {255, 112, 105}, {129, 199, 132}, {255, 183, 77},
-                                   {206, 147, 216}, {77, 208, 225},  {188, 170, 164}, {176, 190, 197}};
-
 // A reading as Python's f"{value:.4g}" writes it (std::to_chars rounds exactly as it does).
 QString reading(double value)
 {
@@ -147,14 +164,11 @@ QString reading(double value)
 // loaded run as dashed curves, and a vertical cursor that a click places and a drag moves. Its own legend and
 // value tags are off, as the header above it reads the values. While the user has not panned or zoomed, the
 // view spans every shown curve, the dashed ones included.
-class ChartPlot : public FluentQt::RealtimePlotWidget
+class ChartPlot : public ChartViewport
 {
   public:
-    explicit ChartPlot(QWidget *parent) : FluentQt::RealtimePlotWidget(parent)
+    explicit ChartPlot(QWidget *parent) : ChartViewport(parent)
     {
-        setMinimumSize(1, 1); // the chart may be smaller than the plot's own minimum
-        setLegendVisible(false);
-        setValueTagsVisible(false);
         connect(this, &RealtimePlotWidget::rangeChanged, this, [this]() {
             if (m_fitting) {
                 return;
@@ -174,10 +188,6 @@ class ChartPlot : public FluentQt::RealtimePlotWidget
         fitView();
     }
 
-    // The cursor was placed or dragged to x, or (with a double click) taken away.
-    std::function<void(double x)> cursorMoved;
-    std::function<void()> cursorCleared;
-
     // Each series' window of samples, and the dashed curves', all starting at x = 0.
     void showWindows(const QList<QList<double>> &live, const QList<QList<double>> &references,
                      const QList<QColor> &referenceColors)
@@ -189,12 +199,6 @@ class ChartPlot : public FluentQt::RealtimePlotWidget
             setSamples(i, live.at(i));
         }
         fitView();
-    }
-
-    void hideCursor()
-    {
-        m_cursorOn = false;
-        update();
     }
 
     bool isReferenceVisible(int index) const { return !m_referenceHidden.value(index); }
@@ -226,111 +230,13 @@ class ChartPlot : public FluentQt::RealtimePlotWidget
                 painter.drawPolyline(polyline(m_references.at(i), plot));
             }
         }
-        if (m_cursorOn) {
-            const qreal x = toPixelX(m_cursorX, plot);
-            painter.setPen(QPen(QColor(255, 0, 0, 180), 1, Qt::DashLine));
-            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
-        }
-    }
-
-    void mousePressEvent(QMouseEvent *event) override
-    {
-        const QPointF position = event->position();
-        if (event->button() == Qt::LeftButton && onCursor(position)) {
-            m_draggingCursor = true;
-            event->accept();
-            return;
-        }
-        RealtimePlotWidget::mousePressEvent(event);
-        // Anywhere else in the plot a click may place the cursor.
-        m_clickPending = event->button() == Qt::LeftButton && plotArea().contains(position);
-        m_pressPosition = position;
-    }
-
-    void mouseMoveEvent(QMouseEvent *event) override
-    {
-        const QPointF position = event->position();
-        if (m_draggingCursor) {
-            placeCursor(position.x());
-            event->accept();
-            return;
-        }
-        if (m_clickPending) {
-            // Not a drag yet: a click must not pan the plot by the pixel a hand shakes.
-            if ((position - m_pressPosition).manhattanLength() < QApplication::startDragDistance()) {
-                event->accept();
-                return;
-            }
-            m_clickPending = false;
-        }
-        if (event->buttons() == Qt::NoButton) {
-            if (onCursor(position)) {
-                setCursor(Qt::SizeHorCursor);
-            } else {
-                unsetCursor();
-            }
-        }
-        RealtimePlotWidget::mouseMoveEvent(event);
-    }
-
-    void mouseReleaseEvent(QMouseEvent *event) override
-    {
-        if (m_draggingCursor && event->button() == Qt::LeftButton) {
-            m_draggingCursor = false;
-            event->accept();
-            return;
-        }
-        const bool click = m_clickPending && event->button() == Qt::LeftButton;
-        m_clickPending = false;
-        RealtimePlotWidget::mouseReleaseEvent(event);
-        if (click) {
-            placeCursor(event->position().x());
-        }
-    }
-
-    void mouseDoubleClickEvent(QMouseEvent *event) override
-    {
-        if (event->button() == Qt::LeftButton && plotArea().contains(event->position())) {
-            m_clickPending = false;
-            hideCursor();
-            if (cursorCleared) {
-                cursorCleared();
-            }
-        }
-        RealtimePlotWidget::mouseDoubleClickEvent(event); // and the view follows the data again
+        drawCursor(painter, plot, QColor(255, 0, 0, 180));
     }
 
   private:
-    // RealtimePlotWidget's plotRect(), which is private.
-    QRectF plotArea() const { return QRectF(rect()).adjusted(58, 18, areValueTagsVisible() ? -58 : -18, -42); }
-
-    // The view is always an explicit range here (fitView sets one), so the getters are what is shown.
-    qreal toPixelX(qreal x, const QRectF &plot) const
-    {
-        return plot.left() + (x - xMinimum()) / std::max(1e-6, xMaximum() - xMinimum()) * plot.width();
-    }
-
     qreal toPixelY(qreal y, const QRectF &plot) const
     {
         return plot.bottom() - (y - yMinimum()) / std::max(1e-6, yMaximum() - yMinimum()) * plot.height();
-    }
-
-    bool onCursor(const QPointF &position) const
-    {
-        const QRectF plot = plotArea();
-        return m_cursorOn && plot.contains(position) && std::abs(position.x() - toPixelX(m_cursorX, plot)) <= 4;
-    }
-
-    void placeCursor(qreal pixelX)
-    {
-        const QRectF plot = plotArea();
-        const qreal x = std::clamp(pixelX, plot.left(), plot.right());
-        m_cursorOn = true;
-        m_cursorX = xMinimum() + (x - plot.left()) / std::max<qreal>(1, plot.width()) * (xMaximum() - xMinimum());
-        update();
-        if (cursorMoved) {
-            cursorMoved(m_cursorX);
-        }
     }
 
     // The visible stretch of a dashed curve; where a pixel column holds many samples, their lowest and
@@ -427,11 +333,6 @@ class ChartPlot : public FluentQt::RealtimePlotWidget
     QList<QList<double>> m_references;
     QList<QColor> m_referenceColors;
     QList<bool> m_referenceHidden; // dashed curves hidden from the header
-    bool m_cursorOn = false;
-    qreal m_cursorX = 0;
-    bool m_draggingCursor = false;
-    bool m_clickPending = false;
-    QPointF m_pressPosition;
     bool m_autoView = true;
     bool m_fitting = false;
     qreal m_fitted[4] = {};
@@ -641,6 +542,8 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
     toolbar->setSpacing(6);
     toolbar->addWidget(new FluentQt::BodyLabel(tr("显示点数"), this));
     m_displayEdit = new FluentQt::LineEdit(this);
+    m_displayEdit->setObjectName(QStringLiteral("chartDisplayPoints"));
+    m_displayEdit->setAccessibleName(tr("显示点数"));
     m_displayEdit->setFixedWidth(80);
     toolbar->addWidget(m_displayEdit);
     // 实时, the cursor's sample, or what went wrong saving, loading or recording.
@@ -670,9 +573,9 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
     connect(m_displayEdit, &QLineEdit::editingFinished, this, [this]() {
         bool ok = false;
         const int typed = m_displayEdit->text().trimmed().toInt(&ok);
-        m_displayPoints = std::clamp(ok ? typed : m_displayPoints, 10, kHistoryLimit);
-        m_displayEdit->setText(QString::number(m_displayPoints));
-        m_plot->setCapacity(m_displayPoints);
+        setDisplayPoints(ok ? typed : m_displayPoints);
+        if (ok)
+            saveViewPreference(QStringLiteral("displayPoints"), m_displayPoints);
         refresh();
     });
     connect(save, &QToolButton::clicked, this, [this]() {
@@ -715,16 +618,9 @@ std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromPropertie
     std::vector<Curve> curves;
     for (int i = 0; i < count; ++i) {
         const QJsonObject binding = chartCurveBinding(props, i);
-        const auto field = [&props, i](const char *name, const QJsonValue &fallback) {
-            const QJsonValue value = props.value(QStringLiteral("_curve_%1_%2").arg(i).arg(QLatin1String(name)));
-            return value.isUndefined() || value.isNull() ? fallback : value;
-        };
-        const QString name = field("name", QStringLiteral("曲线%1").arg(i + 1)).toString(); // i18n: value
         auto entry = BindingEntry::fromWidget(
             QJsonObject{{QStringLiteral("type"), QStringLiteral("RealtimeChart")}, {QStringLiteral("binding"), binding}});
-        BindingEntry fallback;
-        fallback.key = QString(); // matches nothing until configured
-        curves.push_back({name, entry ? *entry : fallback});
+        curves.push_back({chartCurveName(props, i), std::move(entry)});
     }
     return curves;
 }
@@ -732,11 +628,16 @@ std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromPropertie
 void RealtimeChartWidget::apply()
 {
     m_header->setTitle(text("title"));
-    m_displayPoints = std::clamp(integer("displayPoints"), 10, kHistoryLimit);
-    m_displayEdit->setText(QString::number(m_displayPoints));
-    m_plot->setCapacity(m_displayPoints);
+    setDisplayPoints(integer("displayPoints"));
     m_curves = curvesFromProperties(properties());
     rebuildCurves();
+}
+
+void RealtimeChartWidget::setDisplayPoints(int points)
+{
+    m_displayPoints = std::clamp(points, 10, kHistoryLimit);
+    m_displayEdit->setText(QString::number(m_displayPoints));
+    m_plot->setCapacity(m_displayPoints);
 }
 
 void RealtimeChartWidget::rebuildCurves()
@@ -749,11 +650,9 @@ void RealtimeChartWidget::rebuildCurves()
     while (m_histories.size() < m_curves.size()) {
         m_histories.push_back(std::make_unique<ChartHistory>(kHistoryLimit));
     }
-    m_hasCanCurves = std::any_of(m_curves.begin(), m_curves.end(),
-                                 [](const Curve &curve) { return curve.binding.parseMode == ParseMode::CanSignal; });
     m_plot->clearSeries();
     for (size_t i = 0; i < m_curves.size(); ++i) {
-        m_plot->addSeries(m_curves[i].name, curveColor(int(i)));
+        m_plot->addSeries(m_curves[i].name, chartSeriesColor(int(i)));
     }
     m_header->renew(0);
     m_cursorMode = false;
@@ -768,15 +667,9 @@ void RealtimeChartWidget::applyTheme()
     const QString foreground = dark ? QStringLiteral("#e5e5e5") : QStringLiteral("#202020");
     m_header->setForeground(QColor(foreground));
     for (int i = 0; i < m_plot->seriesCount(); ++i) {
-        m_plot->setSeriesColor(i, curveColor(i));
+        m_plot->setSeriesColor(i, chartSeriesColor(i));
     }
     refresh(); // and the header's entries in the new curve colours
-}
-
-QColor RealtimeChartWidget::curveColor(int index) const
-{
-    const QColor *colors = isDarkTheme() ? kDarkCurveColors : kCurveColors;
-    return colors[index % int(std::size(kCurveColors))];
 }
 
 void RealtimeChartWidget::appendSample(int curve, double value)
@@ -818,7 +711,7 @@ void RealtimeChartWidget::refresh()
     QList<QColor> colors;
     for (int i = 0; i < m_references.size(); ++i) {
         references.append(m_references.at(i).values.mid(start, m_displayPoints));
-        colors.append(curveColor(int(m_curves.size()) + i));
+        colors.append(chartSeriesColor(int(m_curves.size()) + i));
     }
     m_plot->showWindows(live, references, colors);
     if (m_cursorMode) {
@@ -857,14 +750,14 @@ void RealtimeChartWidget::showValues(const QStringList &live, qint64 referenceSa
 {
     QList<ChartHeader::Entry> entries;
     for (int i = 0; i < live.size(); ++i) {
-        entries.append({m_curves[size_t(i)].name, live.at(i), curveColor(i), false, m_plot->isSeriesVisible(i)});
+        entries.append({m_curves[size_t(i)].name, live.at(i), chartSeriesColor(i), false, m_plot->isSeriesVisible(i)});
     }
     for (int i = 0; i < m_references.size(); ++i) {
         const QList<double> &values = m_references.at(i).values;
         const QString value = referenceSample >= 0 && referenceSample < values.size()
                                   ? reading(values.at(referenceSample))
                                   : QStringLiteral("--");
-        entries.append({m_references.at(i).name, value, curveColor(int(m_curves.size()) + i), true,
+        entries.append({m_references.at(i).name, value, chartSeriesColor(int(m_curves.size()) + i), true,
                         m_plot->isReferenceVisible(i)});
     }
     m_header->setEntries(entries);
@@ -873,7 +766,9 @@ void RealtimeChartWidget::showValues(const QStringList &live, qint64 referenceSa
 void RealtimeChartWidget::toggleCurve(int index)
 {
     if (index < m_plot->seriesCount()) {
-        m_plot->setSeriesVisible(index, !m_plot->isSeriesVisible(index)); // and the plot fits the shown curves
+        const bool shown = !m_plot->isSeriesVisible(index);
+        m_plot->setSeriesVisible(index, shown);
+        saveViewPreference(QStringLiteral("visibleCurve%1").arg(index), shown);
     } else {
         const int reference = index - m_plot->seriesCount();
         m_plot->setReferenceVisible(reference, !m_plot->isReferenceVisible(reference));
@@ -943,35 +838,54 @@ void RealtimeChartWidget::clearReference()
 
 void RealtimeChartWidget::onAttached()
 {
+    setDisplayPoints(viewPreference(QStringLiteral("displayPoints"), m_displayPoints).toInt());
+    for (int i = 0; i < m_plot->seriesCount(); ++i) {
+        const bool shown = viewPreference(QStringLiteral("visibleCurve%1").arg(i), true).toBool();
+        m_plot->setSeriesVisible(i, shown);
+    }
+    refresh();
+    m_curves = curvesFromProperties(properties());
+    for (Curve &curve : m_curves) {
+        if (curve.binding && !context()->resolveBindingSource(*curve.binding))
+            curve.binding.reset();
+    }
+    m_hasCanCurves = std::any_of(m_curves.begin(), m_curves.end(), [](const Curve &curve) {
+        return curve.binding && curve.binding->parseMode == ParseMode::CanSignal;
+    });
+
     live(connect(context()->projectData(), &ProjectData::valuesChanged, this, [this](const Message &values) {
         if (!context()->isActive())
             return;
         for (size_t i = 0; i < m_curves.size(); ++i) {
             const auto &binding = m_curves[i].binding;
-            if (binding.parseMode == ParseMode::DataPoint && values.contains(binding.key))
-                if (auto y = binding.chartSample(values.value(binding.key)))
+            if (binding && binding->parseMode == ParseMode::DataPoint && values.contains(binding->key))
+                if (auto y = binding->chartSample(values.value(binding->key)))
                     appendSample(int(i), *y);
         }
     }));
     QList<S7::Need> s7Needs;
-    for(const Curve &curve:m_curves) if(curve.binding.s7) s7Needs.append({curve.binding.sourceCardId,*curve.binding.s7});
+    for (const Curve &curve : m_curves) {
+        if (curve.binding && curve.binding->s7)
+            s7Needs.append({curve.binding->sourceCardId, *curve.binding->s7});
+    }
     context()->setS7CurveNeeds(this,s7Needs);
     live(connect(context(),&RuntimeContext::s7Sample,this,[this](const S7::Sample &sample) {
         if(sample.quality!=QLatin1String("good"))return;
         for(size_t i=0;i<m_curves.size();++i) {
             const auto &binding=m_curves[i].binding;
-            if(binding.s7 && binding.sourceCardId==sample.sourceCardId && binding.s7->address.canonical==sample.address
-                && binding.s7->type.name==sample.dataType)
-                if(const auto y=binding.chartSample(sample.value))appendSample(int(i),*y);
+            if (binding && binding->s7 && binding->sourceCardId == sample.sourceCardId &&
+                binding->s7->address.canonical == sample.address && binding->s7->type.name == sample.dataType)
+                if (const auto y = binding->chartSample(sample.value))
+                    appendSample(int(i), *y);
         }
     }));
 
     // Modbus curves are read by automatic polling (ModbusPoller), at its default period.
     QList<ModbusNeed> needs;
     for (const Curve &curve : m_curves) {
-        if (const auto need = modbusNeed(curve.binding)) {
-            needs.append(*need);
-        }
+        if (curve.binding)
+            if (const auto need = modbusNeed(*curve.binding))
+                needs.append(*need);
     }
     context()->setCurveNeeds(this, needs);
     CommHub *hub = context()->hub();
@@ -980,12 +894,12 @@ void RealtimeChartWidget::onAttached()
             return;
         }
         for (size_t i = 0; i < m_curves.size(); ++i) {
-            const BindingEntry &binding = m_curves[i].binding;
-            if (!binding.usesParsedData() || !binding.route().accepts(source)) {
+            const auto &binding = m_curves[i].binding;
+            if (!binding || !binding->usesParsedData() || !binding->route().accepts(source)) {
                 continue;
             }
             // A malformed sample skips this curve only; the frame's other curves still update.
-            if (const auto y = binding.chartSample(binding.extractFromParsed(message))) {
+            if (const auto y = binding->chartSample(binding->extractFromParsed(message))) {
                 appendSample(int(i), *y);
             }
         }
@@ -995,12 +909,12 @@ void RealtimeChartWidget::onAttached()
             return;
         }
         for (size_t i = 0; i < m_curves.size(); ++i) {
-            BindingEntry &binding = m_curves[i].binding;
-            if (!binding.usesRawData() || source.canText || !binding.route().accepts(source)) {
+            auto &binding = m_curves[i].binding;
+            if (!binding || !binding->usesRawData() || source.canText || !binding->route().accepts(source)) {
                 continue;
             }
-            for (const QVariant &value : binding.extractAllFromRaw(bytes, source.stream)) {
-                if (const auto y = binding.chartSample(value)) {
+            for (const QVariant &value : binding->extractAllFromRaw(bytes, source.stream)) {
+                if (const auto y = binding->chartSample(value)) {
                     appendSample(int(i), *y);
                 }
             }
@@ -1013,15 +927,15 @@ void RealtimeChartWidget::onAttached()
         }
         for (const CanFrame &frame : frames) {
             for (size_t i = 0; i < m_curves.size(); ++i) {
-                const BindingEntry &binding = m_curves[i].binding;
-                if (binding.parseMode != ParseMode::CanSignal || !binding.route().accepts(source)) {
+                const auto &binding = m_curves[i].binding;
+                if (!binding || binding->parseMode != ParseMode::CanSignal || !binding->route().accepts(source)) {
                     continue;
                 }
-                const QVariant raw = binding.extractFromCan(frame);
+                const QVariant raw = binding->extractFromCan(frame);
                 if (!raw.isValid()) {
                     continue;
                 }
-                if (const auto y = binding.chartSample(raw)) {
+                if (const auto y = binding->chartSample(raw)) {
                     appendSample(int(i), *y);
                 }
             }
@@ -1029,7 +943,8 @@ void RealtimeChartWidget::onAttached()
     }));
     live(connect(hub, &CommHub::streamClosed, this, [this](const DataSource &source) {
         for (Curve &curve : m_curves) {
-            curve.binding.resetStream(source.stream);
+            if (curve.binding)
+                curve.binding->resetStream(source.stream);
         }
     }));
 }
@@ -1056,6 +971,11 @@ DataTableWidget::DataTableWidget(const WidgetMeta &meta, QWidget *parent) : HmiW
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     layout->addWidget(m_table);
+    m_recordHint = new FluentQt::BodyLabel(tr("请在设计器配置逐行记录的源字段和列标题"), this);
+    m_recordHint->setAlignment(Qt::AlignCenter);
+    m_recordHint->setWordWrap(true);
+    layout->addWidget(m_recordHint, 1);
+    m_recordTimer = new QTimer(this);
 }
 
 bool DataTableWidget::logging() const
@@ -1063,31 +983,92 @@ bool DataTableWidget::logging() const
     return text("recordMode") == QStringLiteral("逐行记录"); // i18n: value
 }
 
+bool DataTableWidget::loggingPoints() const
+{
+    return logging() && text("recordSource") == QLatin1String("points");
+}
+
 void DataTableWidget::apply()
 {
-    m_columns.clear();
-    for (const QString &line : text("columns").split(QLatin1Char('\n'))) {
-        if (!line.trimmed().isEmpty()) {
-            m_columns.append(line.trimmed());
+    m_recordFields.clear();
+    QStringList headers;
+    const bool records = logging();
+    if (records) {
+        for (const QJsonValue &entry : prop("recordColumns").toArray()) {
+            const QJsonObject column = entry.toObject();
+            const QString field = column.value(QStringLiteral("field")).toString().trimmed();
+            if (field.isEmpty())
+                continue;
+            m_recordFields.append(field);
+            const QString label = column.value(QStringLiteral("label")).toString().trimmed();
+            headers.append(label.isEmpty() ? (field == kTimeField ? tr("时间") : field) : label);
         }
+    } else {
+        headers = {tr("字段"), tr("值")};
     }
-    if (m_columns.isEmpty()) {
-        m_columns = {QStringLiteral("字段"), QStringLiteral("值")}; // i18n: value
-    }
+    const bool hasSourceField = std::any_of(m_recordFields.cbegin(), m_recordFields.cend(),
+                                            [](const QString &field) { return field != kTimeField; });
+    m_table->setVisible(!records || hasSourceField);
+    m_recordHint->setVisible(records && !hasSourceField);
     m_table->setRowCount(0);
-    m_table->setColumnCount(int(m_columns.size()));
-    m_table->setHorizontalHeaderLabels(m_columns);
-    m_table->verticalHeader()->setVisible(!logging());
+    m_table->setColumnCount(int(headers.size()));
+    m_table->setHorizontalHeaderLabels(headers);
+    m_table->verticalHeader()->setVisible(!records);
     QHeaderView *header = m_table->horizontalHeader();
-    for (int c = 0; c < m_columns.size(); ++c) {
-        header->setSectionResizeMode(c, logging() && c < m_columns.size() - 1 ? QHeaderView::ResizeToContents
-                                                                               : QHeaderView::Stretch);
+    for (int c = 0; c < headers.size(); ++c) {
+        header->setSectionResizeMode(c, records && c < headers.size() - 1 ? QHeaderView::ResizeToContents
+                                                                         : QHeaderView::Stretch);
     }
 }
 
 void DataTableWidget::onAttached()
 {
+    if (loggingPoints()) {
+        auto *data = context()->projectData();
+        const int interval = integer("recordIntervalMs");
+        if (interval > 0) {
+            live(connect(m_recordTimer, &QTimer::timeout, this, [this, data] {
+                if (context()->isActive())
+                    appendRecord(data->values());
+            }));
+            m_recordTimer->start(interval);
+        } else {
+            const QString trigger = text("recordTriggerPoint");
+            live(connect(data, &ProjectData::valuesChanged, this, [this, data, trigger](const Message &changes) {
+                const bool updated = trigger.isEmpty()
+                    ? std::any_of(m_recordFields.cbegin(), m_recordFields.cend(),
+                                  [&changes](const QString &field) { return changes.value(field).isValid(); })
+                    : changes.value(trigger).isValid();
+                if (updated && context()->isActive())
+                    appendRecord(data->values());
+            }));
+        }
+        return;
+    }
     live(connect(context()->hub(), &CommHub::messageReceived, this, &DataTableWidget::onMessage));
+}
+
+void DataTableWidget::onDetached()
+{
+    m_recordTimer->stop();
+}
+
+void DataTableWidget::appendRecord(const Message &values)
+{
+    if (m_recordFields.isEmpty() || !m_recordHint->isHidden())
+        return;
+    if (m_table->rowCount() >= std::max(10, integer("maxRows")))
+        m_table->removeRow(0);
+    const int row = m_table->rowCount();
+    m_table->insertRow(row);
+    const QString stamp = QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz"));
+    for (int column = 0; column < m_recordFields.size(); ++column) {
+        const QString &field = m_recordFields.at(column);
+        const auto value = values.value(field);
+        const QString cell = field == kTimeField ? stamp : value.isValid() ? displayString(value) : QString();
+        m_table->setItem(row, column, new QTableWidgetItem(cell));
+    }
+    m_table->scrollToBottom();
 }
 
 void DataTableWidget::onMessage(const Message &message, const DataSource &source)
@@ -1095,42 +1076,22 @@ void DataTableWidget::onMessage(const Message &message, const DataSource &source
     if (!context() || !context()->isActive() || !receiveRoute().accepts(source)) {
         return;
     }
-    const int maxRows = std::max(10, integer("maxRows"));
     if (logging()) {
-        // Each column takes the field it is named after, 时间 the arrival time; frames with
-        // none of the named fields belong to another message and are skipped.
-        const QString timeColumn = QStringLiteral("时间"); // i18n: value
-        bool relevant = false;
-        for (const QString &column : std::as_const(m_columns)) {
-            relevant = relevant || (column != timeColumn && message.contains(column));
-        }
-        if (!relevant) {
+        // A message that contains none of the configured fields belongs to another record.
+        if (std::none_of(m_recordFields.cbegin(), m_recordFields.cend(), [&message](const QString &field) {
+                return field != kTimeField && message.contains(field);
+            })) {
             return;
         }
-        if (m_table->rowCount() >= maxRows) {
-            m_table->removeRow(0);
-        }
-        const int row = m_table->rowCount();
-        m_table->insertRow(row);
-        const QString stamp = QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz"));
-        for (int c = 0; c < m_columns.size(); ++c) {
-            const QString &column = m_columns.at(c);
-            const QString cell = column == timeColumn ? stamp
-                                 : message.contains(column) ? displayString(message.value(column))
-                                                            : QString();
-            m_table->setItem(row, c, new QTableWidgetItem(cell));
-        }
-        m_table->scrollToBottom();
+        appendRecord(message);
         return;
     }
     m_table->setRowCount(0);
-    for (auto it = message.constBegin(); it != message.constEnd() && m_table->rowCount() < maxRows; ++it) {
+    for (auto it = message.constBegin(); it != message.constEnd(); ++it) {
         const int row = m_table->rowCount();
         m_table->insertRow(row);
         m_table->setItem(row, 0, new QTableWidgetItem(it.key()));
-        if (m_table->columnCount() > 1) {
-            m_table->setItem(row, 1, new QTableWidgetItem(displayString(it.value())));
-        }
+        m_table->setItem(row, 1, new QTableWidgetItem(displayString(it.value())));
     }
 }
 
@@ -1172,8 +1133,9 @@ void ModbusSlaveTableWidget::apply()
     rebuild();
 }
 
-void ModbusSlaveTableWidget::showDesign(const QJsonObject *cardProperties)
+void ModbusSlaveTableWidget::showDesign(const QJsonObject *cardProperties, bool ambiguous)
 {
+    m_ambiguousSource = ambiguous;
     if (cardProperties) {
         m_design = ModbusSlaveStore::fromProperties(*cardProperties);
     } else {
@@ -1193,13 +1155,15 @@ void ModbusSlaveTableWidget::onDetached()
 {
     disconnect(m_slaveConnection);
     m_slave.clear();
+    m_ambiguousSource = false;
     rebuild();
 }
 
 void ModbusSlaveTableWidget::bindSlave()
 {
     const QList<ModbusSlave *> slaves = context()->hub()->modbusSlaves(receiveRoute());
-    ModbusSlave *first = slaves.isEmpty() ? nullptr : slaves.first();
+    m_ambiguousSource = slaves.size() > 1;
+    ModbusSlave *first = slaves.size() == 1 ? slaves.first() : nullptr;
     if (first == m_slave && m_slave) {
         return;
     }
@@ -1270,7 +1234,7 @@ void ModbusSlaveTableWidget::rebuild()
     if (!source) {
         m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
         m_table->setRowCount(1);
-        auto *hint = new QTableWidgetItem(tr("没有从站链路卡片"));
+        auto *hint = new QTableWidgetItem(m_ambiguousSource ? tr("请选择一个从站连接") : tr("没有从站链路卡片"));
         hint->setFlags(Qt::ItemIsEnabled);
         m_table->setItem(0, 0, hint);
         m_table->setSpan(0, 0, 1, 2);
@@ -1358,27 +1322,127 @@ void LogBoxWidget::appendLog(const QString &text, const QString &level)
 void LogBoxWidget::onAttached()
 {
     CommHub *hub = context()->hub();
+    const auto event = [this](const QString &message, const QString &level, const DataSource &source) {
+        if (acceptsEvent(receiveRoute(), source))
+            appendLog(withSource(message, source), level);
+    };
     live(connect(hub, &CommHub::linkConnected, this,
-                 [this](const QString &link) { appendLog(tr("已连接: %1").arg(link), QStringLiteral("ok")); }));
+                 [event](const QString &link, const DataSource &source) {
+                     event(tr("已连接: %1").arg(link), QStringLiteral("ok"), source);
+                 }));
     live(connect(hub, &CommHub::linkDisconnected, this,
-                 [this](const QString &link) { appendLog(tr("已断开: %1").arg(link), QStringLiteral("warn")); }));
+                 [event](const QString &link, const DataSource &source) {
+                     event(tr("已断开: %1").arg(link), QStringLiteral("warn"), source);
+                 }));
     live(connect(hub, &CommHub::linkError, this,
-                 [this](const QString &message) { appendLog(tr("错误: %1").arg(message), QStringLiteral("error")); }));
+                 [event](const QString &message, const DataSource &source) {
+                     event(tr("错误: %1").arg(message), QStringLiteral("error"), source);
+                 }));
     live(connect(hub, &CommHub::linkWarning, this,
-                 [this](const QString &message) { appendLog(tr("警告: %1").arg(message), QStringLiteral("warn")); }));
-    live(connect(hub, &CommHub::linkInfo, this, [this](const QString &message) { appendLog(message); }));
+                 [event](const QString &message, const DataSource &source) {
+                     event(tr("警告: %1").arg(message), QStringLiteral("warn"), source);
+                 }));
+    live(connect(hub, &CommHub::linkInfo, this, [event](const QString &message, const DataSource &source) {
+        event(message, QStringLiteral("info"), source);
+    }));
     live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message, const DataSource &source) {
         // A slave's own change is no frame received: its requests and replies are logged instead.
         if (context()->isActive() && !source.slaveData && receiveRoute().accepts(source)) {
-            appendLog(QStringLiteral("[%1%2] %3").arg(source.connectionId, source.endpoint.isEmpty() ? QString() : QLatin1Char('/') + source.endpoint, messageText(message)));
+            appendLog(withSource(messageText(message), source));
         }
     }));
-    live(connect(hub, &CommHub::slaveLog, this, &LogBoxWidget::appendLog));
+    live(connect(hub, &CommHub::slaveLog, this, event));
 }
 
 // ---------------------------------------------------------------------------
 // DataRecvCard
 // ---------------------------------------------------------------------------
+
+namespace {
+
+const QColor receivedColor(0xa6e3a1);
+const QColor sentColor(0xf9e2af);
+const QColor eventColor(0x74c7ec);
+constexpr int kReceiveLogRefreshMs = 40;
+constexpr std::size_t kReceiveLogBatchRows = 512;
+
+QString singleLogLine(const QString &text)
+{
+    QString line;
+    line.reserve(text.size());
+    for (const QChar c : text) {
+        if (c == u'\r')
+            line += QStringLiteral("\\r");
+        else if (c == u'\n')
+            line += QStringLiteral("\\n");
+        else if (c == u'\t')
+            line += QStringLiteral("\\t");
+        else if (c.category() == QChar::Other_Control || c == QChar::LineSeparator || c == QChar::ParagraphSeparator)
+            line += QStringLiteral("\\x%1").arg(int(c.unicode()), 2, 16, u'0');
+        else
+            line += c;
+    }
+    return line;
+}
+
+void writeReceiveLog(QTextCursor &cursor, const QTime &time, const QString &kind, const QString &text,
+                     const DataSource &source, const QColor &color)
+{
+    QTextCharFormat muted;
+    muted.setForeground(QColor(0x9399b2));
+    QTextCharFormat body;
+    body.setForeground(color);
+    cursor.insertText(time.toString(QStringLiteral("HH:mm:ss.zzz")) + QStringLiteral("  "), muted);
+    cursor.insertText(kind + QStringLiteral("  ") + singleLogLine(text), body);
+    const auto label = withSource({}, source).trimmed();
+    if (!label.isEmpty())
+        cursor.insertText(QStringLiteral("  ") + singleLogLine(label), muted);
+}
+
+template <typename Update>
+void updatePacketLog(QTextEdit *output, bool autoScroll, Update update)
+{
+    // Changing the document can move its cursor without the user selecting a row.
+    const QSignalBlocker editing(output);
+    auto *vertical = output->verticalScrollBar();
+    auto *horizontal = output->horizontalScrollBar();
+    const int y = vertical->value();
+    const int x = horizontal->value();
+    if (autoScroll && y == vertical->maximum()) {
+        update();
+        vertical->setValue(vertical->maximum());
+    } else {
+        auto anchor = output->cursorForPosition(QPoint(0, 0));
+        anchor.setKeepPositionOnInsert(true);
+        const auto *layout = output->document()->documentLayout();
+        const auto before = layout->blockBoundingRect(anchor.block()).top();
+        update();
+        // The document can drop old blocks when it reaches the configured line limit.
+        vertical->setValue(y + qRound(layout->blockBoundingRect(anchor.block()).top() - before));
+    }
+    horizontal->setValue(x);
+}
+
+} // namespace
+
+struct DataRecvCardWidget::PacketRecord : QTextBlockUserData
+{
+    PacketRecord(const QString &kind, const DataSource &source, const QColor &color, const QString &text = {})
+        : kind(kind), source(source), color(color), text(text)
+    {
+    }
+
+    QTime time = QTime::currentTime();
+    QString kind;
+    DataSource source;
+    QColor color;
+    QString text;
+    // Raw packet rows retain their bytes so changing the display format can redraw them.
+    QByteArray bytes;
+    bool received = false;
+    bool binary = false;
+    std::optional<ReceiveSample> sample;
+};
 
 DataRecvCardWidget::DataRecvCardWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {
@@ -1391,91 +1455,333 @@ DataRecvCardWidget::DataRecvCardWidget(const WidgetMeta &meta, QWidget *parent) 
     titleRow->addWidget(m_title);
     titleRow->addStretch();
     titleRow->addWidget(m_counter);
-    auto *options = new QHBoxLayout;
-    m_hex = new FluentQt::CheckBox(tr("HEX显示"), this);
+    auto *options = new FluentQt::FlowLayout(0, 6, 4);
+    options->setVerticalAlignment(Qt::AlignVCenter);
+    m_format = new FluentQt::ComboBox(this);
+    m_format->setObjectName(QStringLiteral("receiveLogFormat"));
+    m_format->setAccessibleName(tr("报文显示格式"));
+    m_format->addItem(tr("自动显示"), {}, QStringLiteral("auto"));
+    m_format->addItem(QStringLiteral("HEX"), {}, QStringLiteral("hex"));
+    m_format->addItem(tr("文本"), {}, QStringLiteral("text"));
+    m_format->setMinimumWidth(m_format->sizeHint().width());
+    m_wire = new FluentQt::CheckBox(tr("线路字节"), this);
+    m_wire->setObjectName(QStringLiteral("showWireBytes"));
     m_autoScroll = new FluentQt::CheckBox(tr("自动滚动"), this);
+    m_autoScroll->setObjectName(QStringLiteral("receiveLogAutoScroll"));
     m_autoScroll->setChecked(true);
     auto *clear = new FluentQt::PushButton(this);
+    clear->setObjectName(QStringLiteral("clearReceiveLog"));
     clear->setText(tr("清空"));
-    clear->setFixedWidth(64);
-    options->addWidget(m_hex);
+    m_sample = new FluentQt::PushButton(tr("试解析"), this);
+    m_sample->setObjectName(QStringLiteral("inspectReceivedSample"));
+    m_sample->setEnabled(false);
+    options->addWidget(m_format);
+    options->addWidget(m_wire);
     options->addWidget(m_autoScroll);
-    options->addStretch();
+    options->addWidget(m_sample);
     options->addWidget(clear);
     m_output = createTerminal(this);
+    m_output->setObjectName(QStringLiteral("receivePacketLog"));
+    m_output->setLineWrapMode(QTextEdit::NoWrap);
     layout->addLayout(titleRow);
     layout->addLayout(options);
     layout->addWidget(m_output, 1);
+    m_logRefresh = new QTimer(this);
+    m_logRefresh->setInterval(kReceiveLogRefreshMs);
+    m_logRefresh->setTimerType(Qt::PreciseTimer);
+    connect(m_logRefresh, &QTimer::timeout, this, &DataRecvCardWidget::flushLog);
     connect(clear, &QPushButton::clicked, this, [this]() {
+        m_logRefresh->stop();
+        m_pendingLog.clear();
         m_output->clear();
-        m_count = 0;
-        m_counter->setText(tr("%1 条").arg(m_count));
+        m_receivedCount = 0;
+        m_wireBytes = 0;
+        m_recentSample.reset();
+        m_selectedRecord = {};
+        updateSampleButton();
+        refreshCounter();
+    });
+    connect(m_format, &FluentQt::ComboBox::currentIndexChanged, this, &DataRecvCardWidget::refreshPacketFormat);
+    connect(m_wire, &QCheckBox::toggled, this, [this] { refreshCounter(); });
+    connect(m_autoScroll, &QCheckBox::toggled, this, [this](bool follows) {
+        if (follows)
+            m_output->verticalScrollBar()->setValue(m_output->verticalScrollBar()->maximum());
+    });
+    connect(m_sample, &QPushButton::clicked, this, &DataRecvCardWidget::showReceiveSample);
+    connect(m_output, &QTextEdit::cursorPositionChanged, this, [this] {
+        if (m_output->hasFocus()) {
+            const auto block = m_output->textCursor().block();
+            const auto *record = static_cast<const PacketRecord *>(block.userData());
+            m_selectedRecord = record && record->sample ? block : QTextBlock{};
+            updateSampleButton();
+        }
     });
 }
+
+DataRecvCardWidget::~DataRecvCardWidget() = default;
 
 void DataRecvCardWidget::apply()
 {
     m_title->setText(text("title"));
-    m_counter->setText(tr("%1 条").arg(m_count));
-    m_output->document()->setMaximumBlockCount(std::max(50, integer("maxLines")));
+    refreshCounter();
+    m_maxLines = std::max(50, integer("maxLines"));
+    while (m_pendingLog.size() > std::size_t(m_maxLines))
+        m_pendingLog.pop_front();
+    discardEvictedSelection(0);
+    const QSignalBlocker editing(m_output);
+    m_output->document()->setMaximumBlockCount(m_maxLines);
+    updateSampleButton();
 }
 
-QString DataRecvCardWidget::render(const QByteArray &bytes, bool received, const DataSource &source) const
+void DataRecvCardWidget::refreshCounter()
+{
+    m_counter->setText(m_wire->isChecked() ? tr("线路 %1 B · 收 %2 条").arg(m_wireBytes).arg(m_receivedCount)
+                                          : tr("收 %1 条").arg(m_receivedCount));
+}
+
+void DataRecvCardWidget::discardEvictedSelection(int incomingRows)
+{
+    // QTextDocument may reuse a trimmed block's storage for an unrelated log row.
+    const int evicted = m_output->document()->blockCount() + incomingRows - m_maxLines;
+    if (evicted > 0 && m_selectedRecord.isValid() && m_selectedRecord.blockNumber() < evicted)
+        m_selectedRecord = {};
+}
+
+const DataRecvCardWidget::ReceiveSample *DataRecvCardWidget::selectedSample() const
+{
+    if (!m_selectedRecord.isValid())
+        return nullptr;
+    const auto *record = static_cast<const PacketRecord *>(m_selectedRecord.userData());
+    return record && record->sample ? &*record->sample : nullptr;
+}
+
+void DataRecvCardWidget::updateSampleButton()
+{
+    const bool selected = selectedSample() != nullptr;
+    m_sample->setText(selected ? tr("试解析所选") : tr("试解析"));
+    m_sample->setEnabled(selected || m_recentSample.has_value());
+    QList<QTextEdit::ExtraSelection> highlights;
+    if (selected) {
+        QTextEdit::ExtraSelection row;
+        row.cursor = QTextCursor(m_selectedRecord);
+        row.format.setProperty(QTextFormat::FullWidthSelection, true);
+        row.format.setBackground(QColor(0x343B50));
+        highlights.append(row);
+    }
+    m_output->setExtraSelections(highlights);
+}
+
+void DataRecvCardWidget::showReceiveSample()
+{
+    if (!context())
+        return;
+    const auto *record = selectedSample();
+    if (!record && !m_recentSample)
+        return;
+    const auto sample = record ? *record : *m_recentSample;
+    const auto &settings = sample.format.settings;
+    if (sample.format.type == LinkParser::HexGroup)
+        openReceiveGroupPreview(settings, window(), {}, sample.bytes);
+    else if (sample.format.type == QLatin1String("hex"))
+        openReceiveFramePreview(settings, window(), sample.bytes);
+    else if (sample.format.type == QLatin1String("line"))
+        openReceiveTextPreview(settings, window(),
+                               LineParser::decode(sample.bytes, settings.value(QStringLiteral("encoding")).toString()));
+}
+
+QString DataRecvCardWidget::packetText(const PacketRecord &packet, QStringView mode) const
 {
     // A CAN link's frame line is text that already shows its bytes in HEX.
-    if (source.canText) {
-        return QString::fromUtf8(bytes);
-    }
-    if (m_hex->isChecked()) {
-        return toHexString(bytes);
-    }
-    QString text = received ? context()->hub()->decodeRaw(bytes, source) : LineParser::decode(bytes, QStringLiteral("utf-8"));
-    while (text.endsWith(QLatin1Char('\n')) || text.endsWith(QLatin1Char('\r'))) {
-        text.chop(1);
-    }
+    if (packet.source.canText)
+        return QString::fromUtf8(packet.bytes);
+    const bool automatic = mode == QLatin1String("auto");
+    if (mode == QLatin1String("hex") || (automatic && packet.binary))
+        return toHexString(packet.bytes);
+    const auto text = LineParser::decode(packet.bytes, packet.received ? packet.source.encoding : QStringLiteral("utf-8"));
+    if (automatic && std::any_of(text.cbegin(), text.cend(), [](QChar c) {
+            return c == QChar::ReplacementCharacter ||
+                   (c.category() == QChar::Other_Control && c != u'\r' && c != u'\n' && c != u'\t');
+        }))
+        return toHexString(packet.bytes);
     return text;
 }
 
-void DataRecvCardWidget::append(const QString &html)
+void DataRecvCardWidget::appendLog(const QString &kind, const QString &text, const DataSource &source,
+                                  const QColor &color)
 {
-    QScrollBar *bar = m_output->verticalScrollBar();
-    const int keep = bar->value();
-    m_output->append(html);
-    if (m_autoScroll->isChecked()) {
-        bar->setValue(bar->maximum());
-    } else {
-        bar->setValue(keep);
+    queueLog(std::make_unique<PacketRecord>(kind, source, color, text));
+}
+
+void DataRecvCardWidget::appendPacket(const QByteArray &bytes, bool received, const DataSource &source)
+{
+    if (bytes.isEmpty())
+        return;
+    auto packet = std::make_unique<PacketRecord>(received ? tr("收") : tr("发"), source,
+                                                received ? receivedColor : sentColor);
+    packet->bytes = bytes;
+    packet->received = received;
+    const auto *link = context()->hub()->sourceLink(source);
+    const QString parser = link ? link->parserType() : QString();
+    packet->binary = LinkParser::isHex(parser) || parser == QLatin1String("modbus") || parser == QLatin1String("modbus_tcp");
+    if (received)
+        packet->sample = rememberSample(bytes, source, link);
+    queueLog(std::move(packet));
+}
+
+std::optional<DataRecvCardWidget::ReceiveSample> DataRecvCardWidget::rememberSample(const QByteArray &bytes,
+                                                                                  const DataSource &source,
+                                                                                  const Link *link)
+{
+    if (source.canText || bytes.isEmpty() || !link)
+        return {};
+    const auto parser = link->parserType();
+    if (!LinkParser::isHex(parser) && parser != QLatin1String("line"))
+        return {};
+    m_recentSample = ReceiveSample{bytes.left(65536), {parser, link->parserConfig()}};
+    return m_recentSample;
+}
+
+void DataRecvCardWidget::appendSampleLog(const QString &kind, const QString &text, const QByteArray &bytes,
+                                        const DataSource &source, const QColor &color)
+{
+    auto record = std::make_unique<PacketRecord>(kind, source, color, text);
+    record->sample = rememberSample(bytes, source, context()->hub()->sourceLink(source));
+    queueLog(std::move(record));
+}
+
+void DataRecvCardWidget::queueLog(std::unique_ptr<PacketRecord> record)
+{
+    m_pendingLog.push_back(std::move(record));
+    if (m_pendingLog.size() > std::size_t(m_maxLines))
+        m_pendingLog.pop_front();
+    scheduleLogRefresh();
+}
+
+void DataRecvCardWidget::scheduleLogRefresh()
+{
+    if (!m_logRefresh->isActive())
+        m_logRefresh->start();
+}
+
+void DataRecvCardWidget::flushLog()
+{
+    refreshCounter();
+    if (m_pendingLog.empty()) {
+        m_logRefresh->stop();
+        return;
     }
+
+    // Like the CAN monitor, retain incoming records separately from the displayed rows.
+    // Limit each edit so pending traffic cannot monopolize the UI after a burst.
+    const auto count = std::min(m_pendingLog.size(), kReceiveLogBatchRows);
+    const auto mode = selectedValue(m_format);
+    discardEvictedSelection(int(count));
+    updatePacketLog(m_output, m_autoScroll->isChecked(), [&] {
+        QTextCursor cursor(m_output->document());
+        cursor.movePosition(QTextCursor::End);
+        cursor.beginEditBlock();
+        for (std::size_t i = 0; i < count; ++i) {
+            auto record = std::move(m_pendingLog.front());
+            m_pendingLog.pop_front();
+            if (!cursor.document()->isEmpty())
+                cursor.insertBlock();
+            const bool rawPacket = !record->bytes.isEmpty();
+            writeReceiveLog(cursor, record->time, record->kind, rawPacket ? packetText(*record, mode) : record->text,
+                            record->source, record->color);
+            if (rawPacket || record->sample)
+                cursor.block().setUserData(record.release());
+        }
+        cursor.endEditBlock();
+    });
+    updateSampleButton();
+}
+
+void DataRecvCardWidget::refreshPacketFormat()
+{
+    const auto mode = selectedValue(m_format);
+    updatePacketLog(m_output, m_autoScroll->isChecked(), [&] {
+        QTextCursor cursor(m_output->document());
+        cursor.beginEditBlock();
+        for (auto block = cursor.document()->firstBlock(); block.isValid(); block = block.next()) {
+            const auto *packet = static_cast<const PacketRecord *>(block.userData());
+            if (!packet || packet->bytes.isEmpty())
+                continue;
+            cursor.setPosition(block.position());
+            cursor.setPosition(block.position() + block.length() - 1, QTextCursor::KeepAnchor);
+            writeReceiveLog(cursor, packet->time, packet->kind, packetText(*packet, mode), packet->source,
+                            packet->color);
+        }
+        cursor.endEditBlock();
+    });
 }
 
 void DataRecvCardWidget::onAttached()
 {
+    rememberViewOption(m_format, QStringLiteral("format"));
+    rememberViewOption(m_wire, QStringLiteral("wireBytes"));
+    rememberViewOption(m_autoScroll, QStringLiteral("autoScroll"));
     CommHub *hub = context()->hub();
-    // << received, >> sent, --- link events ---, coloured as in PyQt UI Designer.
-    const auto traffic = [this](const QByteArray &bytes, bool received, const char *arrows, const char *color, const DataSource &source) {
-        const QString body = render(bytes, received, source);
-        if (body.isEmpty()) {
+    const auto event = [this](const QString &message, const DataSource &source) {
+        if (!acceptsEvent(receiveRoute(), source))
             return;
+        appendLog(tr("事件"), message, source, eventColor);
+    };
+    live(connect(hub, &CommHub::wireReceived, this, [this, hub](const QByteArray &bytes, const DataSource &source) {
+        if (!receiveRoute().accepts(source))
+            return;
+        m_wireBytes += quint64(bytes.size());
+        if (m_wire->isChecked()) {
+            auto content = tr("%1 B · %2").arg(bytes.size()).arg(toHexString(bytes.left(512)));
+            if (const auto *link = hub->sourceLink(source)) {
+                const auto progress = link->frameProgress(source.stream);
+                if (progress.expected > 0)
+                    content.prepend(tr("等待整帧 %1/%2 B · ").arg(progress.received).arg(progress.expected));
+            }
+            appendSampleLog(tr("线路"), content, bytes, source, eventColor);
         }
-        append(QStringLiteral("<span style=\"color:#9399b2\">[%1]</span> <span style=\"color:%2\">%3 %4</span>")
-                   .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")), QLatin1String(color),
-                        QLatin1String(arrows).toString().toHtmlEscaped(), terminalEscape(QStringLiteral("[%1%2] %3").arg(source.connectionId, source.endpoint.isEmpty() ? QString() : QLatin1Char('/') + source.endpoint, body))));
-    };
-    const auto event = [this](const QString &message) {
-        append(QStringLiteral("<span style=\"color:#74c7ec\">[%1] --- %2 ---</span>")
-                   .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss")), terminalEscape(message)));
-    };
-    live(connect(hub, &CommHub::rawReceived, this, [this, traffic](const QByteArray &bytes, const DataSource &source) {
-        if (!receiveRoute().accepts(source)) return;
-        traffic(bytes, true, "<<", "#a6e3a1", source);
-        ++m_count;
-        m_counter->setText(tr("%1 条").arg(m_count));
     }));
-    live(connect(hub, &CommHub::bytesSent, this,
-                 [this, traffic](const QByteArray &bytes, const DataSource &source) { if (receiveRoute().accepts(source)) traffic(bytes, false, ">>", "#f9e2af", source); }));
+    live(connect(hub, &CommHub::frameRejected, this, [this](const FrameNotice &notice, const DataSource &source) {
+        if (!m_wire->isChecked() || !receiveRoute().accepts(source))
+            return;
+        QString reason;
+        switch (notice.reason) {
+        case FrameNotice::Reason::Length: reason = tr("帧长超限或不合法"); break;
+        case FrameNotice::Reason::Timeout: reason = tr("组帧超时"); break;
+        case FrameNotice::Reason::Checksum: reason = tr("校验值不匹配"); break;
+        case FrameNotice::Reason::Footer: reason = tr("帧尾不匹配"); break;
+        }
+        const auto length = notice.expected >= 0 ? tr("已收 %1 B · 声明 %2 B").arg(notice.received).arg(notice.expected)
+                                                  : tr("已收 %1 B").arg(notice.received);
+        appendSampleLog(tr("丢帧"), reason + QStringLiteral(" · ") + length + QStringLiteral(" · ") +
+                        toHexString(notice.sample.left(512)), notice.sample, source, QColor(0xFFAE91));
+    }));
+    live(connect(hub, &CommHub::rawReceived, this, [this](const QByteArray &bytes, const DataSource &source) {
+        if (!receiveRoute().accepts(source)) return;
+        appendPacket(bytes, true, source);
+        ++m_receivedCount;
+        scheduleLogRefresh();
+    }));
+    live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message, const DataSource &source) {
+        if (m_wire->isChecked() && !message.isEmpty() && acceptsEvent(receiveRoute(), source))
+            appendLog(tr("解析"), messageText(message), source, eventColor);
+    }));
+    live(connect(hub, &CommHub::canFrameDecoded, this, [this](const CanFrame &frame, const Message &, const DataSource &source) {
+        if (receiveRoute().accepts(source)) {
+            m_wireBytes += quint64(frame.data.size());
+            if (m_wire->isChecked())
+                scheduleLogRefresh();
+        }
+    }));
+    live(connect(hub, &CommHub::bytesSent, this, [this](const QByteArray &bytes, const DataSource &source) {
+        if (receiveRoute().accepts(source))
+            appendPacket(bytes, false, source);
+    }));
     live(connect(hub, &CommHub::linkConnected, this,
-                 [event](const QString &link) { event(tr("已连接: %1").arg(link)); }));
-    live(connect(hub, &CommHub::linkDisconnected, this, [event](const QString &) { event(tr("已断开")); }));
+                 [event](const QString &link, const DataSource &source) { event(tr("已连接: %1").arg(link), source); }));
+    live(connect(hub, &CommHub::linkDisconnected, this,
+                 [event](const QString &link, const DataSource &source) { event(tr("已断开: %1").arg(link), source); }));
+    live(connect(hub, &CommHub::linkInfo, this, event));
+    live(connect(hub, &CommHub::linkError, this, event));
 }
 
 void DataRecvCardWidget::paintEvent(QPaintEvent *)
@@ -1493,107 +1799,113 @@ DataSendCardWidget::DataSendCardWidget(const WidgetMeta &meta, QWidget *parent) 
     layout->setContentsMargins(16, 12, 16, 12);
     layout->setSpacing(8);
     m_title = new FluentQt::StrongBodyLabel(this);
+    m_target = new FluentQt::CaptionLabel(this);
+    m_target->setWordWrap(true);
     auto *inputRow = new QHBoxLayout;
     inputRow->setSpacing(8);
     m_input = new FluentQt::LineEdit(this);
     m_input->setClearButtonEnabled(true);
     m_send = new FluentQt::PrimaryPushButton(this);
     m_send->setIcon(FluentQt::icon(FluentQt::FluentIcon::Send));
-    m_send->setText(tr("发送"));
     inputRow->addWidget(m_input, 1);
     inputRow->addWidget(m_send);
-    auto *options = new QHBoxLayout;
+    m_textOptions = new QWidget(this);
+    auto *options = new QHBoxLayout(m_textOptions);
+    options->setContentsMargins(0, 0, 0, 0);
     options->setSpacing(8);
-    m_hex = new FluentQt::CheckBox(tr("HEX模式"), this);
-    m_newline = new FluentQt::ComboBox(this);
-    m_newline->addItems({tr("无"), QStringLiteral("\\r\\n"), QStringLiteral("\\n"), QStringLiteral("\\r")});
+    m_hex = new FluentQt::CheckBox(tr("HEX模式"), m_textOptions);
+    m_newlineRow = new QWidget(m_textOptions);
+    auto *ending = new QHBoxLayout(m_newlineRow);
+    ending->setContentsMargins(0, 0, 0, 0);
+    m_newline = new FluentQt::ComboBox(m_newlineRow);
+    m_newline->setAccessibleName(tr("换行符"));
+    addValueItems(m_newline, ManualCommand::newlines());
     m_newline->setCurrentIndex(1);
     m_newline->setFixedWidth(80);
+    ending->addWidget(new FluentQt::BodyLabel(tr("换行符"), m_newlineRow));
+    ending->addWidget(m_newline);
     options->addWidget(m_hex);
     options->addStretch();
-    options->addWidget(new FluentQt::BodyLabel(tr("换行符"), this));
-    options->addWidget(m_newline);
+    options->addWidget(m_newlineRow);
     layout->addWidget(m_title);
+    layout->addWidget(m_target);
     layout->addLayout(inputRow);
-    layout->addLayout(options);
+    layout->addWidget(m_textOptions);
     layout->addStretch();
-    m_tipTimer = new QTimer(this);
-    m_tipTimer->setSingleShot(true);
-    connect(m_tipTimer, &QTimer::timeout, this, [this]() { m_send->setText(tr("发送")); });
-    // HEX has no line ending to choose.
-    connect(m_hex, &QCheckBox::toggled, m_newline, [this](bool hex) { m_newline->setEnabled(!hex); });
+    connect(m_hex, &QCheckBox::toggled, this, &DataSendCardWidget::refreshInputOptions);
 }
 
 void DataSendCardWidget::apply()
 {
+    const QString mode = text("commandMode");
+    m_can = mode == ManualCommand::Can;
     m_title->setText(text("title"));
-    m_input->setPlaceholderText(text("placeholder"));
+    m_target->setText(commandRoute().connectionId.isEmpty() ? tr("自动匹配唯一连接") : commandRoute().connectionId);
+    m_input->setAccessibleName(m_can ? tr("CAN 报文") : tr("数据发送"));
+    m_textOptions->setVisible(!m_can);
+    m_hex->setChecked(mode == ManualCommand::Hex);
+    if (!selectValue(m_newline, text("commandNewline")))
+        m_newline->setCurrentIndex(1);
+    refreshInputOptions();
+    periodicSendChanged(isPeriodicSending());
 }
 
 void DataSendCardWidget::onAttached()
 {
+    const auto refresh = [this] {
+        m_target->setText(context()->commandTargetText(m_can ? EncodedCommand::Kind::CanFrame : EncodedCommand::Kind::Bytes,
+                                                     commandRoute()));
+    };
+    refresh();
+    refreshInputOptions();
+    live(connect(context()->hub(), &CommHub::linksChanged, this, refresh));
     live(connect(m_send, &QPushButton::clicked, this, &DataSendCardWidget::sendInput));
-    live(connect(m_input, &QLineEdit::returnPressed, this, &DataSendCardWidget::sendInput));
-}
-
-void DataSendCardWidget::flashTip(const QString &tip)
-{
-    m_send->setText(tip);
-    m_tipTimer->start(1500);
+    live(connect(m_input, &QLineEdit::returnPressed, this, [this] {
+        if (!isPeriodicSending())
+            sendInput();
+    }));
 }
 
 void DataSendCardWidget::sendInput()
 {
-    const QString input = m_input->text().trimmed();
-    if (input.isEmpty()) {
-        flashTip(tr("请输入数据"));
+    if (stopPeriodicSend())
         return;
-    }
-    CommHub *hub = context()->hub();
-    if (hub->connectedLinks(commandRoute()).isEmpty()) {
-        flashTip(tr("未连接"));
-        return;
-    }
-    // CAN links take cansend's ID#DATA; the other links get the text as always.
-    const bool can = !hub->connectedCanLinks(commandRoute()).isEmpty();
-    std::optional<CanFrame> frame;
-    if (can) {
-        frame = Can::parseSendText(input);
-        if (!frame) {
-            flashTip(tr("CAN 链路请按 ID#数据 格式输入"));
-            return;
-        }
-    }
-    bool sent = false;
-    const auto targets = hub->connectedLinks(commandRoute());
-    if (std::any_of(targets.cbegin(), targets.cend(), [](Link *link) { return !link->isCan(); })) {
-        EncodedCommand command;
-        command.route = commandRoute();
-        if (m_hex->isChecked()) {
-            const auto bytes = parseHex(input);
-            if (!bytes || bytes->isEmpty()) {
-                flashTip(tr("HEX格式错误"));
-                return;
-            }
-            command.bytes = *bytes;
-        } else {
-            static const QStringList endings = {QString(), QStringLiteral("\r\n"), QStringLiteral("\n"),
-                                                QStringLiteral("\r")};
-            command.bytes = (input + endings.value(m_newline->currentIndex())).toUtf8();
-        }
-        sent = context()->send(CommandResult::ok(command));
-    }
-    if (frame) {
-        QString error;
-        if (hub->sendCanFrame(*frame, &error, commandRoute()) > 0) {
-            sent = true;
-        } else if (!error.isEmpty()) {
-            context()->notify(tr("提示"), error, NotifyType::Error);
-        }
-    }
-    if (sent) {
-        m_input->selectAll();
-    }
+    const QJsonObject props = inputProperties();
+    const auto encode = [this, props] { return ManualCommand::encode(props, m_input->text(), frameTemplates()); };
+    const int interval = CommandEncoder::periodicSendInterval(props);
+    std::function<void()> onSent;
+    if (interval == 0)
+        onSent = [this] { m_input->selectAll(); };
+    requestSend(encode(), std::move(onSent), props.value(QStringLiteral("commandMode")).toString(), interval, encode);
+}
+
+void DataSendCardWidget::periodicSendChanged(bool running)
+{
+    const int interval = CommandEncoder::periodicSendInterval(inputProperties());
+    m_send->setText(running ? (isPeriodicStarting() ? tr("取消启动") : tr("停止周期发送"))
+                            : interval > 0 ? tr("开始周期发送") : tr("发送"));
+    m_textOptions->setEnabled(!running);
+}
+
+QJsonObject DataSendCardWidget::inputProperties() const
+{
+    QJsonObject props = properties();
+    props.insert(QStringLiteral("commandMode"), m_can ? ManualCommand::Can
+                                                      : m_hex->isChecked() ? ManualCommand::Hex : ManualCommand::Text);
+    props.insert(QStringLiteral("commandNewline"), selectedValue(m_newline));
+    return props;
+}
+
+void DataSendCardWidget::refreshInputOptions()
+{
+    const auto props = inputProperties();
+    const bool shared = FrameTemplates::sendSettings(frameTemplates(), props).has_value();
+    m_newlineRow->setVisible(!m_can && !m_hex->isChecked() && !shared);
+    if (m_can)
+        m_input->setPlaceholderText(shared ? tr("输入 CAN ID#载荷…") : tr("CAN 链路请按 ID#数据 格式输入"));
+    else
+        m_input->setPlaceholderText(m_hex->isChecked() && (shared || ManualCommand::hasFraming(props))
+            ? tr("输入 HEX 载荷…") : text("placeholder"));
 }
 
 void DataSendCardWidget::paintEvent(QPaintEvent *)

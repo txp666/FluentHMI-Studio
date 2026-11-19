@@ -10,10 +10,15 @@ bool colorValid(const QString &value)
     return pattern.match(value).hasMatch();
 }
 } // namespace
+int bitProfileWidth(const QJsonObject &profiles, const QString &name)
+{
+    return profiles.value(name).toObject().value(QStringLiteral("width")).toInt(8) == 16 ? 16 : 8;
+}
+
 QJsonObject effectiveBitProfile(const QJsonObject &profiles, const QString &name)
 {
     const auto source = profiles.value(name).toObject();
-    const int width = source.value(QStringLiteral("width")).toInt(8) == 16 ? 16 : 8;
+    const int width = bitProfileWidth(profiles, name);
     const auto original = source.value(QStringLiteral("bits")).toArray();
     QJsonArray bits;
     for (int i = 0; i < width; ++i) {

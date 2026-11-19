@@ -29,6 +29,7 @@ class LedWidget : public HmiWidget
 
   protected:
     void apply() override;
+    void bindingStatusChanged(BindingStatus status) override;
     void paintEvent(QPaintEvent *event) override;
 
   private:

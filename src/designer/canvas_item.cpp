@@ -63,6 +63,8 @@ CanvasItem::CanvasItem(const QString &typeName, const QJsonObject &properties, c
 
     m_widget = createHmiWidget(typeName, m_properties, nullptr, assetBaseDir);
     m_size = m_widget->size();
+    if (isVerticalSeparator())
+        m_size.transpose();
     m_widget->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     // Embedded widgets are windows, and Qt paints a window background behind them: a label
     // would hide the grid and, in the dark theme, show up as a box. At run time they sit on
@@ -102,7 +104,7 @@ CanvasItem *CanvasItem::fromJson(const QJsonObject &data, const QString &assetBa
     item->setPos(geo.value(QStringLiteral("x")).toDouble(0), geo.value(QStringLiteral("y")).toDouble(0));
     const qreal height = geo.value(QStringLiteral("h")).toDouble(item->m_size.height());
     // Measure the rows at the saved width; a wide S7 card needs fewer rows than the default narrow one.
-    item->setSize(QSizeF(geo.value(QStringLiteral("w")).toDouble(item->m_meta->defaultWidth), height), false);
+    item->setSize(QSizeF(geo.value(QStringLiteral("w")).toDouble(item->m_size.width()), height), false);
     for (const QJsonValue &value : data.value(QStringLiteral("children")).toArray()) {
         const QJsonObject childData = value.toObject();
         if (CanvasItem *child = fromJson(childData, assetBaseDir)) {
@@ -159,6 +161,7 @@ void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
     const bool tabs = typeName() == QLatin1String("TabWidget");
     const bool navigationChanged = tabs &&
                                    name == QLatin1String("navigationStyle") && value != propertyValue(name);
+    const bool separatorWasVertical = isVerticalSeparator();
     const int oldContentTop = navigationChanged ? m_widget->contentTop() : 0;
     QJsonObject props = m_properties;
     props.insert(name, value);
@@ -179,6 +182,11 @@ void CanvasItem::setPropertyValue(const QString &name, const QJsonValue &value)
     }
     m_properties = normalizedWidgetProperties(typeName(), props, name);
     applyWidgetProperties();
+    if (separatorWasVertical != isVerticalSeparator()) {
+        setSize(m_size.transposed());
+        if (m_containerParent)
+            m_containerParent->relayoutChildren();
+    }
     if (navigationChanged) {
         const int offset = m_widget->contentTop() - oldContentTop;
         for (CanvasItem *child : std::as_const(m_children)) {
@@ -365,19 +373,31 @@ qreal CanvasItem::rowsHeight() const
     return m_widget->minimumSizeHint().height();
 }
 
+bool CanvasItem::isVerticalSeparator() const
+{
+    return typeName() == QLatin1String("Separator") &&
+           propertyValue(QStringLiteral("orientation")).toString() == QLatin1String("vertical");
+}
+
+qreal CanvasItem::minimumWidth() const
+{
+    return isVerticalSeparator() ? m_meta->minHeight : m_meta->minWidth;
+}
+
 qreal CanvasItem::minimumHeight() const
 {
-    const qreal height = m_meta->minHeight;
+    const qreal height = isVerticalSeparator() ? m_meta->minWidth : m_meta->minHeight;
     return isLinkCard() ? std::max(height, rowsHeight()) : height;
 }
 
 void CanvasItem::setSize(const QSizeF &size, bool enforceMinimum)
 {
-    QSizeF bounded = enforceMinimum
-                         ? QSizeF(std::max<qreal>(size.width(), m_meta->minWidth),
-                                  std::max<qreal>(size.height(), m_meta->minHeight))
-                         : QSizeF(std::max<qreal>(size.width(), 1), std::max<qreal>(size.height(), 1));
-    if (isLinkCard()) {
+    const bool linkCard = isLinkCard();
+    // Link cards measure their component rows at the requested width, which may differ from the current one.
+    const qreal minHeight = linkCard ? m_meta->minHeight : minimumHeight();
+    QSizeF bounded(std::max<qreal>(size.width(), enforceMinimum ? minimumWidth() : 1),
+                   std::max<qreal>(size.height(), enforceMinimum ? minHeight : 1));
+    if (linkCard) {
         bounded.setHeight(std::max<qreal>(bounded.height(), m_widget->sizeForGeometry(bounded.toSize()).height()));
     }
     if (bounded == m_size) {
@@ -411,6 +431,8 @@ QList<QPair<int, QRectF>> CanvasItem::handleRects() const
     const QRectF r = rect();
     const qreal h = kHandle / 2;
     const auto at = [h](qreal x, qreal y) { return QRectF(x - h, y - h, kHandle, kHandle); };
+    if (widthManagedByLayout())
+        return {{Top, at(r.center().x(), r.top())}, {Bottom, at(r.center().x(), r.bottom())}};
     return {{Left | Top, at(r.left(), r.top())},          {Top, at(r.center().x(), r.top())},
             {Right | Top, at(r.right(), r.top())},        {Right, at(r.right(), r.center().y())},
             {Right | Bottom, at(r.right(), r.bottom())},  {Bottom, at(r.center().x(), r.bottom())},
@@ -519,7 +541,7 @@ void CanvasItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
     const auto snap = [g](qreal v) { return std::round(v / g) * g; };
     QPointF p = m_pressPos;
     QSizeF s = m_pressSize;
-    const qreal minW = m_meta->minWidth;
+    const qreal minW = minimumWidth();
     const qreal minH = minimumHeight();
     if (m_resizeHandle & Right) {
         s.setWidth(std::max(minW, snap(m_pressPos.x() + m_pressSize.width() + delta.x()) - m_pressPos.x()));
@@ -651,7 +673,7 @@ void CanvasItem::removeChild(CanvasItem *child)
     relayoutChildren();
 }
 
-QString CanvasItem::layoutMode() const
+QString CanvasItem::layoutMode(int page) const
 {
     const QString type = typeName();
     if (type == QLatin1String("HBoxLayout")) {
@@ -669,7 +691,7 @@ QString CanvasItem::layoutMode() const
         return propertyValue(QStringLiteral("layout")).toString(QStringLiteral("自由")); // i18n: value
     }
     if (type == QLatin1String("TabWidget")) {
-        return m_properties.value(QStringLiteral("_tabLayout_%1").arg(m_editorPage))
+        return m_properties.value(QStringLiteral("_tabLayout_%1").arg(page >= 0 ? page : m_editorPage))
             .toString(QStringLiteral("自由")); // i18n: value
     }
     return QStringLiteral("自由"); // i18n: value
@@ -680,9 +702,14 @@ bool CanvasItem::isFreeLayout() const
     return layoutMode() == QStringLiteral("自由"); // i18n: value
 }
 
+bool CanvasItem::widthManagedByLayout() const
+{
+    return m_containerParent && m_containerParent->layoutMode(m_tabIndex) == QStringLiteral("垂直"); // i18n: value
+}
+
 void CanvasItem::fitWidth(qreal available)
 {
-    setSize(QSizeF(std::max<qreal>(m_meta->minWidth, available), m_size.height()));
+    setSize(QSizeF(available, m_size.height()));
 }
 
 void CanvasItem::updatePageVisibility()

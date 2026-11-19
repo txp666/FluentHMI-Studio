@@ -152,6 +152,21 @@ QStringList TcpServerLink::sendEndpoints() const
     return endpoints;
 }
 
+bool TcpServerLink::hasPendingWrite(const QString &endpoint) const
+{
+    for (auto *socket : m_clients.keys()) {
+        if (socket->bytesToWrite() > 0 &&
+            (endpoint.isEmpty() || endpoint == networkEndpoint(socket->peerAddress().toString(), socket->peerPort())))
+            return true;
+    }
+    return false;
+}
+
+quint64 TcpServerLink::sendSession(const QString &endpoint) const
+{
+    return streamIdForEndpoint(endpoint);
+}
+
 qint64 TcpServerLink::writeTo(const QByteArray &bytes, const QString &endpoint)
 {
     if (endpoint.isEmpty()) return writeBytes(bytes);
@@ -185,10 +200,10 @@ void TcpServerLink::onNewConnection()
             }
         });
         connect(socket, &QTcpSocket::disconnected, this, [this, socket, peer]() {
-            emit infoMessage(tr("设备已断开: %1").arg(peer));
+            emit infoMessage(tr("设备已断开: %1").arg(peer), peer);
             dropClient(socket);
         });
-        emit infoMessage(tr("设备已连入: %1").arg(peer));
+        emit infoMessage(tr("设备已连入: %1").arg(peer), peer);
         emit clientCountChanged(clientCount());
         emit canSendChanged();
     }

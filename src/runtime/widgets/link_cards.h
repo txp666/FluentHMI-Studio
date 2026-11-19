@@ -55,6 +55,7 @@ class LinkCardBase : public HmiWidget
     virtual Link *currentLink() const = 0;
     // The parser a connecting link uses: the card's own choice, or the project's.
     bool configureParser(Link *link);
+    void resetParserSelection();
     // The button and the status line: `status` describes the connection; `toolTip` shows it whole when it is
     // longer than the line (a CAN card's reason for refusing to connect).
     void setConnectedUi(bool connected, const QString &status, const QString &toolTip = QString());
@@ -108,6 +109,7 @@ class SerialConfigCardWidget : public LinkCardBase
 
   private:
     void refreshPorts();
+    void refreshConnection();
     void toggleConnection();
     // The settings can be changed only while the port is closed.
     void setFieldsEnabled(bool enabled);

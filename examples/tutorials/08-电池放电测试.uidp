@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.3",
   "appName": "电池放电测试",
   "canvas": {
     "width": 900,
@@ -90,7 +90,12 @@
         "h": 280.0
       },
       "properties": {
-        "columns": "时间\nv\ni\nmah",
+        "recordColumns": [
+          {"field": "@time", "label": "时间"},
+          {"field": "v", "label": "v"},
+          {"field": "i", "label": "i"},
+          {"field": "mah", "label": "mah"}
+        ],
         "recordMode": "逐行记录",
         "maxRows": 2000
       },

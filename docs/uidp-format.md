@@ -1,7 +1,17 @@
-# 给 AI 的 .uidp 工程模板
+# UIDP 工程格式与模板
 
-FluentHMI Studio **0.8** 支持 UIDP **1.0、1.1、1.2、1.3**，继续读取 0.8 之前正式版本保存的工程。显式路由和 CAN 自动保存使用 1.2。工程数据、报警、枚举、电池变色、自动恢复、小数输入、独立分段行数、CAN 发送初值映射或 ZLG 显式位时序使用 1.3。UIDP 1.2／1.3 需要 FluentHMI Studio 0.8 或更高版本。仅使用 1.0／1.1 的功能时仍保存为对应格式。这里的 0.8 是软件版本，1.x 是工程文件格式版本。
+[Studio v0.9 使用手册](guide.zh.md) · [控件属性](uidp-widgets.md) · [一步一步做收发实训](tutorials/17-frame-io.zh.md)
 
+Studio **v0.9.0** 读取以下 UIDP 格式，并在保存时按工程功能选择所需版本。使用新功能的工程请用 v0.9 的 Studio 或随包运行器。
+
+| UIDP | 典型功能 |
+| --- | --- |
+| 1.0 | 基础布局、控件与常用通信配置 |
+| 1.1 | 经典 S7 |
+| 1.2 | 显式收发路由、早期 CAN 自动保存配置 |
+| 1.3 | 工程数据和报警、工程帧模板、下发确认、组合发送、周期任务、输入和选项的新属性、扩展 CAN 设置 |
+
+应用版本与文件格式各自管理。相同的 UIDP 版本可以包含多个应用版本陆续新增的可选字段。旧的 Studio、Python 版与网页编辑器按各自实现支持这些字段。
 
 `.uidp` 是 UTF-8 JSON。FluentHMI Studio、PyQt UI Designer 和 modusignal 网页的「自定义设备」共用下面的工程模板。给 AI 这个入口和一条设备实际收发的数据即可开始，特殊协议按需查表。直接复制了本文时，相对链接以[原始文档](https://raw.githubusercontent.com/txp666/FluentHMI-Studio/main/docs/uidp-format.md)为基准。
 
@@ -45,9 +55,11 @@ FluentHMI Studio **0.8** 支持 UIDP **1.0、1.1、1.2、1.3**，继续读取 0.
 | 组态泵阀、料仓、流量计或压力表 | [工业设备与仪表](uidp/industrial.md) | [恒压供水泵站](../examples/industrial/恒压供水泵站.uidp)、[全控件回放](../examples/industrial/工业控件回放.uidp) |
 | 多控件共用位名和颜色，显示数字时序、电芯数组或电源反馈 | [共享位定义与复合反馈](uidp/electronics.md#共享位定义与复合反馈) | [动态控件全景](../examples/industrial/动态控件全景.uidp)的「信号与诊断」页 |
 | 接串口 / TCP / UDP / MQTT，设置帧头、长度、校验 | [链路与帧格式](uidp/connections.md) | [HEX 电机控制板](../examples/tutorials/03-电机控制板.uidp) |
+| 用工程模板收发，或同一链路混收多种帧 | [工程帧模板及 ID 引用](uidp/connections.md#工程帧格式模板) · [按模板字段发送](uidp/commands.md#按模板字段发送) | [17 初次练习](../examples/tutorials/17-数据收发与帧模板.uidp) · [17.10 多模板混收](../examples/tutorials/17.10-同连接多接收模板.uidp) |
 | 读 PLC 寄存器，或在桌面模拟从站 | [Modbus 轮询与从站](uidp/connections.md#modbus-主站与从站) | [PLC 压力监控](../examples/tutorials/10-PLC恒压供水.uidp)、[温控仪模拟器](../examples/tutorials/11-温控仪模拟器.uidp) |
 | 连接经典 S7 PLC，按类型读写绝对地址 | [S7 连接、绑定与命令](s7.md) | [本地 S7 模拟器](../examples/s7-demo.uidp) |
-| 按钮、输入框或滑块向设备发命令 | [命令格式与触发时机](uidp/commands.md) | [AT 指令助手](../examples/tutorials/05-AT指令调试助手.uidp) |
+| 向设备发命令、预览编码或增加下发确认 | [命令格式与触发时机](uidp/commands.md) | [AT 指令助手](../examples/tutorials/05-AT指令调试助手.uidp) |
+| 用表格记录收到的指定字段 | [数据表格](uidp/data.md#数据表格) | |
 | 在 Studio 连接 CAN 总线，使用 DBC | [CAN 卡片、信号与命令](uidp/can.md) | [CAN 收发测试](../examples/tutorials/12-CAN收发测试.uidp)及[配套 DBC](../examples/tutorials/12-CAN收发测试.dbc) |
 | 查控件属性名、默认值、范围或最小尺寸 | [Studio 控件参考](uidp-widgets.md) · [Python 版控件参考](https://raw.githubusercontent.com/txp666/PyQt-UI-Designer/main/docs/uidp-widgets.md) | 下方按类别列出控件名 |
 
@@ -55,7 +67,7 @@ FluentHMI Studio **0.8** 支持 UIDP **1.0、1.1、1.2、1.3**，继续读取 0.
 
 Studio 的「布局容器 → 分页容器」仍保存为 `TabWidget`。点击画布页签或在属性区选择「当前编辑页」进入该页编辑。「运行时启动页」决定预览和导出应用打开时显示的页，对应工程原有的 `currentTab`。页面内容、布局和启动页设置与各自页面一起移动。删除页面时，其控件并入相邻保留页，至少保留一页。页面管理与风格切换均支持撤销。
 
-[查看四种导航样式和设计器属性](tutorials/v0.8-guide.zh.md#分页导航)
+[查看四种导航样式和设计器属性](guide.zh.md#分页导航与控件外观)
 
 | 属性 | 适用控件 | 可选值 |
 | --- | --- | --- |
@@ -69,19 +81,33 @@ Studio 的「布局容器 → 分页容器」仍保存为 `TabWidget`。点击�
 
 ## 输入与状态显示
 
-这些可选项复用原控件类型、绑定和命令；缺省字段保持 0.8 之前版本的默认行为。参见 [输入与状态筛选示例](../examples/tutorials/16-输入与状态筛选.uidp)。
+选择样式后，可在「操作与发送」配置下发，在「接收与绑定」配置反馈。使用示例比较不同样式。[输入与状态筛选示例](../examples/tutorials/16-输入与状态筛选.uidp)
 
 | 控件 | 属性 | 作用 |
 | --- | --- | --- |
 | `SpinBox` | `numberMode` | `整数`（缺省）或 `小数`；小数输入需要格式 1.3 |
 | `SpinBox` | `decimals`、`singleStep` | 小数模式精度 0～6（默认 2）；步长默认 1，实际步长按精度取整且至少一格 |
-| `ComboBox` | `selectionStyle` | `下拉框`（缺省）、`分段`、`单选组`；共用 `items`、`currentIndex` 和 `commands` |
-| `ToggleSwitch` | `switchStyle` | `开关`（缺省）、`复选框`；共用开启判定及开／关命令 |
+| `ComboBox` | `selectionStyle` | `下拉框`（缺省）、`分段`、`单选组`，共用 `options`、`currentIndex` 和 `sendOnSelect` |
+| `ToggleSwitch` | `switchStyle` | `开关`（缺省）、`复选框`，共用状态判定及开／关命令 |
 | `NumericDisplay` | `displayStyle` | `数值`（缺省）、`状态徽标`；共用数值格式、枚举映射和卡片风格 |
 
 数值框的范围、初值和步长可存小数；整数模式仍取整。后缀只用于显示，不发送。小数输入不会自动修改协议编码，HEX／Modbus 应选择设备支持的数据类型（如 `float32`）；发送模板不做算术换算。接收反馈、切换外观均不触发发送。
 
 分段和单选组的接收值仍是从 0 开始的选项序号，命令按行对应；多个单选组各自独立。状态徽标适合枚举状态，映射色表示文字颜色，背景按主题生成；徽标使用组件的紧凑字号，原数值字号在切回后恢复。
+
+## 从旧版升级
+
+从 v0.8 打开旧工程后，先核对连接和控件设置，再运行预览。下发前确认默认关闭。新工程采用自动匹配唯一目标的规则，已有显式的多连接配置按工程读取。
+
+- 输入框可按回车发送，或开启「仅输入」供按钮一次发送多个值。旧工程的只读输入框继续使用已保存的回读绑定。可编辑输入框的回读可改绑到标签或数值显示。[按钮输入列表](uidp/commands.md#一个按钮合并多个输入)
+- 按钮的 HEX 和 CAN 原始数据可用 `txFrame` 设置长度与校验。单值 Modbus 和 S7 可用 `mbInputId`、`s7InputId` 引用输入框。这些设置使用 UIDP 1.3。[发送配置](uidp/commands.md#发送帧的长度与校验)
+- 下拉框的旧 `items` 和 `commands` 可在「选项与发送值」中按行重新配对。新版使用 `options` 数组，每项含 `label` 和 `value`。[下拉选项示例](uidp/commands.md)
+- 数据表格的旧 `columns` 可在「逐行记录 → 记录列」中重新填写。新版用 `recordColumns` 为每列指定来源字段和标题。[记录列示例](uidp/data.md#数据表格)
+- 数据发送卡片原先用于输入 CAN 原始报文时，在设计器把「数据格式」设为「CAN」。使用多张连接卡的工程可显式指定收发连接和子通道。需要向所有匹配目标发送时选择「广播」。[CAN 手工发送](uidp/can.md#发送与监视) · [连接与子通道](uidp/data.md#连接与子通道)
+
+在 v0.9.0 运行使用下发确认、周期发送或共享帧模板的工程。用新版 Studio 重新导出已有独立应用，即可更新应用随附的运行器。
+
+引用 `ModbusConfigCard` 的早期工程会报告未知控件类型，例如 v0.2.0-rc.1 的温控仪监控和 PLC 恒压供水示例。新版通过串口或 TCP 等连接卡设置 Modbus 解析和轮询。[Modbus 连接配置](uidp/connections.md#modbus-主站与从站)
 
 ## 写完怎么检查
 

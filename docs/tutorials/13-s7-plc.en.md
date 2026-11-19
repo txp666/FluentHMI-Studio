@@ -1,5 +1,7 @@
 # Your first S7 PLC connection: read, trend and write
 
+Studio v0.9 can run this project. The version snapshot and screenshots record the software used for the original video. [Current user guide](../guide.en.md#connections-and-routing)
+
 A practical companion to the S7 video tutorial. Start with the supplied layout, connect a local PLC simulator, read REAL/INT values, plot live pressure, and write a BOOL enable bit and INT speed.
 
 **Aligned on 2026-11-16:** FluentHMI Studio **0.7.0**, PyQt UI Designer **0.7.0**, FluentPLC Simulator **0.1.1**, UIDP **1.1**. Local validation is on macOS arm64 with a real loopback S7 connection; this is not physical Siemens PLC validation.
@@ -41,7 +43,7 @@ The simulator provides S7 communication and changing values. It does not execute
 
 ## 2. Open and connect the HMI
 
-Use [FluentHMI Studio 0.7.0](https://github.com/txp666/FluentHMI-Studio/releases/tag/v0.7.0) or [PyQt UI Designer 0.7.0](https://github.com/txp666/PyQt-UI-Designer/releases/tag/v0.7.0). Packaged applications include the native S7 library.
+Open the example in Studio v0.9. To match the video interface, use [FluentHMI Studio 0.7.0](https://github.com/txp666/FluentHMI-Studio/releases/tag/v0.7.0) or [PyQt UI Designer 0.7.0](https://github.com/txp666/PyQt-UI-Designer/releases/tag/v0.7.0). Packaged applications include the native S7 library.
 
 Open the `.uidp` project. Its card ID is `lesson-plc`; the visible title can be renamed without changing the source ID. Check the connection properties:
 
@@ -99,7 +101,7 @@ Enter **1500** in the speed field and press **Enter**. Its send mode is S7 and t
 
 Save the project. The C++ edition exports an independent runtime application without requiring a compiler. The Python edition exports editable source or builds an application using its packaging flow; S7 exports include the native library and notices. Build/export for the target operating system and architecture.
 
-S7 projects use UIDP **1.1** and require FluentHMI Studio or PyQt UI Designer **0.7.0 or later**; versions before 0.7.0 reject them. Projects without S7 remain at UIDP 1.0.
+S7 projects use UIDP **1.1** and require FluentHMI Studio or PyQt UI Designer **0.7.0 or later**; versions before 0.7.0 reject them. Projects that combine S7 with newer features may use UIDP 1.2 or 1.3. [Project formats](../uidp-format.md)
 
 ## Troubleshooting and scope
 

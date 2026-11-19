@@ -1,18 +1,32 @@
 #include "designer/property_editor.h"
+#include "designer/can_signal_editor.h"
+#include "designer/command_preview.h"
+#include "designer/connection_source_edit.h"
+#include "designer/frame_template_editor.h"
+#include "designer/project_can_signals.h"
 #include "designer/project_logic_dialog.h"
+#include "designer/project_frame_templates.h"
+#include "designer/receive_frame_editor.h"
+#include "designer/receive_frame_fields.h"
+#include "designer/transmit_frame_editor.h"
 
 #include "comm/modbus_slave.h"
 #include "comm/can/can_backend.h"
+#include "comm/serial_link.h"
 #include "core/binding.h"
 #include "core/bit_profile.h"
+#include "core/command_encoder.h"
 #include "core/industrial_catalog.h"
-#include "core/dbc.h"
+#include "core/frame_templates.h"
 #include "core/i18n.h"
 #include "core/protocol_parser.h"
+#include "core/project_logic.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
+#include "runtime/app_dialog.h"
 #include "runtime/hmi_widget.h"
 #include "runtime/field_help.h"
+#include "runtime/receive_frame_preview.h"
 #include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
@@ -24,28 +38,42 @@
 #include <FluentQtWidgets/Widgets/Menu.h>
 #include <FluentQtWidgets/Widgets/SpinBox.h>
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
+#include <FluentQtWidgets/Views/ItemViews.h>
 
-#include <QtCore/QDateTime>
-#include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QLocale>
+#include <QtCore/QMap>
 #include <QtCore/QSet>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QStringListModel>
 #include <QtGui/QPainter>
 #include <QtGui/QFocusEvent>
+#include <QtGui/QDoubleValidator>
 #include <QtGui/QRegularExpressionValidator>
 #include <QtWidgets/QAbstractItemView>
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QCompleter>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QHeaderView>
 #include <QtWidgets/QHBoxLayout>
+#include <QtWidgets/QScrollBar>
+#include <QtWidgets/QStyledItemDelegate>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
 
 namespace fhmi {
+
+struct FrameSource
+{
+    QString id;
+    LinkParser::Format format;
+    QString templateId;
+    QString localTemplateId;
+    QString error;
+};
 
 namespace {
 
@@ -101,13 +129,36 @@ class BindingKeyEdit : public FluentQt::EditableComboBox
     QStringListModel m_names;
 };
 
+class RecordFieldDelegate : public QStyledItemDelegate
+{
+  public:
+    RecordFieldDelegate(QStringList names, QObject *parent)
+        : QStyledItemDelegate(parent), m_names(std::move(names)) {}
+
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &, const QModelIndex &) const override
+    {
+        auto *edit = new BindingKeyEdit(parent);
+        edit->setNames(m_names, {});
+        return edit;
+    }
+
+    void setEditorData(QWidget *editor, const QModelIndex &index) const override
+    {
+        static_cast<BindingKeyEdit *>(editor)->setCurrentText(index.data(Qt::EditRole).toString());
+    }
+
+    void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override
+    {
+        model->setData(index, static_cast<BindingKeyEdit *>(editor)->text().trimmed(), Qt::EditRole);
+    }
+
+  private:
+    QStringList m_names;
+};
+
 QStringList dataPointNames(const Project *project)
 {
-    QStringList names;
-    if (project)
-        for (const auto &point : project->logic.value(QStringLiteral("points")).toArray())
-            names.append(point.toObject().value(QStringLiteral("name")).toString());
-    return names;
+    return project ? fhmi::dataPointNames(project->logic) : QStringList{};
 }
 
 // Command fields shown for each send mode, as in PyQt UI Designer.
@@ -124,7 +175,7 @@ const QHash<QString, QSet<QString>> &modeVisibility()
         {QStringLiteral("JSON"),
          {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
           QStringLiteral("commandTemplate"), QStringLiteral("commandJsonNewline")}},
-        {QStringLiteral("S7"), {QStringLiteral("commandTargetId"), QStringLiteral("s7Command")}},
+        {QStringLiteral("S7"), {QStringLiteral("s7Command")}},
         {QStringLiteral("Modbus"),
          {QStringLiteral("mbSlave"), QStringLiteral("mbFunc"), QStringLiteral("mbAddress"), QStringLiteral("mbValue"),
           QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder"), QStringLiteral("mbArea")}},
@@ -139,14 +190,12 @@ const QHash<QString, QSet<QString>> &modeVisibility()
 
 const QSet<QString> &modeFields()
 {
-    static const QSet<QString> fields = {
-        QStringLiteral("command"),        QStringLiteral("onCommand"),       QStringLiteral("offCommand"),
-        QStringLiteral("commandNewline"), QStringLiteral("commandTemplate"), QStringLiteral("commandJsonNewline"),
-        QStringLiteral("frameHeader"),    QStringLiteral("frameTail"),       QStringLiteral("dataType"),
-        QStringLiteral("byteOrder"),      QStringLiteral("mbSlave"),         QStringLiteral("mbFunc"),
-        QStringLiteral("mbAddress"),      QStringLiteral("mbValue"),         QStringLiteral("mbDataType"),
-        QStringLiteral("mbRegOrder"),     QStringLiteral("canId"),           QStringLiteral("canFd"),
-        QStringLiteral("canCycle"), QStringLiteral("s7Command"), QStringLiteral("mbArea")};
+    static const QSet<QString> fields = [] {
+        QSet<QString> result;
+        for (const auto &fields : modeVisibility())
+            result.unite(fields);
+        return result;
+    }();
     return fields;
 }
 
@@ -156,17 +205,110 @@ struct CanNames
 {
     QStringList keys;
     QStringList messages;
-    QList<CanSignalSet> sets; // one per CAN card, to resolve a canId as the link does
+    QList<CanPreviewSource> sources;
 };
 
-// The widgets as they are now. In the designer that is the scene: the project's list is brought up to date only
-// when the project is saved, so a CAN card dropped since would offer no DBC names and no CAN信号 mode.
-QJsonArray currentWidgets(const Project *project, const DesignScene *scene)
+QJsonObject widgetById(const QJsonArray &widgets, const QString &id)
 {
-    if (scene) {
-        return scene->widgetsJson();
+    QJsonObject result;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        if (widget.value(QStringLiteral("id")).toString() != id)
+            return true;
+        result = widget;
+        return false;
+    });
+    return result;
+}
+
+LinkParser::Format frameFormat(const Project *project, const QJsonObject &properties = {})
+{
+    return project ? project->linkReceiveFormat(properties)
+                   : LinkParser::effectiveFormat(properties.value(QStringLiteral("defaultParser")).toString(),
+                       properties.value(QStringLiteral("parserConfig")).toObject(), {QStringLiteral("line"), {}});
+}
+
+FrameSource cardFrameSource(const Project &project, const QString &id, const QJsonObject &properties)
+{
+    return {id, project.linkReceiveFormat(properties), project.linkReceiveTemplateId(properties),
+            properties.value(FrameTemplates::ReceiveId).toString(), {}};
+}
+
+FrameSource defaultFrameSource(const Project &project)
+{
+    const QString id = project.serial.value(FrameTemplates::ReceiveId).toString();
+    return {{}, project.receiveFormat(), id, id, {}};
+}
+
+FrameSource frameSource(const Project *project, const QJsonArray &widgets, const QJsonObject &binding,
+                        RouteTransport transport)
+{
+    DataRoute chosen{binding.value(QStringLiteral("sourceCardId")).toString(),
+                     binding.value(QStringLiteral("sourceEndpoint")).toString()};
+    const auto matches = routeConnections(widgets, transport, !chosen.endpoint.isEmpty(), project->parserType());
+    if (chosen.isBroadcast() || (chosen.connectionId.isEmpty() && matches.size() > 1))
+        return {{}, {}, {}, {}, PropertyEditor::tr("请先选定要编辑的来源连接")};
+    if (chosen.connectionId.isEmpty() && matches.size() == 1)
+        chosen.connectionId = matches.first().first;
+    if (chosen.connectionId.isEmpty())
+        return defaultFrameSource(*project);
+    const auto card = widgetById(widgets, chosen.connectionId);
+    if (!supportsRouteTransport(card.value(QStringLiteral("type")).toString(), RouteTransport::Bytes))
+        return {chosen.connectionId, {}, {}, {}, {}};
+    return cardFrameSource(*project, chosen.connectionId, card.value(QStringLiteral("properties")).toObject());
+}
+
+bool updateFrameProperties(QJsonArray &widgets, const QString &id, const QJsonObject &changes)
+{
+    for (qsizetype index = 0; index < widgets.size(); ++index) {
+        auto widget = widgets.at(index).toObject();
+        if (widget.value(QStringLiteral("id")).toString() == id) {
+            auto props = widget.value(QStringLiteral("properties")).toObject();
+            for (auto it = changes.begin(); it != changes.end(); ++it)
+                props.insert(it.key(), it.value());
+            widget.insert(QStringLiteral("properties"), props);
+            widgets[index] = widget;
+            return true;
+        }
+        auto children = widget.value(QStringLiteral("children")).toArray();
+        if (updateFrameProperties(children, id, changes)) {
+            widget.insert(QStringLiteral("children"), children);
+            widgets[index] = widget;
+            return true;
+        }
     }
-    return project ? project->widgets : QJsonArray();
+    return false;
+}
+
+bool usesFreeFrame(QStringView mode)
+{
+    return mode == ParseMode::KeyValue || mode == ParseMode::JsonPath || mode == ParseMode::HexBytes;
+}
+
+QMap<QString, CommandEncoder::InputValue> inputDefaults(const QJsonArray &widgets, const Project *project)
+{
+    QMap<QString, CommandEncoder::InputValue> inputs;
+    visitWidgets(widgets, [&inputs, project](const QJsonObject &widget) {
+        const QString id = widget.value(QStringLiteral("id")).toString();
+        if (!id.isEmpty() && widget.value(QStringLiteral("type")).toString() == QLatin1String("LineEdit")) {
+            const auto props = widget.value(QStringLiteral("properties")).toObject();
+            const QString parameter = props.value(QStringLiteral("parameterName")).toString();
+            const auto initial = project && !parameter.isEmpty()
+                ? findDataPoint(project->logic, parameter).value(QStringLiteral("initialValue")) : QJsonValue();
+            const QVariant value = initial.isUndefined() || initial.isNull()
+                ? QVariant(props.value(QStringLiteral("text")).toString()) : initial.toVariant();
+            inputs.insert(widgetInputId(id), {value, props.value(QStringLiteral("title")).toString().trimmed()});
+        }
+        return true;
+    });
+    if (project) {
+        for (const auto &value : project->logic.value(QStringLiteral("points")).toArray()) {
+            const auto point = value.toObject();
+            const auto name = point.value(QStringLiteral("name")).toString();
+            const auto initial = point.value(QStringLiteral("initialValue"));
+            inputs.insert(pointInputId(name), {initial.toVariant(), name});
+        }
+    }
+    return inputs;
 }
 
 QString endpointProperty(const QString &connection)
@@ -179,62 +321,6 @@ QString endpointProperty(const QString &connection)
         return QStringLiteral("sourceEndpoint");
     return {};
 }
-
-class ConnectionSourceEdit : public FluentQt::ComboBox
-{
-  public:
-    using FluentQt::ComboBox::ComboBox;
-    enum class Endpoint { None, Address, Topic, Either };
-
-    Endpoint endpointKind() const
-    {
-        const QString id = selectedValue(this);
-        return id.isEmpty() ? m_defaultEndpoint : m_endpoints.value(id, Endpoint::None);
-    }
-
-    void setSources(const Project *project, const DesignScene *scene, RouteTransport transport, const QString &current)
-    {
-        if (m_transport == transport)
-            return;
-        m_transport = transport;
-        const QSignalBlocker blocker(this);
-        clear();
-        m_endpoints.clear();
-        m_defaultEndpoint = Endpoint::None;
-        addItem(transport == RouteTransport::S7 ? PropertyEditor::tr("请选择 S7 连接")
-                                                : PropertyEditor::tr("全部匹配连接（0.8 之前默认）"),
-                QIcon(), QString());
-        visitWidgets(currentWidgets(project, scene), [this, transport](const QJsonObject &widget) {
-            const QString type = widget.value(QStringLiteral("type")).toString();
-            const QString id = widget.value(QStringLiteral("id")).toString();
-            if (!id.isEmpty() && supportsRouteTransport(type, transport) &&
-                (transport != RouteTransport::ModbusSlave ||
-                 widget.value(QStringLiteral("properties")).toObject().value(QStringLiteral("modbusRole")).toString() ==
-                     ModbusRole::Slave)) {
-                addItem(id + QStringLiteral(" · ") + type, QIcon(), id);
-                if (allowsRouteEndpoint(transport) && supportsRouteEndpoint(type)) {
-                    const auto kind = type == QLatin1String("MqttConfigCard") ? Endpoint::Topic : Endpoint::Address;
-                    m_endpoints.insert(id, kind);
-                    if (m_defaultEndpoint == Endpoint::None)
-                        m_defaultEndpoint = kind;
-                    else if (m_defaultEndpoint != kind)
-                        m_defaultEndpoint = Endpoint::Either;
-                }
-            }
-            return true;
-        });
-        if (!current.isEmpty() && findData(current) < 0) {
-            addItem(PropertyEditor::tr("%1（当前模式不可用）").arg(current), QIcon(), current);
-            setItemEnabled(count() - 1, false);
-        }
-        selectValue(this, current); // Keep an unavailable route visible until the user picks its replacement.
-    }
-
-  private:
-    std::optional<RouteTransport> m_transport;
-    QHash<QString, Endpoint> m_endpoints;
-    Endpoint m_defaultEndpoint = Endpoint::None;
-};
 
 bool hasCanCard(const QJsonArray &widgets)
 {
@@ -249,40 +335,63 @@ CanNames canNames(const Project *project, const QJsonArray &widgets, const QStri
     if (!project) {
         return names;
     }
-    struct Cached
-    {
-        QDateTime modified;
-        std::shared_ptr<const CanDatabase> dbc;
-    };
-    static QHash<QString, Cached> cache;
     const DataRoute route{connectionId, {}};
     visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const QString id = widget.value(QStringLiteral("id")).toString();
         if (!supportsRouteTransport(widget.value(QStringLiteral("type")).toString(), RouteTransport::Can) ||
-            !route.acceptsConnection(widget.value(QStringLiteral("id")).toString()))
+            !route.acceptsConnection(id))
             return true;
         const auto card = widget.value(QStringLiteral("properties")).toObject();
-        std::shared_ptr<const CanDatabase> dbc;
-        const QString file = card.value(QStringLiteral("dbcFile")).toString().trimmed();
-        if (!file.isEmpty()) {
-            const QString path = QDir(project->assetBaseDir()).absoluteFilePath(file);
-            const QDateTime modified = QFileInfo(path).lastModified();
-            Cached &entry = cache[path];
-            if (!entry.dbc || entry.modified != modified) {
-                const auto loaded = Dbc::load(path);
-                entry = {modified, loaded ? std::make_shared<const CanDatabase>(*loaded) : nullptr};
-            }
-            dbc = entry.dbc;
+        QString error;
+        const auto dbc = designerCanDatabase(project, card.value(QStringLiteral("dbcFile")).toString(), &error);
+        if (!error.isEmpty()) {
+            names.sources.append({id, std::nullopt, error});
+            return true;
         }
-        if (const auto set = CanSignalSet::build(dbc, card.value(QStringLiteral("canSignals")).toString())) {
+        auto set = CanSignalSet::build(dbc, card.value(QStringLiteral("canSignals")).toString(), &error);
+        if (set) {
             names.keys += set->signalKeys();
             names.messages += set->messageNames();
-            names.sets.append(*set);
         }
+        names.sources.append({id, std::move(set), error, card.value(QStringLiteral("canTxInitialState")).toString()});
         return true;
     });
     names.keys.removeDuplicates();
     names.messages.removeDuplicates();
     return names;
+}
+
+QStringList receivedFieldNames(const Project *project, const QJsonArray &widgets, const QString &connectionId)
+{
+    auto names = canNames(project, widgets, connectionId).keys;
+    const DataRoute route{connectionId, {}};
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        if (!supportsRouteTransport(widget.value(QStringLiteral("type")).toString(), RouteTransport::Bytes) ||
+            !route.acceptsConnection(widget.value(QStringLiteral("id")).toString()))
+            return true;
+        const auto format = frameFormat(project, widget.value(QStringLiteral("properties")).toObject());
+        if (format.type == LinkParser::HexGroup) {
+            if (const auto variants = hexFrameVariants(format.settings))
+                for (const auto &variant : *variants)
+                    for (const auto &field : variant.frame.fields)
+                        names.append(hexTemplateFieldKey(variant.id, field.name));
+        } else if (format.type == QLatin1String("hex")) {
+            if (const auto config = hexFrameConfig(format.settings))
+                for (const auto &field : config->fields)
+                    names.append(field.name);
+        }
+        return true;
+    });
+    names.removeDuplicates();
+    return names;
+}
+
+QList<CanPreviewSource> commandCanSources(const Project *project, const QJsonArray &widgets, const QJsonObject &props)
+{
+    if (props.value(QStringLiteral("commandMode")).toString() != QLatin1String("CAN"))
+        return {};
+    const QString target = props.value(QStringLiteral("commandTargetId")).toString();
+    return canNames(project, widgets, target == DataRoute::Broadcast ? QString() : target).sources;
 }
 
 // What a canId stands for on the project's CAN cards, resolved as CanLink::prepare does. A message with signals
@@ -298,8 +407,10 @@ CanTargetKind canTargetKind(const CanNames &names, const QString &canId)
 {
     CanTargetKind kind;
     bool resolved = false;
-    for (const CanSignalSet &set : names.sets) {
-        if (const auto target = set.target(canId)) {
+    for (const auto &source : names.sources) {
+        if (!source.signalSet)
+            continue;
+        if (const auto target = source.signalSet->target(canId)) {
             if (!resolved) {
                 kind = {false, false};
                 resolved = true;
@@ -348,11 +459,8 @@ const QHash<QString, QSet<QString>> &chartParseVisibility()
         {ParseMode::S7, {QStringLiteral("curveS7")}},
         {ParseMode::Modbus,
          {QStringLiteral("curveMbArea"), QStringLiteral("curveRegIndex"), QStringLiteral("curveMbDataType"),
-          QStringLiteral("curveMbRegOrder"), QStringLiteral("curveMbFcFilter"), QStringLiteral("curveMbSlaveFilter")}},
-        {ParseMode::CanSignal,
-         {QStringLiteral("curveCanId"), QStringLiteral("curveCanStartBit"), QStringLiteral("curveCanBitLength"),
-          QStringLiteral("curveCanByteOrder"), QStringLiteral("curveCanSigned"), QStringLiteral("curveCanFactor"),
-          QStringLiteral("curveCanOffset")}},
+          QStringLiteral("curveMbRegOrder"), QStringLiteral("curveMbFcFilter"), QStringLiteral("curveMbSlaveFilter"),
+          QStringLiteral("curveMbPeriod")}},
     };
     return table;
 }
@@ -377,6 +485,7 @@ const QHash<QString, QString> &curveFields()
         {QStringLiteral("curveRegIndex"), QStringLiteral("regIndex")},
         {QStringLiteral("curveMbDataType"), QStringLiteral("mbDataType")},
         {QStringLiteral("curveMbRegOrder"), QStringLiteral("mbRegOrder")},
+        {QStringLiteral("curveMbPeriod"), QStringLiteral("mbPeriod")},
         {QStringLiteral("curveMbFcFilter"), QStringLiteral("mbFcFilter")},
         {QStringLiteral("curveMbSlaveFilter"), QStringLiteral("mbSlaveFilter")},
         {QStringLiteral("curveMbArea"), QStringLiteral("mbArea")},
@@ -441,21 +550,6 @@ class ProblemLabel : public FluentQt::CaptionLabel
 
 ProblemLabel *newProblemLabel(QWidget *parent) { return new ProblemLabel(parent); }
 
-// The send switch each widget type has; while it is off, no command fields apply.
-QString sendToggle(const QString &type)
-{
-    if (type == QLatin1String("LineEdit")) {
-        return QStringLiteral("sendOnEnter");
-    }
-    if (type == QLatin1String("ComboBox")) {
-        return QStringLiteral("sendOnSelect");
-    }
-    if (type == QLatin1String("Slider") || type == QLatin1String("SpinBox")) {
-        return QStringLiteral("sendOnChange");
-    }
-    return QString();
-}
-
 // Commits a complete list of lines when editing ends, not every keystroke: a tab page
 // removed mid-edit would move its widgets to the last page for good.
 class CommitOnFocusOutEdit : public FluentQt::PlainTextEdit
@@ -479,106 +573,30 @@ QJsonValue numberValue(double value, bool integral)
     return integral ? QJsonValue(qint64(std::llround(value))) : QJsonValue(value);
 }
 
-// The rows a "line" parserConfig shows, then those of a "hex" one.
-const char *const kLineFrameKeys[] = {"separator", "terminator", "kvSeparator", "encoding"};
-const char *const kHexFrameKeys[] = {"header",        "footer",         "lengthOffset", "lengthSize",
-                                     "lengthEndian",  "lengthCovers",   "fixedLength",  "checksum",
-                                     "checksumStart", "checksumEndian", "idleTimeout",  "fields"};
-
-// A record terminator as the editor shows it: control characters and the backslash as escapes.
-QString escapedTerminator(const QString &text)
+bool usesByteOrder(QStringView type)
 {
-    QString out;
-    for (const QChar c : text) {
-        switch (c.unicode()) {
-        case '\\':
-            out += QStringLiteral("\\\\");
-            break;
-        case '\n':
-            out += QStringLiteral("\\n");
-            break;
-        case '\r':
-            out += QStringLiteral("\\r");
-            break;
-        case '\t':
-            out += QStringLiteral("\\t");
-            break;
-        default:
-            out += c;
-        }
-    }
-    return out;
+    return type != QLatin1String("uint8") && type != QLatin1String("int8") && type != QLatin1String("ASCII") &&
+           type != QStringLiteral("HEX字符串"); // i18n: value
 }
 
-// The terminator typed or picked: \n \r \t and \\ are escapes, any other backslash is itself.
-QString unescapedTerminator(const QString &text)
+int editorCurve(const CanvasItem &item)
 {
-    QString out;
-    for (qsizetype i = 0; i < text.size(); ++i) {
-        const QChar next = i + 1 < text.size() ? text.at(i + 1) : QChar();
-        if (text.at(i) == QLatin1Char('\\') && QStringLiteral("nrt\\").contains(next)) {
-            out += next == QLatin1Char('n') ? QLatin1Char('\n')
-                   : next == QLatin1Char('r') ? QLatin1Char('\r')
-                   : next == QLatin1Char('t') ? QLatin1Char('\t')
-                                              : QLatin1Char('\\');
-            ++i;
-        } else {
-            out += text.at(i);
-        }
-    }
-    return out;
+    return std::clamp(item.propertyValue(QStringLiteral("currentCurve")).toInt(), 0,
+                      chartCurveCount(item.properties()) - 1);
 }
 
-// A HEX field table as the editor shows it: one field per line, 名字,偏移,长度,类型[,字节序].
-QString hexFieldsText(const QJsonArray &fields)
+void replaceChoices(FluentQt::ComboBox *box, const QStringList &options, const QString &value)
 {
-    QStringList lines;
-    for (const QJsonValue &value : fields) {
-        QStringList parts;
-        for (const QJsonValue &part : value.toArray()) {
-            parts << part.toVariant().toString();
-        }
-        lines << parts.join(QLatin1Char(','));
+    const QSignalBlocker blocker(box);
+    bool changed = box->count() != options.size();
+    for (qsizetype index = 0; !changed && index < options.size(); ++index)
+        changed = box->itemData(int(index)).toString() != options.at(index);
+    if (changed) {
+        box->clear();
+        addValueItems(box, options);
     }
-    return lines.join(QLatin1Char('\n'));
-}
-
-// The fields in that text. *badLine is 0 when every line is a field the parser takes, else
-// the number (from 1) of the first line that is not, so a project never stores a table it
-// could not load. '#' starts a comment and a full-width comma counts, as in the poll table.
-QJsonArray hexFieldsFromText(const QString &text, int *badLine)
-{
-    QJsonArray fields;
-    *badLine = 0;
-    const QStringList lines = text.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i) {
-        QString line = lines.at(i).trimmed();
-        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
-            continue;
-        }
-        QStringList parts =
-            line.replace(QStringLiteral("，"), QStringLiteral(",")).split(QLatin1Char(',')); // i18n: ignore
-        for (QString &part : parts) {
-            part = part.trimmed();
-        }
-        bool offsetOk = false;
-        bool lengthOk = false;
-        QJsonArray item{parts.value(0), parts.value(1).toInt(&offsetOk), parts.value(2).toInt(&lengthOk),
-                        parts.value(3)};
-        if (parts.size() == 5) {
-            item.append(parts.at(4));
-        }
-        // Built step by step: QJsonArray{item} would be a copy of item, not an array holding it.
-        QJsonArray one;
-        one.append(item);
-        if ((parts.size() != 4 && parts.size() != 5) || parts.at(0).isEmpty() || !offsetOk || !lengthOk ||
-            !createParser(QStringLiteral("hex"), QJsonObject{{QStringLiteral("fields"), one}})) {
-            *badLine = i + 1;
-            return {};
-        }
-        fields.append(item);
-    }
-    return fields;
+    if (!selectValue(box, value))
+        box->setCurrentIndex(options.isEmpty() ? -1 : 0);
 }
 
 } // namespace
@@ -643,7 +661,7 @@ void PropertyEditor::rebuild()
     clearContent();
     if (m_item) {
         if (m_bindingOnly)
-            buildBindingForm();
+            buildBindingForm(addSection(tr("接收与绑定")));
         else
             buildItemForm();
     } else {
@@ -677,6 +695,19 @@ void PropertyEditor::addRow(QFormLayout *form, const QString &key, const QString
                            const QString &helpKey)
 {
     auto *caption = new FluentQt::BodyLabel(label, m_content);
+    if (!label.isEmpty()) {
+        QWidget *input = editor->focusProxy() ? editor->focusProxy() : editor;
+        if (input->focusPolicy() == Qt::NoFocus) {
+            for (auto *child : input->findChildren<QWidget *>()) {
+                if (child->focusPolicy() & Qt::TabFocus) {
+                    input = child;
+                    break;
+                }
+            }
+        }
+        caption->setBuddy(input);
+        input->setAccessibleName(label);
+    }
     // A long label (English "Transform expression") wraps instead of widening the panel past its dock
     caption->setWordWrap(true);
     QWidget *labelWidget = caption;
@@ -709,31 +740,102 @@ void PropertyEditor::setRowVisible(const QString &key, bool visible)
     }
 }
 
+void PropertyEditor::setModbusReadFields(const QJsonObject &binding, const QString &typeRow, const QString &orderRow)
+{
+    const QString table = ModbusArea::prefix(binding.value(QStringLiteral("mbArea")).toString(ModbusArea::HoldingRegisters));
+    const bool registers = table == QLatin1String("hr") || table == QLatin1String("ir");
+    const QString dataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
+    setRowVisible(typeRow, registers);
+    setRowVisible(orderRow, registers && CommandEncoder::usesRegisterOrder(dataType));
+}
+
 void PropertyEditor::updateRouteEndpoint(const QString &connection, const QString &endpoint, bool active)
 {
     auto *edit = qobject_cast<FluentQt::LineEdit *>(m_rows.value(endpoint).second);
     if (!edit)
         return;
     const auto *select = static_cast<ConnectionSourceEdit *>(m_rows.value(connection).second);
-    const auto kind = select->endpointKind();
-    const bool available = kind != ConnectionSourceEdit::Endpoint::None;
-    const bool problem = active && !available && !edit->text().isEmpty();
+    const bool filled = !edit->text().isEmpty();
+    const bool problem = active && filled && !select->supportsEndpoint();
+    const bool ambiguous = active && select->ambiguous();
     const QString problemKey = endpoint + QStringLiteral("Problem");
     auto *message = static_cast<ProblemLabel *>(m_rows.value(problemKey).second);
-    message->setProblem(problem ? tr("当前连接或模式不支持子通道。清空此项，或重新选择连接。") : QString());
+    message->setProblem(problem ? tr("当前连接或模式不支持子通道。清空此项，或重新选择连接。")
+                        : ambiguous ? tr("有多个匹配的连接，请明确选择。") : QString());
     edit->setError(problem);
-    if (kind == ConnectionSourceEdit::Endpoint::Topic)
-        edit->setPlaceholderText(tr("如 device/data"));
-    else if (kind == ConnectionSourceEdit::Endpoint::Address)
-        edit->setPlaceholderText(tr("如 192.168.1.20:502"));
-    else
-        edit->setPlaceholderText(tr("地址:端口或 MQTT Topic"));
-    setRowVisible(endpoint, active && (available || problem));
-    setRowVisible(problemKey, problem);
+    edit->setPlaceholderText(select->endpointPlaceholder());
+    setRowVisible(endpoint, active && (select->offersEndpoint() || filled));
+    setRowVisible(problemKey, problem || ambiguous);
 }
 
 QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &value, const Commit &commit)
 {
+    if (def.name == QLatin1String("currentCurve") || def.name == QLatin1String("currentIndex")) {
+        auto *box = new FluentQt::ComboBox(m_content);
+        if (def.name == QLatin1String("currentCurve")) {
+            const auto props = m_item->properties();
+            for (int i = 0; i < chartCurveCount(props); ++i)
+                box->addItem(chartCurveName(props, i), QIcon(), i);
+        } else {
+            const auto options = CommandEncoder::selectionOptions(m_item->propertyValue(QStringLiteral("options")).toArray());
+            for (const auto &option : options)
+                box->addItem(option.label);
+        }
+        if (box->count() > 0)
+            box->setCurrentIndex(std::clamp(value.toInt(), 0, box->count() - 1));
+        connect(box, &FluentQt::ComboBox::currentIndexChanged, this, [commit](int index) { commit(index); });
+        return box;
+    }
+    if (def.name == QLatin1String("mbValue")) {
+        using CommandEncoder::ModbusArgument;
+        const auto spec = CommandEncoder::modbusFunctionSpec(
+            CommandEncoder::functionCode(m_item->propertyValue(QStringLiteral("mbFunc")).toString()));
+        const QString stored = value.toVariant().toString();
+        if (spec.argument == ModbusArgument::ReadCount) {
+            auto *count = new FluentQt::SpinBox(m_content);
+            count->setRange(1, spec.maximumCount);
+            count->setValue(stored.toInt());
+            count->setKeyboardTracking(false);
+            connect(count, qOverload<int>(&QSpinBox::valueChanged), this,
+                    [commit](int number) { commit(QString::number(number)); });
+            return count;
+        }
+        if (spec.argument == ModbusArgument::Coil) {
+            auto *box = new FluentQt::ComboBox(m_content);
+            box->addItem(tr("关"), QIcon(), QStringLiteral("0"));
+            box->addItem(tr("开"), QIcon(), QStringLiteral("1"));
+            box->setCurrentIndex(stored == QLatin1String("0") ? 0 : 1);
+            connect(box, &FluentQt::ComboBox::currentIndexChanged, this,
+                    [box, commit] { commit(selectedValue(box)); });
+            return box;
+        }
+        auto *edit = new FluentQt::LineEdit(m_content);
+        edit->setText(stored);
+        const QString type = m_item->propertyValue(QStringLiteral("mbDataType")).toString();
+        if (const auto range = CommandEncoder::modbusValueRange(type)) {
+            auto *validator = new QDoubleValidator(range->minimum, range->maximum, type == QLatin1String("float32") ? 15 : 0, edit);
+            validator->setLocale(QLocale::c());
+            if (type != QLatin1String("float32"))
+                validator->setNotation(QDoubleValidator::StandardNotation);
+            edit->setValidator(validator);
+        }
+        connect(edit, &QLineEdit::textChanged, this, [edit, commit](const QString &text) {
+            edit->setError(!edit->hasAcceptableInput());
+            commit(text);
+        });
+        return edit;
+    }
+    if (def.name == QLatin1String("value") && m_item && isIndustrialCategory(m_item->meta().category)) {
+        const auto caps = industrialCapabilities(m_item->typeName(),
+                          m_item->propertyValue(QStringLiteral("feedbackMode")).toString());
+        if (!caps.states.isEmpty()) {
+            auto *box = new FluentQt::ComboBox(m_content);
+            box->addItems(caps.states);
+            box->setCurrentIndex(std::clamp(value.toInt(), 0, int(caps.states.size()) - 1));
+            connect(box, &FluentQt::ComboBox::currentIndexChanged, this, [commit](int index) { commit(index); });
+            return box;
+        }
+    }
     if (def.name == QLatin1String("curveKey")) {
         auto *edit = new BindingKeyEdit(m_content);
         edit->setCurrentText(value.toString());
@@ -744,22 +846,55 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     if (def.name == QLatin1String("commandTargetId") || def.name == QLatin1String("curveSourceCardId") ||
         def.name == QLatin1String("sourceCardId")) {
         const QString type = m_item->typeName();
-        RouteTransport transport = widgetReceiveTransport(type);
+        RouteFilter filter = widgetReceiveTransport(type);
         if (def.name == QLatin1String("commandTargetId")) {
-            transport = commandRouteTransport(m_item->propertyValue(QStringLiteral("commandMode")).toString(), type);
+            filter = CommandEncoder::sendRouteFilter(m_item->properties(), type);
         } else if (def.name == QLatin1String("curveSourceCardId")) {
-            transport = bindingRouteTransport(m_item->properties().value(storageKey(QStringLiteral("curveParseMode"))).toString());
+            filter = bindingRouteTransport(m_item->properties().value(storageKey(QStringLiteral("curveParseMode"))).toString());
         }
-        auto *box = new ConnectionSourceEdit(m_content);
-        box->setSources(m_project, m_scene, transport, value.toString());
+        const auto purpose = def.name == QLatin1String("commandTargetId") ? ConnectionSourceEdit::Purpose::Send
+                             : def.name == QLatin1String("sourceCardId") ? ConnectionSourceEdit::Purpose::Observe
+                                                                        : ConnectionSourceEdit::Purpose::Binding;
+        auto *box = new ConnectionSourceEdit(m_content, purpose);
+        box->setSources(m_project, m_scene, filter, value.toString());
+        connect(box, &FluentQt::ComboBox::currentIndexChanged, this, [box, commit] { commit(selectedValue(box)); });
+        return box;
+    }
+    if (def.name == QLatin1String("defaultPortName")) {
+        auto *box = new FluentQt::ComboBox(m_content);
+        box->addItem(tr("运行时选择"), {}, QString());
+        for (const auto &port : SerialLink::selectablePorts())
+            box->addItem(SerialLink::portLabel(port), {}, port);
+        const QString saved = value.toString();
+        if (!selectValue(box, saved)) {
+            box->addItem(SerialLink::portLabel(saved), {}, saved);
+            box->setCurrentIndex(box->count() - 1);
+        }
+        connect(box, &FluentQt::ComboBox::currentIndexChanged, this, [box, commit] { commit(selectedValue(box)); });
+        return box;
+    }
+    if (def.name == QLatin1String("parameterName") || def.name == QLatin1String("recordTriggerPoint")) {
+        const bool parameter = def.name == QLatin1String("parameterName");
+        auto *box = new FluentQt::ComboBox(m_content);
+        const auto names = m_project ? fhmi::dataPointNames(m_project->logic, parameter) : QStringList{};
+        box->addItem(parameter ? tr("独立输入") : tr("任一记录点收到有效值"), {}, QString());
+        addValueItems(box, names);
+        if (!selectValue(box, value.toString())) {
+            box->addItem(value.toString(), {}, value.toString());
+            box->setCurrentIndex(box->count() - 1);
+        }
         connect(box, &FluentQt::ComboBox::currentIndexChanged, this, [box, commit] { commit(selectedValue(box)); });
         return box;
     }
 
     if(def.name==QLatin1String("pulsesPerTurn")) {
         auto *edit=new FluentQt::LineEdit(m_content);edit->setText(QString::number(value.toDouble(1024),'f',0));
-        edit->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("[0-9]+")),edit));
-        connect(edit,&QLineEdit::textChanged,this,[commit](const QString &text){bool ok=false;const double value=text.toDouble(&ok);if(ok&&value>0&&value<=9007199254740991.0)commit(value);});
+        auto *validator = new QDoubleValidator(1, 9007199254740991.0, 0, edit);
+        validator->setLocale(QLocale::c());
+        validator->setNotation(QDoubleValidator::StandardNotation);
+        edit->setValidator(validator);
+        connect(edit, &QLineEdit::textChanged, this, [edit] { edit->setError(!edit->hasAcceptableInput()); });
+        connect(edit, &QLineEdit::editingFinished, this, [commit, edit] { commit(edit->text().toDouble()); });
         return edit;
     }
     switch (def.type) {
@@ -790,6 +925,14 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
             auto *spin = new FluentQt::SpinBox(m_content);
             spin->setRange(int(std::ceil(def.minimum.value_or(-999999))), int(def.maximum.value_or(999999)));
             spin->setValue(value.isString() ? value.toString().toInt() : value.toInt());
+            if (def.name == QLatin1String("curveMbPeriod"))
+                spin->setSpecialValueText(tr("默认周期"));
+            if (def.name == CommandEncoder::SendInterval) {
+                spin->setSpecialValueText(tr("单次发送"));
+                spin->setSuffix(QStringLiteral(" ms"));
+            }
+            if (def.name == QLatin1String("canCycle"))
+                spin->setSpecialValueText(tr("沿用 DBC 周期"));
             connect(spin, qOverload<int>(&QSpinBox::valueChanged), this,
                     [commit](int v) { commit(QJsonValue(v)); });
             box = spin;
@@ -823,11 +966,20 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
     case PropType::Enum: {
         auto *combo = new FluentQt::ComboBox(m_content);
         QStringList options = def.options;
-        if (def.name == QLatin1String("curveParseMode") && !hasCanCard(currentWidgets(m_project, m_scene)) &&
-            value.toVariant().toString() != ParseMode::CanSignal) {
-            options.removeAll(ParseMode::CanSignal); // offered where there is a CAN card, as for a binding
+        if (def.name == QLatin1String("curveParseMode") && !hasCanCard(currentWidgets(m_project, m_scene))) {
+            for (const auto &mode : {ParseMode::CanSignal, ParseMode::CanField})
+                if (value.toString() != mode)
+                    options.removeAll(mode);
         }
-        addValueItems(combo, options);
+        if (def.name == QLatin1String("recordSource")) {
+            combo->addItem(tr("接收报文"), {}, QStringLiteral("messages"));
+            combo->addItem(tr("工程数据点"), {}, QStringLiteral("points"));
+        } else if (def.name == QLatin1String("curveParseMode")) {
+            for (const auto &mode : options)
+                combo->addItem(mode == ParseMode::CanSignal ? tr("CAN 按位取值") : translated(mode), {}, mode);
+        } else {
+            addValueItems(combo, options);
+        }
         if (def.name == QLatin1String("defaultParser") && m_project)
             showInheritedParser(combo, m_project->parserType());
         if (!selectValue(combo, value.toVariant().toString())) {
@@ -890,18 +1042,17 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
         break;
     }
 
-    if (def.name == QLatin1String("bitProfile")) {
-        auto *combo = new FluentQt::ComboBox(m_content);
-        QStringList names = m_project ? m_project->bitProfiles.keys() : QStringList();
-        const QString current = value.toString(QStringLiteral("default"));
-        if (!names.contains(QStringLiteral("default"))) names.prepend(QStringLiteral("default"));
-        if (!names.contains(current)) names.append(current);
-        combo->addItems(names);combo->setCurrentText(current);
-        connect(combo,&FluentQt::ComboBox::currentTextChanged,this,[commit](const QString &name){commit(name);});
-        return combo;
-    }
-    auto *edit = new FluentQt::LineEdit(m_content);
+    FluentQt::LineEdit *edit = def.name == QLatin1String("defaultPassword") ?
+        static_cast<FluentQt::LineEdit *>(new FluentQt::PasswordLineEdit(m_content)) : new FluentQt::LineEdit(m_content);
     edit->setText(value.toVariant().toString());
+    if (m_item && m_item->typeName() == QLatin1String("ToggleSwitch") &&
+        (def.name == QLatin1String("onValue") || def.name == QLatin1String("offFeedbackValue"))) {
+        edit->setValidator(new QRegularExpressionValidator(numberPattern(), edit));
+        edit->setPlaceholderText(tr("输入数字"));
+    }
+    if (def.name == QLatin1String("offFeedbackValue")) {
+        edit->setPlaceholderText(tr("留空时其余值为关"));
+    }
     connect(edit, &QLineEdit::textChanged, this, [commit](const QString &t) { commit(t); });
     const bool dbc = def.name == QLatin1String("dbcFile");
     if (def.name != QLatin1String("imagePath") && !dbc) {
@@ -959,9 +1110,11 @@ void PropertyEditor::buildBitProfilesForm()
     addRow(form, QStringLiteral("profile.select"), tr("配置名"), selector);
     connect(selector, &FluentQt::ComboBox::currentTextChanged, this, [this](const QString &name) {
         m_bitProfileName = name;
-        if (m_item)
+        if (m_item) {
             commitProperty(QStringLiteral("bitProfile"), name);
-        QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
+        } else {
+            QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
+        }
     });
     const auto publish = [this](const QString &key) {
         if (m_scene)
@@ -1122,6 +1275,7 @@ void PropertyEditor::buildProjectForm()
     auto *hint = new FluentQt::CaptionLabel(tr("链路卡片选择“项目设置”时使用"), m_content);
     hint->setWordWrap(true);
     frame->addRow(hint);
+    addReceiveTemplateRow(frame, QStringLiteral("project.receiveTemplate"), ReceiveTarget::Defaults);
     auto *parser = new FluentQt::ComboBox(m_content);
     parser->addItems({QStringLiteral("line"), QStringLiteral("hex"), QStringLiteral("modbus"),
                       QStringLiteral("modbus_tcp"), QStringLiteral("modbus_ascii")});
@@ -1137,6 +1291,7 @@ void PropertyEditor::buildProjectForm()
         frame, QString(), [this]() { return m_project->parserConfig(); },
         [this](const QJsonObject &config, const QString &key) {
             m_project->serial.insert(QStringLiteral("parserConfig"), config);
+            updateVisibility();
             emit projectSettingsChanged(QStringLiteral("parserConfig.") + key);
         });
 
@@ -1152,24 +1307,33 @@ void PropertyEditor::editProjectLogic()
     Project draft = *m_project;
     draft.widgets = currentWidgets(m_project, m_scene);
     if (fhmi::editProjectLogic(&draft, this)) {
-        m_project->logic = draft.logic;
-        m_project->widgets = draft.widgets;
-        if (m_scene) {
-            // Apply all renamed bindings before recording the single project undo step.
-            const QSignalBlocker blocker(m_scene);
-            visitWidgets(draft.widgets, [this](const QJsonObject &widget) {
-                auto *item = m_scene->findItem(widget.value(QStringLiteral("id")).toString());
-                item->setBinding(widget.value(QStringLiteral("binding")).toObject());
-                const auto props = widget.value(QStringLiteral("properties")).toObject();
-                for (auto it = props.begin(); it != props.end(); ++it)
-                    if (item->propertyValue(it.key()) != it.value())
-                        item->setPropertyValue(it.key(), it.value());
-                return true;
-            });
-        }
+        applyProjectDraft(draft);
         emit projectSettingsChanged(QString()); // each accepted dialog is one independent undo step
         QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
     }
+}
+
+void PropertyEditor::applyProjectDraft(const Project &draft)
+{
+    m_project->logic = draft.logic;
+    m_project->serial = draft.serial;
+    m_project->widgets = draft.widgets;
+    m_project->frameTemplates = draft.frameTemplates;
+    if (!m_scene)
+        return;
+    const QSignalBlocker blocker(m_scene);
+    visitWidgets(draft.widgets, [this](const QJsonObject &widget) {
+        if (auto *item = m_scene->findItem(widget.value(QStringLiteral("id")).toString())) {
+            const auto binding = widget.value(QStringLiteral("binding")).toObject();
+            if (item->binding() != binding)
+                item->setBinding(binding);
+            const auto props = widget.value(QStringLiteral("properties")).toObject();
+            for (auto it = props.begin(); it != props.end(); ++it)
+                if (item->propertyValue(it.key()) != it.value())
+                    item->setPropertyValue(it.key(), it.value());
+        }
+        return true;
+    });
 }
 
 QWidget *PropertyEditor::createIconButton(QWidget *nameField)
@@ -1227,122 +1391,484 @@ QWidget *PropertyEditor::createIconButton(QWidget *nameField)
 void PropertyEditor::addFrameRows(QFormLayout *form, const QString &prefix, const ConfigRead &read,
                                   const ConfigWrite &write)
 {
-    const QJsonObject config = read();
-    const auto store = [read, write](const char *key, const QJsonValue &value) {
-        QJsonObject edited = read();
-        edited.insert(QLatin1String(key), value);
-        write(edited, QLatin1String(key));
-    };
-    const auto row = [&](const char *key, const QString &label, QWidget *editor, const QString &helpKey = QString()) {
-        addRow(form, prefix + QLatin1String(key), label, editor, helpKey);
-    };
-    const auto text = [&](const char *key, const QString &fallback) {
-        auto *edit = new FluentQt::LineEdit(m_content);
-        edit->setText(config.value(QLatin1String(key)).toString(fallback));
-        connect(edit, &QLineEdit::textChanged, this, [store, key](const QString &t) { store(key, t); });
-        return edit;
-    };
-    const auto number = [&](const char *key, int lo, int hi, int fallback) {
-        auto *box = new FluentQt::SpinBox(m_content);
-        box->setRange(lo, hi);
-        box->setValue(config.value(QLatin1String(key)).toInt(fallback));
-        box->setKeyboardTracking(false);
-        connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [store, key](int v) { store(key, v); });
-        return box;
-    };
-    const auto choice = [&](const char *key, const QStringList &options) {
-        auto *combo = new FluentQt::ComboBox(m_content);
-        addValueItems(combo, options);
-        // Case aside: an encoding is compared in lower case, so "GBK" in a file shows as gbk.
-        const QString stored = config.value(QLatin1String(key)).toString();
-        for (int i = 0; i < options.size(); ++i) {
-            if (options.at(i).compare(stored, Qt::CaseInsensitive) == 0) {
-                combo->setCurrentIndex(i);
-            }
-        }
-        connect(combo, &FluentQt::ComboBox::currentIndexChanged, this,
-                [combo, store, key]() { store(key, selectedValue(combo)); });
-        return combo;
-    };
+    addReceiveFrameFields(m_content, read, write,
+        [this, form, prefix](const QString &key, const QString &label, QWidget *editor, const QString &help) {
+            addRow(form, prefix + key, label, editor, help);
+        }, true);
+    addReceivePreviewRow(form, prefix + QStringLiteral("preview"));
+}
 
-    row("separator", tr("分隔符"), text("separator", QStringLiteral(",")));
-    // Picked or typed as escapes, stored as the characters themselves. An empty box is not
-    // stored: the parser refuses an empty terminator, and the project could not be saved.
-    auto *terminator = new FluentQt::EditableComboBox(m_content);
-    terminator->addItems(
-        {QStringLiteral("\\n"), QStringLiteral("\\r\\n"), QStringLiteral("\\r"), QStringLiteral(";")});
-    terminator->setCurrentText(
-        escapedTerminator(config.value(QStringLiteral("terminator")).toString(QStringLiteral("\n"))));
-    connect(terminator, &FluentQt::EditableComboBox::currentTextChanged, this, [store](const QString &t) {
-        const QString value = unescapedTerminator(t);
-        if (!value.isEmpty()) {
-            store("terminator", value);
+void PropertyEditor::addReceivePreviewRow(QFormLayout *form, const QString &key)
+{
+    auto *row = new QWidget(m_content);
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto *edit = new FluentQt::PushButton(tr("编辑帧格式…"), row);
+    edit->setObjectName(QStringLiteral("editReceiveFrameFormat"));
+    layout->addWidget(edit, 1);
+    auto *preview = new FluentQt::PushButton(tr("解析预览…"), row);
+    preview->setObjectName(QStringLiteral("previewReceiveFrame"));
+    layout->addWidget(preview, 1);
+    addRow(form, key, tr("示例报文"), row);
+    connect(edit, &QPushButton::clicked, this, [this, edit] {
+        openReceiveEditor(m_item ? ReceiveTarget::Connection : ReceiveTarget::Defaults, edit);
+    });
+    connect(preview, &QPushButton::clicked, this, [this] {
+        const auto source = m_project ? receiveSource(m_item ? ReceiveTarget::Connection : ReceiveTarget::Defaults)
+            : FrameSource{{}, frameFormat(nullptr, m_item ? m_item->properties() : QJsonObject()), {}, {}, {}};
+        const auto &format = source.format;
+        const bool grouped = format.type == LinkParser::HexGroup;
+        const auto editor = QPointer<PropertyEditor>(this);
+        SaveReceivedField save;
+        if (m_project)
+            save = [editor, sourceId = source.id, grouped](const QString &field, bool json) {
+                if (editor)
+                    editor->addDataPoint({{QStringLiteral("parseMode"), json ? ParseMode::JsonPath : ParseMode::KeyValue},
+                                          {QStringLiteral("sourceCardId"), sourceId},
+                                          {json ? QStringLiteral("jsonPath") : QStringLiteral("key"), field}},
+                                         grouped ? field.section(u'.', 1) : field);
+            };
+        const auto entry = m_project ? FrameTemplates::find(m_project->frameTemplates, source.templateId) : std::nullopt;
+        if (grouped) {
+            openReceiveGroupPreview(format.settings, window(), std::move(save));
+        } else if (format.type == QLatin1String("hex")) {
+            const auto sample = entry ? parseHex(entry->sample).value_or(QByteArray{}) : QByteArray();
+            openReceiveFramePreview(format.settings, window(), sample, std::move(save), entry ? entry->name : QString());
+        } else {
+            openReceiveTextPreview(format.settings, window(), entry ? entry->sample : QString(), std::move(save));
         }
     });
-    row("terminator", tr("行结束符"), terminator);
-    row("kvSeparator", tr("键值分隔符"), choice("kvSeparator", LineOptions::kvSeparators()));
-    row("encoding", tr("编码"), choice("encoding", LineOptions::encodings()));
-    row("header", tr("帧头(HEX)"), text("header", QStringLiteral("AA55")));
-    row("footer", tr("帧尾(HEX)"), text("footer", QStringLiteral("55AA")));
-    row("lengthOffset", tr("长度字段偏移"), number("lengthOffset", -1, 65535, -1));
-    auto *lengthSize = new FluentQt::ComboBox(m_content);
-    lengthSize->addItems({QStringLiteral("1"), QStringLiteral("2")});
-    lengthSize->setCurrentIndex(config.value(QStringLiteral("lengthSize")).toInt(1) == 2 ? 1 : 0);
-    connect(lengthSize, &FluentQt::ComboBox::currentTextChanged, this,
-            [store](const QString &t) { store("lengthSize", t.toInt()); });
-    row("lengthSize", tr("长度字节数"), lengthSize);
-    row("lengthEndian", tr("长度字节序"), choice("lengthEndian", HexOptions::byteOrders()));
-    row("lengthCovers", tr("长度含义"), choice("lengthCovers", HexOptions::lengthCovers()));
-    row("fixedLength", tr("固定帧长"), number("fixedLength", 0, 65536, 0));
-    row("checksum", tr("校验"), choice("checksum", HexOptions::checksums()));
-    row("checksumStart", tr("校验起点"), number("checksumStart", 0, 65535, 0));
-    row("checksumEndian", tr("校验字节序"), choice("checksumEndian", HexOptions::byteOrders()));
-    row("idleTimeout", tr("空闲超时(ms)"), number("idleTimeout", 0, 60000, 0));
+}
 
-    // The table is text; a line that is not a field shows its number and leaves the stored table alone.
-    auto *fieldsBox = new QWidget(m_content);
-    auto *fieldsLayout = new QVBoxLayout(fieldsBox);
-    fieldsLayout->setContentsMargins(0, 0, 0, 0);
-    fieldsLayout->setSpacing(2);
-    auto *fields = new FluentQt::PlainTextEdit(fieldsBox);
-    fields->setPlainText(hexFieldsText(config.value(QStringLiteral("fields")).toArray()));
-    fields->setPlaceholderText(tr("每行一个：名字,偏移,长度,类型[,字节序]"));
-    fields->setFixedHeight(96);
-    auto *problem = new FluentQt::CaptionLabel(fieldsBox);
-    problem->setTextColor(QColor(0xC4, 0x2B, 0x1C), QColor(0xFF, 0x99, 0xA4));
-    problem->hide();
-    fieldsLayout->addWidget(fields);
-    fieldsLayout->addWidget(problem);
-    connect(fields, &QPlainTextEdit::textChanged, this, [fields, problem, store]() {
-        int bad = 0;
-        const QJsonArray parsed = hexFieldsFromText(fields->toPlainText(), &bad);
-        problem->setText(bad ? tr("第 %1 行格式错误").arg(bad) : QString());
-        problem->setVisible(bad > 0);
-        if (!bad) {
-            store("fields", parsed);
+void PropertyEditor::addReceiveEditorRow(QFormLayout *form, const QString &key, ReceiveTarget target)
+{
+    const bool binds = target == ReceiveTarget::Binding || target == ReceiveTarget::Curve;
+    if (binds) {
+        auto *fields = new FluentQt::ComboBox(m_content);
+        fields->setObjectName(target == ReceiveTarget::Curve ? QStringLiteral("curveTemplateField")
+                                                            : QStringLiteral("bindingTemplateField"));
+        addRow(form, key + QStringLiteral(".field"), tr("模板字段"), fields);
+        connect(fields, &FluentQt::ComboBox::currentIndexChanged, this, [this, fields, target] {
+            const QString field = selectedValue(fields);
+            if (field.isEmpty() || m_loading)
+                return;
+            bindReceiveField(target, ReceivedField{field}, receiveSource(target).id);
+            emit modified({});
+            const int scroll = verticalScrollBar()->value();
+            QMetaObject::invokeMethod(this, [this, scroll] {
+                rebuild();
+                verticalScrollBar()->setValue(scroll);
+            }, Qt::QueuedConnection);
+        });
+    }
+    auto *edit = new FluentQt::PushButton(binds ? tr("可视化取值…") : tr("可视化编辑帧格式…"), m_content);
+    edit->setObjectName(QStringLiteral("editReceiveFrameFormat"));
+    addRow(form, key, binds ? tr("取值与帧格式") : tr("接收帧格式"), edit);
+    connect(edit, &QPushButton::clicked, this, [this, target, edit] { openReceiveEditor(target, edit); });
+    if (m_project) {
+        auto *change = new FluentQt::PushButton(tr("更改来源连接模板…"), m_content);
+        change->setObjectName(QStringLiteral("editSourceReceiveTemplates"));
+        addRow(form, key + QStringLiteral(".template"), tr("连接帧模板"), change);
+        connect(change, &QPushButton::clicked, this, [this, target] {
+            const auto source = receiveSource(target);
+            if (source.id.isEmpty())
+                return;
+            const auto card = widgetById(currentWidgets(m_project, m_scene), source.id);
+            const auto selected = FrameTemplates::receiveIds(card.value(QStringLiteral("properties")).toObject());
+            editReceiveTemplateSelection(m_project->frameTemplates, selected, window(),
+                [this, target](const QStringList &ids) { return setReceiveTemplates(target, ids); }, source.id);
+        });
+    }
+}
+
+void PropertyEditor::addTemplateChoiceRow(QFormLayout *form, const QString &key, const QString &label,
+                                          const std::function<void(const QString &)> &choose,
+                                          const std::function<void()> &manage, const std::function<void()> &chooseGroup)
+{
+    auto *row = new QWidget(m_content);
+    auto *choice = new FluentQt::ComboBox(row);
+    choice->setObjectName(key);
+    choice->setAccessibleName(label);
+    choice->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    auto *button = new FluentQt::PushButton(tr("管理…"), row);
+    auto *layout = new QHBoxLayout;
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    if (chooseGroup) {
+        auto *column = new QVBoxLayout(row);
+        column->setContentsMargins(0, 0, 0, 0);
+        column->setSpacing(6);
+        column->addWidget(choice);
+        column->addLayout(layout);
+        auto *multiple = new FluentQt::PushButton(tr("多选…"), row);
+        multiple->setObjectName(QStringLiteral("chooseReceiveTemplateGroup"));
+        multiple->setAccessibleName(tr("选择接收模板组"));
+        layout->addWidget(multiple);
+        connect(multiple, &QPushButton::clicked, this, chooseGroup);
+    } else {
+        row->setLayout(layout);
+        layout->addWidget(choice, 1);
+    }
+    layout->addWidget(button);
+    addRow(form, key, label, row);
+    connect(choice, &FluentQt::ComboBox::currentIndexChanged, this, [choice, choose] { choose(selectedValue(choice)); });
+    connect(button, &QPushButton::clicked, this, manage);
+}
+
+FrameSource PropertyEditor::receiveSource(ReceiveTarget target) const
+{
+    if (!m_project)
+        return {};
+    if (target == ReceiveTarget::Defaults)
+        return defaultFrameSource(*m_project);
+    if (target == ReceiveTarget::Connection)
+        return cardFrameSource(*m_project, m_item->widgetId(), m_item->properties());
+    const auto binding = target == ReceiveTarget::Curve ? chartCurveBinding(m_item->properties(), editorCurve(*m_item))
+        : target == ReceiveTarget::Observer ? m_item->properties() : m_item->binding();
+    const auto transport = target == ReceiveTarget::Observer ? widgetReceiveTransport(m_item->typeName())
+        : bindingRouteTransport(binding.value(QStringLiteral("parseMode")).toString(ParseMode::KeyValue));
+    return frameSource(m_project, currentWidgets(m_project, m_scene), binding, transport);
+}
+
+void PropertyEditor::manageFrameTemplates(const LinkParser::Format &seed, const QString &selected)
+{
+    Project draft = *m_project;
+    draft.widgets = currentWidgets(m_project, m_scene);
+    if (!editFrameTemplateLibrary(&draft, window(), seed, selected))
+        return;
+    applyProjectDraft(draft);
+    emit projectSettingsChanged({});
+    const int scroll = verticalScrollBar()->value();
+    QMetaObject::invokeMethod(this, [this, scroll] {
+        rebuild();
+        verticalScrollBar()->setValue(scroll);
+    }, Qt::QueuedConnection);
+}
+
+void PropertyEditor::addReceiveTemplateRow(QFormLayout *form, const QString &key, ReceiveTarget target)
+{
+    if (!m_project)
+        return;
+    std::function<void()> chooseGroup;
+    if (target != ReceiveTarget::Defaults && hasMultipleHexTemplates(m_project->frameTemplates)) {
+        chooseGroup = [this, target] {
+            const auto selected = m_project->linkReceiveTemplateIds(m_item->properties());
+            editReceiveTemplateSelection(m_project->frameTemplates, selected, window(),
+                [this, target](const QStringList &ids) { return setReceiveTemplates(target, ids); });
+        };
+    }
+    addTemplateChoiceRow(form, key, tr("接收帧模板"), [this, target](const QString &id) {
+        setReceiveTemplate(target, id);
+    }, [this, target] {
+        const auto source = receiveSource(target);
+        manageFrameTemplates(source.format, source.templateId);
+    }, chooseGroup);
+}
+
+bool PropertyEditor::updateReceiveTemplateRow(const QString &key, ReceiveTarget target, bool active)
+{
+    const auto source = active ? receiveSource(target) : FrameSource{};
+    const bool resolved = !source.format.type.isEmpty();
+    const bool editable = LinkParser::hasEditableFraming(source.format.type) || source.format.type == LinkParser::HexGroup;
+    auto *row = m_rows.value(key).second;
+    if (qobject_cast<QPushButton *>(row)) {
+        setRowVisible(key, resolved && !source.id.isEmpty() && !m_project->frameTemplates.isEmpty());
+        return editable;
+    }
+    const bool visible = resolved || !source.error.isEmpty();
+    setRowVisible(key, visible);
+    if (visible && row) {
+        auto *choice = row->findChild<FluentQt::ComboBox *>();
+        const auto inherited = source.localTemplateId.isEmpty() && !source.templateId.isEmpty()
+            ? FrameTemplates::find(m_project->frameTemplates, source.templateId) : std::nullopt;
+        const QString automatic = !resolved ? tr("请先选择来源连接")
+            : inherited ? tr("跟随工程（%1）").arg(inherited->name)
+            : tr("独立配置");
+        fillFrameTemplates(choice, m_project->frameTemplates, source.localTemplateId, automatic);
+        if (source.format.type == LinkParser::HexGroup) {
+            const QSignalBlocker blocker(choice);
+            const auto count = source.format.settings.value(LinkParser::GroupTemplates).toArray().size();
+            choice->addItem(tr("接收模板组 · %1 个").arg(count), {}, QString());
+            choice->setCurrentIndex(choice->count() - 1);
+            choice->setItemEnabled(choice->currentIndex(), false);
         }
-    });
-    row("fields", tr("字段表"), fieldsBox, QStringLiteral("receive.framing"));
+        choice->setEnabled(resolved && !m_project->frameTemplates.isEmpty());
+        choice->setToolTip(source.id.isEmpty() ? QString() : tr("此选择应用到来源连接 %1").arg(source.id));
+        if (auto *multiple = row->findChild<FluentQt::PushButton *>(QStringLiteral("chooseReceiveTemplateGroup")))
+            multiple->setVisible(resolved && !source.id.isEmpty() && hasMultipleHexTemplates(m_project->frameTemplates));
+    }
+    return editable;
+}
+
+bool PropertyEditor::updateTemplateFieldPicker(const QString &row, ReceiveTarget target, FluentQt::ComboBox *mode,
+                                              const QString &parseMode, const QString &currentField)
+{
+    const auto source = usesFreeFrame(parseMode) ? receiveSource(target) : FrameSource{};
+    const bool group = source.format.type == LinkParser::HexGroup;
+    const bool usesTemplate = group || (!source.templateId.isEmpty() && source.format.type == QLatin1String("hex"));
+    if (mode) {
+        const QSignalBlocker blocker(mode);
+        const auto setText = [mode](const QString &value, const QString &text) {
+            const auto index = mode->findData(value);
+            if (index >= 0 && mode->itemText(index) != text)
+                mode->setItemText(index, text);
+        };
+        setText(ParseMode::KeyValue, usesTemplate ? tr("按模板字段取值") : translated(ParseMode::KeyValue));
+        setText(ParseMode::HexBytes, usesTemplate ? tr("手动按字节取值") : translated(ParseMode::HexBytes));
+    }
+
+    const bool byTemplate = usesTemplate && parseMode == ParseMode::KeyValue;
+    const bool byBytes = usesTemplate && parseMode == ParseMode::HexBytes;
+    QList<QPair<QString, QString>> names;
+    if (byTemplate || byBytes) {
+        if (group) {
+            if (const auto variants = hexFrameVariants(source.format.settings))
+                for (const auto &variant : *variants)
+                    for (const auto &field : variant.frame.fields) {
+                        const auto label = QStringLiteral("%1 · %2").arg(variant.name, field.name);
+                        names.append({hexTemplateFieldKey(variant.id, field.name), label});
+                        if (field.name == currentField && variant.unqualifiedFields.contains(field.name))
+                            names.append({field.name, label});
+                    }
+        } else if (const auto config = hexFrameConfig(source.format.settings)) {
+            for (const auto &field : config->fields)
+                if (!field.name.isEmpty())
+                    names.append({field.name, field.name});
+        }
+    }
+    const bool visible = byTemplate || (byBytes && !names.isEmpty());
+    setRowVisible(row, visible);
+    if (visible) {
+        auto *fields = static_cast<FluentQt::ComboBox *>(m_rows.value(row).second);
+        const QSignalBlocker blocker(fields);
+        fields->clear();
+        fields->addItem(names.isEmpty() ? tr("模板尚未定义字段") : tr("选择模板字段"), {}, QString());
+        fields->setItemEnabled(0, false);
+        for (const auto &[key, label] : names)
+            if (fields->findData(key) < 0)
+                fields->addItem(label, {}, key);
+        if (byTemplate && !currentField.isEmpty() && !selectValue(fields, currentField)) {
+            fields->addItem(tr("%1（字段不可用）").arg(currentField), {}, currentField);
+            fields->setCurrentIndex(fields->count() - 1);
+            fields->setItemEnabled(fields->currentIndex(), false);
+        }
+        fields->setEnabled(!names.isEmpty());
+    }
+    return byTemplate;
+}
+
+void PropertyEditor::setReceiveTemplate(ReceiveTarget target, const QString &id)
+{
+    setReceiveTemplates(target, id.isEmpty() ? QStringList{} : QStringList{id});
+}
+
+bool PropertyEditor::setReceiveTemplates(ReceiveTarget target, const QStringList &ids)
+{
+    const auto source = receiveSource(target);
+    if (source.format.type.isEmpty())
+        return false;
+    const auto id = ids.size() == 1 ? ids.first() : QString();
+    const bool group = ids.size() > 1;
+    if (!group && source.format.type != LinkParser::HexGroup && source.localTemplateId == id)
+        return true;
+    Project before = *m_project;
+    before.widgets = currentWidgets(m_project, m_scene);
+    Project draft = before;
+    QJsonObject changes;
+    bool staged = false;
+    if (source.id.isEmpty()) {
+        draft.serial.insert(FrameTemplates::ReceiveId, id);
+    } else {
+        const auto props = target == ReceiveTarget::Connection ? m_item->properties()
+            : widgetById(before.widgets, source.id).value(QStringLiteral("properties")).toObject();
+        const auto selected = FrameTemplates::receiveIds(props);
+        if (QSet<QString>(selected.cbegin(), selected.cend()) == QSet<QString>(ids.cbegin(), ids.cend()))
+            return true;
+        changes = {{FrameTemplates::ReceiveId, id},
+                   {FrameTemplates::ReceiveIds, group ? QJsonArray::fromStringList(ids) : QJsonArray{}}};
+        staged = updateFrameProperties(draft.widgets, source.id, changes);
+        if (!staged && target != ReceiveTarget::Connection)
+            return false;
+    }
+    if (!confirmReceiveTemplateSelection(before, draft, source.id, window())) {
+        updateVisibility();
+        return false;
+    }
+    applyProjectDraft(draft);
+    if (target == ReceiveTarget::Connection && (!m_scene || !staged))
+        for (auto it = changes.cbegin(); it != changes.cend(); ++it)
+            m_item->setPropertyValue(it.key(), it.value());
+    emit projectSettingsChanged({});
+    if (target != ReceiveTarget::Connection && target != ReceiveTarget::Defaults) {
+        updateVisibility();
+        return true;
+    }
+    const int scroll = verticalScrollBar()->value();
+    QMetaObject::invokeMethod(this, [this, scroll] {
+        rebuild();
+        verticalScrollBar()->setValue(scroll);
+    }, Qt::QueuedConnection);
+    return true;
+}
+
+void PropertyEditor::openReceiveEditor(ReceiveTarget target, QWidget *anchor)
+{
+    if (!m_project)
+        return;
+    const bool curve = target == ReceiveTarget::Curve;
+    const bool binds = curve || target == ReceiveTarget::Binding;
+    const QPointer<CanvasItem> item = m_item;
+    const int curveIndex = curve ? editorCurve(*item) : 0;
+    auto values = binds ? std::optional<ReceiveValueSettings>{{
+        curve ? chartCurveBinding(item->properties(), curveIndex) : item->binding(), item->typeName(), m_bindingOnly}}
+        : std::nullopt;
+
+    Project draft = *m_project;
+    draft.widgets = currentWidgets(m_project, m_scene);
+    auto source = receiveSource(target);
+    if (!source.error.isEmpty()) {
+        emit message(tr("接收帧格式"), source.error, true);
+        return;
+    }
+    const bool group = source.format.type == LinkParser::HexGroup;
+    if (group) {
+        const auto key = values ? values->binding.value(QStringLiteral("key")).toString() : QString();
+        source.templateId = chooseReceiveTemplate(source.format.settings, key, anchor);
+        if (source.templateId.isEmpty())
+            return;
+        source.format = FrameTemplates::find(draft.frameTemplates, source.templateId)->format;
+        const auto prefix = hexTemplateFieldKey(source.templateId, {});
+        if (values && key.startsWith(prefix))
+            values->binding.insert(QStringLiteral("key"), key.mid(prefix.size()));
+    }
+    if (!LinkParser::hasEditableFraming(source.format.type))
+        return;
+    const auto entry = FrameTemplates::find(draft.frameTemplates, source.templateId);
+    const QString scope = entry ? tr("模板 %1 · 引用它的接收和发送共用").arg(entry->name) : source.id.isEmpty()
+        ? tr("编辑工程默认帧格式 · 使用项目设置的连接共用")
+        : tr("编辑连接 %1 的帧格式 · 该连接上的数据点、控件和曲线共用").arg(source.id);
+    const auto updated = entry
+        ? editProjectFrameTemplate(draft, source.templateId, source.format, scope, values, window())
+        : editReceiveFrameFormat(source.format, scope, values, window());
+    if (!updated)
+        return;
+    const auto &format = updated->format;
+    const bool changed = source.format.type != format.type || source.format.settings != format.settings ||
+        (entry && (updated->sample != entry->sample || updated->templateName != entry->name));
+    auto patch = updated->bindingChanges;
+    if (group && patch.contains(QStringLiteral("key")))
+        patch.insert(QStringLiteral("key"), hexTemplateFieldKey(source.templateId, patch.value(QStringLiteral("key")).toString()));
+    if (!changed && patch.isEmpty())
+        return;
+    if (changed && !entry) {
+        if (source.id.isEmpty()) {
+            draft.serial.insert(QStringLiteral("parser"), format.type);
+            draft.serial.insert(QStringLiteral("parserConfig"), format.settings);
+        } else if (!updateFrameProperties(draft.widgets, source.id,
+                       {{QStringLiteral("defaultParser"), format.type}, {QStringLiteral("parserConfig"), format.settings}}) &&
+                   target == ReceiveTarget::Connection) {
+            item->setPropertyValue(QStringLiteral("defaultParser"), format.type);
+            item->setPropertyValue(QStringLiteral("parserConfig"), format.settings);
+        }
+    }
+    applyProjectDraft(draft);
+    if (item && !patch.isEmpty()) {
+        const QString modeKey = QStringLiteral("parseMode");
+        const auto mode = patch.value(modeKey).toString(values->binding.value(modeKey).toString(ParseMode::KeyValue));
+        const auto field = mode == ParseMode::JsonPath ? QStringLiteral("jsonPath") : QStringLiteral("key");
+        if (!source.id.isEmpty() && (patch.contains(modeKey) || (mode != ParseMode::HexBytes && patch.contains(field))))
+            patch.insert(QStringLiteral("sourceCardId"), source.id);
+        if (curve) {
+            const auto prefix = QStringLiteral("_curve_%1_").arg(curveIndex);
+            for (auto it = patch.cbegin(); it != patch.cend(); ++it)
+                item->setPropertyValue(prefix + it.key(), it.value());
+        } else {
+            auto binding = item->binding();
+            for (auto it = patch.cbegin(); it != patch.cend(); ++it)
+                binding.insert(it.key(), it.value());
+            item->setBinding(binding);
+        }
+    }
+    emit projectSettingsChanged({});
+    const int scroll = verticalScrollBar()->value();
+    QMetaObject::invokeMethod(this, [this, scroll] {
+        rebuild();
+        verticalScrollBar()->setValue(scroll);
+    }, Qt::QueuedConnection);
+}
+
+void PropertyEditor::bindReceiveField(ReceiveTarget target, const ReceivedField &field, const QString &sourceId)
+{
+    const QString mode = field.jsonPath ? ParseMode::JsonPath : ParseMode::KeyValue;
+    const QString key = field.jsonPath ? QStringLiteral("jsonPath") : QStringLiteral("key");
+    if (target == ReceiveTarget::Curve) {
+        const auto prefix = QStringLiteral("_curve_%1_").arg(editorCurve(*m_item));
+        m_item->setPropertyValue(prefix + QStringLiteral("parseMode"), mode);
+        m_item->setPropertyValue(prefix + key, field.key);
+        if (!sourceId.isEmpty())
+            m_item->setPropertyValue(prefix + QStringLiteral("sourceCardId"), sourceId);
+        return;
+    }
+    auto binding = m_item->binding();
+    binding.insert(QStringLiteral("parseMode"), mode);
+    binding.insert(key, field.key);
+    if (!sourceId.isEmpty())
+        binding.insert(QStringLiteral("sourceCardId"), sourceId);
+    m_item->setBinding(binding);
+}
+
+void PropertyEditor::addDataPoint(QJsonObject binding, const QString &suggestedName, CanvasItem *boundItem)
+{
+    if (!m_project)
+        return;
+    Project draft = *m_project;
+    draft.widgets = currentWidgets(m_project, m_scene);
+    auto points = draft.logic.value(QStringLiteral("points")).toArray();
+    const auto names = dataPointNames(m_project);
+    QString name;
+    for (const auto &value : points) {
+        const auto point = value.toObject();
+        if (point.value(QStringLiteral("binding")).toObject() == binding) {
+            name = point.value(QStringLiteral("name")).toString();
+            break;
+        }
+    }
+    const QPointer<CanvasItem> target(boundItem);
+    if (name.isEmpty()) {
+        const QString prefix = suggestedName.trimmed().isEmpty() ? QStringLiteral("Point") : suggestedName.trimmed();
+        name = prefix;
+        for (int i = 2; names.contains(name); ++i)
+            name = prefix + QString::number(i);
+        QJsonObject point{{QStringLiteral("name"), name}, {QStringLiteral("binding"), std::move(binding)}};
+        if (!editDevicePoint(&draft, &point, QApplication::activeModalWidget() ? QApplication::activeModalWidget() : window(), true))
+            return;
+        name = point.value(QStringLiteral("name")).toString();
+        points = draft.logic.value(QStringLiteral("points")).toArray();
+        points.append(point);
+        draft.logic.insert(QStringLiteral("points"), points);
+        applyProjectDraft(draft);
+    }
+    if (target)
+        target->setBinding({{QStringLiteral("parseMode"), ParseMode::DataPoint}, {QStringLiteral("key"), name}});
+    emit projectSettingsChanged({});
+    emit message(tr("工程数据点"), tr("已准备好数据点 %1").arg(name), false);
+    QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
 }
 
 void PropertyEditor::setFrameRowsVisible(const QString &prefix, const QString &mode)
 {
-    for (const char *key : kLineFrameKeys) {
-        setRowVisible(prefix + QLatin1String(key), mode == QLatin1String("line"));
-    }
-    for (const char *key : kHexFrameKeys) {
-        setRowVisible(prefix + QLatin1String(key), mode == QLatin1String("hex"));
-    }
+    const auto config = m_item ? cardFrameConfig() : m_project->parserConfig();
+    const auto source = receiveSource(m_item ? ReceiveTarget::Connection : ReceiveTarget::Defaults);
+    const bool manual = source.localTemplateId.isEmpty();
+    updateReceiveFrameFields({mode, config}, [this, &prefix, manual](const QString &key, bool visible) {
+        setRowVisible(prefix + key, manual && visible);
+    });
+    setRowVisible(prefix + QStringLiteral("preview"), LinkParser::hasEditableFraming(manual ? mode : source.format.type));
 }
 
 QJsonObject PropertyEditor::cardFrameConfig() const
 {
-    const QJsonObject own = m_item->propertyValue(QStringLiteral("parserConfig")).toObject();
-    if (!own.isEmpty() || !m_project ||
-        m_item->propertyValue(QStringLiteral("defaultParser")).toString() != m_project->parserType()) {
-        return own;
-    }
-    return m_project->parserConfig();
+    return frameFormat(m_project, m_item->properties()).settings;
 }
 
 // ---------------------------------------------------------------------------
@@ -1354,8 +1880,8 @@ QString PropertyEditor::storageKey(const QString &name) const
     if (!m_item) {
         return name;
     }
-    if (m_item->typeName() == QLatin1String("RealtimeChart") && curveFields().contains(name)) {
-        const int curve = m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0);
+    if (usesChartSeries(m_item->typeName(), m_item->properties()) && curveFields().contains(name)) {
+        const int curve = editorCurve(*m_item);
         return QStringLiteral("_curve_%1_%2").arg(curve).arg(curveFields().value(name));
     }
     if (m_item->typeName() == QLatin1String("TabWidget") && name == QLatin1String("tabLayout")) {
@@ -1371,10 +1897,8 @@ QJsonValue PropertyEditor::itemValue(const PropDef &def) const
     if (!stored.isUndefined() && !stored.isNull()) {
         return stored;
     }
-    if (def.name == QLatin1String("curveName")) { // as the chart names a curve without one
-        const int curve = m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0);
-        return QStringLiteral("曲线%1").arg(curve + 1); // i18n: value
-    }
+    if (def.name == QLatin1String("curveName") && !isTimingChart(m_item->typeName()))
+        return chartCurveName(m_item->properties(), editorCurve(*m_item));
     return def.defaultValue;
 }
 
@@ -1389,6 +1913,10 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
         if(def && !m_item->properties().contains(storageKey(objectName)))m_item->setPropertyValue(storageKey(objectName),def->defaultValue);
     }
     const QString key = storageKey(name);
+    const bool templateContextChanged = m_item->meta().prop(QStringLiteral("commandInputs")) &&
+        (name == QLatin1String("commandInputs") || name == QLatin1String("commandMode") ||
+         name == QLatin1String("canId") || name == QLatin1String("commandTargetId"));
+    const auto previous = templateContextChanged ? m_item->properties() : QJsonObject{};
     const int curves = m_item->propertyValue(QStringLiteral("curveCount")).toInt(1);
     const QString endpoint = endpointProperty(name);
     // A new card starts with its own default destination. A mode change keeps the
@@ -1401,18 +1929,80 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
         edit->clear();
     }
     m_item->setPropertyValue(key, value);
-    emit modified(QStringLiteral("property:%1:%2:%3").arg(m_item->widgetId(), key, detail));
+    if ((name == QLatin1String("commandMode") || name == QLatin1String("canId") || name == QLatin1String("commandTargetId")) &&
+        m_item->meta().prop(QStringLiteral("canId")) &&
+        m_item->propertyValue(QStringLiteral("commandMode")).toString() == QLatin1String("CAN")) {
+        const auto props = m_item->properties();
+        if (CommandEncoder::usesFrameFields(props) || !props.value(FrameTemplates::SendValueField).toString().isEmpty()) {
+            const auto target = props.value(QStringLiteral("commandTargetId")).toString();
+            const auto names = canNames(m_project, currentWidgets(m_project, m_scene),
+                                        target == DataRoute::Broadcast ? QString() : target);
+            if (!canTargetKind(names, props.value(QStringLiteral("canId")).toString()).usesRawEncoding) {
+                if (props.contains(FrameTemplates::SendFieldsEnabled))
+                    m_item->setPropertyValue(FrameTemplates::SendFieldsEnabled, false);
+                if (props.contains(FrameTemplates::SendValueField))
+                    m_item->setPropertyValue(FrameTemplates::SendValueField, QString());
+            }
+        }
+    }
+    if (templateContextChanged)
+        updateDefaultFrameTemplate(previous);
+    if (name == QLatin1String("bitProfile") && m_scene && m_project)
+        m_scene->setBitProfiles(m_project->bitProfiles);
+    if (name == QLatin1String("mbFunc")) {
+        const auto spec = CommandEncoder::modbusFunctionSpec(CommandEncoder::functionCode(value.toString()));
+        const QString dataType = m_item->propertyValue(QStringLiteral("mbDataType")).toString();
+        if (!spec.dataTypes.isEmpty() && !spec.dataTypes.contains(dataType))
+            m_item->setPropertyValue(QStringLiteral("mbDataType"), spec.dataTypes.first());
+        if (m_item->meta().prop(QStringLiteral("mbValue"))) {
+            bool number = false;
+            const int amount = m_item->propertyValue(QStringLiteral("mbValue")).toVariant().toString().toInt(&number);
+            if ((spec.argument == CommandEncoder::ModbusArgument::ReadCount &&
+                 (!number || amount < 1 || amount > spec.maximumCount)) ||
+                (spec.argument == CommandEncoder::ModbusArgument::Coil && (!number || (amount != 0 && amount != 1))))
+                m_item->setPropertyValue(QStringLiteral("mbValue"), QStringLiteral("1"));
+        }
+    }
+    if (m_item->typeName() == QLatin1String("CanConfigCard") &&
+        (name == QLatin1String("defaultAdapter") || name == QLatin1String("zlgModel"))) {
+        const auto caps = CanAdapter::caps(m_item->propertyValue(QStringLiteral("defaultAdapter")).toString(),
+                                           m_item->propertyValue(QStringLiteral("zlgModel")).toString());
+        const QString channel = QStringLiteral("defaultChannel");
+        if (caps.channelCount > 0 && m_item->propertyValue(channel).toInt() >= caps.channelCount)
+            m_item->setPropertyValue(channel, caps.channelCount - 1);
+        const auto fitPreset = [this](const QString &field, const QStringList &presets) {
+            if (!presets.isEmpty() && !presets.contains(m_item->propertyValue(field).toString())) {
+                const QString fallback = m_item->meta().prop(field)->defaultValue.toString();
+                m_item->setPropertyValue(field, presets.contains(fallback) ? fallback : presets.first());
+            }
+        };
+        fitPreset(QStringLiteral("defaultBitrate"), caps.nominalBitrates);
+        fitPreset(QStringLiteral("defaultDataBitrate"), caps.dataBitrates);
+    }
+    if (name == QLatin1String("curveName") || name == QLatin1String("curveKey") || name == QLatin1String("curveParseMode")) {
+        if (auto *box = qobject_cast<FluentQt::ComboBox *>(m_rows.value(QStringLiteral("currentCurve")).second)) {
+            const int index = box->currentIndex();
+            if (index >= 0)
+                box->setItemText(index, chartCurveName(m_item->properties(), index));
+        }
+    }
     // These change which per-curve / per-page values, or which fields, the form shows;
     // defaultParser decides whether a link card has a frame format section, and what it starts from.
-    static const QSet<QString> structural = {QStringLiteral("bitProfile"), QStringLiteral("currentCurve"), QStringLiteral("curveCount"),
+    static const QSet<QString> structural = {QStringLiteral("bitProfile"), QStringLiteral("currentCurve"),
+                                             QStringLiteral("curveCount"), TimingSource::Property,
                                              QStringLiteral("tabNames"),
-                                             QStringLiteral("defaultParser")};
-    if (structural.contains(name) || (m_item->meta().typeName == QLatin1String("SpinBox") &&
-                                     (name == QLatin1String("numberMode") || name == QLatin1String("decimals")))) {
+                                             QStringLiteral("defaultParser"), QStringLiteral("options"),
+                                             QStringLiteral("recordColumns"), QStringLiteral("commandInputs"),
+                                             QStringLiteral("feedbackMode"), QStringLiteral("parameterName")};
+    const bool modbusEditorChanged = (name == QLatin1String("mbFunc") || name == QLatin1String("mbDataType")) &&
+                                     m_item->meta().prop(QStringLiteral("mbValue"));
+    const bool numberEditorChanged = m_item->meta().typeName == QLatin1String("SpinBox") &&
+                                     (name == QLatin1String("numberMode") || name == QLatin1String("decimals"));
+    if (structural.contains(name) || modbusEditorChanged || numberEditorChanged) {
         if (name == QLatin1String("curveCount")) {
             const int count = m_item->propertyValue(QStringLiteral("curveCount")).toInt(1);
             // Added curves are named in the interface language, as a new chart's first one is.
-            for (int i = curves; i < count; ++i) {
+            for (int i = curves; !isTimingChart(m_item->typeName()) && i < count; ++i) {
                 const QString curveName = QStringLiteral("_curve_%1_name").arg(i);
                 if (m_item->properties().value(curveName).isUndefined()) {
                     m_item->setPropertyValue(curveName, tr("曲线%1").arg(i + 1));
@@ -1422,7 +2012,15 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
                 m_item->setPropertyValue(QStringLiteral("currentCurve"), count - 1);
             }
         }
-        QMetaObject::invokeMethod(this, [this]() { rebuild(); }, Qt::QueuedConnection);
+        const int scrollPosition = verticalScrollBar()->value();
+        const QPointer<CanvasItem> item = m_item;
+        QMetaObject::invokeMethod(this, [this, item, scrollPosition] {
+            if (item && item == m_item) {
+                rebuild();
+                verticalScrollBar()->setValue(scrollPosition);
+            }
+        }, Qt::QueuedConnection);
+        emit modified(QStringLiteral("property:%1:%2:%3").arg(m_item->widgetId(), key, detail));
         return;
     }
     if (m_geometry[3] && m_item->isLinkCard()) { // its rows (displayMode) set how short it may be
@@ -1431,7 +2029,10 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
         m_loading = false;
         refreshGeometry();
     }
+    refreshGeometry();
+    refreshNumericRows();
     updateVisibility();
+    emit modified(QStringLiteral("property:%1:%2:%3").arg(m_item->widgetId(), key, detail));
 }
 
 void PropertyEditor::refreshGeometry()
@@ -1440,12 +2041,44 @@ void PropertyEditor::refreshGeometry()
         return;
     }
     m_loading = true;
+    m_geometry[2]->setMinimum(int(std::ceil(m_item->minimumWidth())));
+    m_geometry[3]->setMinimum(int(std::ceil(m_item->minimumHeight())));
     const int values[4] = {qRound(m_item->pos().x()), qRound(m_item->pos().y()), qRound(m_item->size().width()),
                            qRound(m_item->size().height())};
     for (int i = 0; i < 4; ++i) {
         m_geometry[i]->setValue(values[i]);
     }
     m_loading = false;
+}
+
+void PropertyEditor::refreshNumericRows()
+{
+    const auto range = widgetValueRange(m_item->meta(), m_item->properties());
+    if (!range && !m_item->meta().prop(QStringLiteral("bitProfile")))
+        return;
+    for (const char *field : {"minimum", "maximum", "value"}) {
+        const QString key = QLatin1String(field);
+        QWidget *editor = m_rows.value(key).second;
+        if (!editor)
+            continue;
+        const bool valueRow = key == QLatin1String("value");
+        const QVariant value = m_item->propertyValue(key).toVariant();
+        const QSignalBlocker blocker(editor);
+        if (auto *spin = qobject_cast<QSpinBox *>(editor)) {
+            if (valueRow && m_item->meta().prop(QStringLiteral("bitProfile"))) {
+                const int width = bitProfileWidth(m_project ? m_project->bitProfiles : QJsonObject{},
+                    m_item->propertyValue(QStringLiteral("bitProfile")).toString());
+                spin->setRange(0, (1 << width) - 1);
+            } else if (valueRow && range) {
+                spin->setRange(int(std::ceil(range->minimum)), int(std::floor(range->maximum)));
+            }
+            spin->setValue(value.toInt());
+        } else if (auto *spin = qobject_cast<QDoubleSpinBox *>(editor)) {
+            if (valueRow && range)
+                spin->setRange(range->minimum, range->maximum);
+            spin->setValue(value.toDouble());
+        }
+    }
 }
 
 void PropertyEditor::addPageRows(QFormLayout *form)
@@ -1548,10 +2181,13 @@ void PropertyEditor::buildItemForm()
     m_layout->addWidget(header);
 
     QFormLayout *geometry = addSection(tr("位置与尺寸"));
-    const QString labels[4] = {QStringLiteral("X"), QStringLiteral("Y"), tr("宽度"), tr("高度")};
+    const bool automaticWidth = m_item->widthManagedByLayout();
+    const QString labels[4] = {QStringLiteral("X"), QStringLiteral("Y"),
+                               automaticWidth ? tr("宽度（自动）") : tr("宽度"), tr("高度")};
     for (int i = 0; i < 4; ++i) {
         auto *spin = new FluentQt::SpinBox(m_content);
-        spin->setRange(i == 2 ? meta.minWidth : i == 3 ? int(std::ceil(m_item->minimumHeight())) : -9999, 9999);
+        spin->setRange(i == 2 ? int(std::ceil(m_item->minimumWidth())) :
+                       i == 3 ? int(std::ceil(m_item->minimumHeight())) : -9999, 9999);
         spin->setKeyboardTracking(false);
         m_geometry[i] = spin;
         connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this, i](int value) {
@@ -1581,29 +2217,351 @@ void PropertyEditor::buildItemForm()
         m_geometry[0]->setEnabled(false);
         m_geometry[1]->setEnabled(false);
     }
+    m_geometry[2]->setEnabled(!automaticWidth);
 
-    if (!meta.properties.isEmpty()) {
-        QFormLayout *props = addSection(tr("属性"));
-        for (const PropDef &def : meta.properties) {
-            if (def.type == PropType::Object) {
-                continue; // a section of its own below
-            }
-            const QString name = def.name;
-            if (meta.typeName == QLatin1String("TabWidget")) {
-                if (name == QLatin1String("tabNames")) {
-                    addPageRows(props);
-                    continue;
+    buildItemProperties();
+    refreshNumericRows();
+    if (meta.prop(QStringLiteral("bitProfile")) &&
+        !(isTimingChart(meta.typeName) && TimingSource::usesChannels(m_item->properties())))
+        buildBitProfilesForm();
+    // A link card with a mode of its own frames with its own settings, edited like the project's.
+    const PropDef *frame = meta.prop(QStringLiteral("parserConfig"));
+    const QString parser = m_item->propertyValue(QStringLiteral("defaultParser")).toString();
+    if (frame && FrameTemplates::receiveIds(m_item->properties()).isEmpty() &&
+        LinkParser::hasEditableFraming(parser)) {
+        addFrameRows(
+            addSection(tr("帧格式")), QStringLiteral("parserConfig."), [this]() { return cardFrameConfig(); },
+            [this](const QJsonObject &config, const QString &key) {
+                commitProperty(QStringLiteral("parserConfig"), config, key);
+            });
+    }
+}
+
+void PropertyEditor::buildItemProperties()
+{
+    const auto &meta = m_item->meta();
+    const bool timing = isTimingChart(meta.typeName);
+    const bool timingChannels = timing && TimingSource::usesChannels(m_item->properties());
+    const bool hasCommands = meta.prop(QStringLiteral("commandMode"));
+    const QStringList firstSendFields{commandActivationProperty(meta.typeName), QStringLiteral("commandMode"),
+                                     QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"),
+                                     CommandEncoder::SendInterval,
+                                     QStringLiteral("confirmBeforeSend"), QStringLiteral("showSendConfirmationDetails")};
+    QList<const PropDef *> general;
+    QList<const PropDef *> send;
+    QList<const PropDef *> receive;
+    for (const QString &name : firstSendFields) {
+        if (const auto *def = meta.prop(name))
+            send.append(def);
+    }
+    static const QSet<QString> feedbackFields = {
+        QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"), QStringLiteral("canFilter"),
+        QStringLiteral("onCondition"), QStringLiteral("onValue"), QStringLiteral("offValue"),
+        QStringLiteral("offFeedbackValue"), QStringLiteral("currentCurve"), QStringLiteral("curveCount")};
+    for (const PropDef &def : meta.properties) {
+        const QString &name = def.name;
+        if (firstSendFields.contains(name))
+            continue;
+        if (timing && (name == QLatin1String("currentCurve") || name == QLatin1String("curveCount") ||
+                       curveFields().contains(name)) && !timingChannels)
+            continue;
+        if (timingChannels && name == QLatin1String("value"))
+            continue;
+        if ((hasCommands && (modeFields().contains(name) || name == QLatin1String("commandInputs") ||
+                             name == QLatin1String("commands") ||
+                             name.startsWith(QLatin1String("notify")))) || name.startsWith(QLatin1String("canTxInitial"))) {
+            send.append(&def);
+        } else if (feedbackFields.contains(name) || curveFields().contains(name)) {
+            receive.append(&def);
+        } else {
+            general.append(&def);
+        }
+    }
+    if (!general.isEmpty()) {
+        auto *form = addSection(tr("常规"));
+        addItemProperties(form, general);
+        if (meta.typeName == QLatin1String("CanConfigCard") && m_project) {
+            auto *save = new FluentQt::TransparentPushButton(tr("从 CAN 信号创建数据点…"), m_content);
+            addRow(form, {}, {}, save);
+            connect(save, &QPushButton::clicked, this, [this] {
+                const auto source = m_item->widgetId();
+                if (const auto picked = chooseCanSignal(m_project, currentWidgets(m_project, m_scene), source, {},
+                                                        window(), true))
+                    addDataPoint({{QStringLiteral("parseMode"), ParseMode::CanField},
+                                  {QStringLiteral("sourceCardId"), picked->connectionId},
+                                  {QStringLiteral("key"), picked->key}}, picked->name);
+            });
+        }
+    }
+    if (!send.isEmpty()) {
+        auto *form = addSection(tr("操作与发送"));
+        addItemProperties(form, send);
+        if (meta.typeName == QLatin1String("ToggleSwitch")) {
+            auto *write = new FluentQt::BodyLabel(m_content);
+            write->setWordWrap(true);
+            addRow(form, QStringLiteral("modbusSwitchWrite"), tr("拨动时写入"), write);
+        }
+        if (hasCommands || meta.typeName == QLatin1String("DataSendCard")) {
+            if (m_project)
+                addTemplateChoiceRow(form, QStringLiteral("sendTemplate"), tr("发送帧模板"), [this](const QString &id) {
+                    commitProperty(FrameTemplates::SendId, id);
+                }, [this] {
+                    const auto props = m_item->properties();
+                    const QString mode = props.value(QStringLiteral("commandMode")).toString();
+                    const auto parser = FrameTemplates::sendParser(mode);
+                    QJsonObject config;
+                    if (parser == QLatin1String("hex")) {
+                        config = props.value(QStringLiteral("txFrame")).toObject();
+                        if (mode == QLatin1String("HEX")) {
+                            const auto head = props.value(QStringLiteral("frameHeader")).toString();
+                            const auto tail = props.value(QStringLiteral("frameTail")).toString();
+                            if (!config.isEmpty() || !head.isEmpty() || !tail.isEmpty()) {
+                                config.insert(QStringLiteral("header"), head);
+                                config.insert(QStringLiteral("footer"), tail);
+                            }
+                        }
+                    }
+                    const auto id = props.value(FrameTemplates::SendId).toString();
+                    const auto entry = FrameTemplates::find(m_project->frameTemplates, id);
+                    manageFrameTemplates({parser, config}, entry && entry->format.type == parser ? id : QString());
+                });
+            if (!meta.prop(QStringLiteral("commandInputs"))) {
+                if (m_project && meta.typeName != QLatin1String("DataSendCard")) {
+                    auto *field = new FluentQt::ComboBox(m_content);
+                    field->setObjectName(QStringLiteral("sendValueTemplateField"));
+                    addRow(form, FrameTemplates::SendValueField, tr("发送字段"), field);
+                    connect(field, &FluentQt::ComboBox::currentIndexChanged, this, [this, field] {
+                        commitProperty(FrameTemplates::SendValueField, selectedValue(field));
+                    });
                 }
-                if (name == QLatin1String("currentTab"))
-                    continue;
+                auto *format = new FluentQt::PushButton(tr("可视化编辑帧格式…"), m_content);
+                format->setObjectName(QStringLiteral("editTransmitFrameFormat"));
+                addRow(form, QStringLiteral("transmitFormat"), tr("发送帧格式"), format);
+                connect(format, &QPushButton::clicked, this, &PropertyEditor::editTransmitFormat);
             }
-            QWidget *editor =
-                createEditor(def, itemValue(def), [this, name](const QJsonValue &v) { commitProperty(name, v); });
-            addRow(props, name, translated(def.label), editor, def.helpKey);
-            if (name == QLatin1String("defaultParser") && m_project && m_scene &&
-                LinkParser::inheritsProject(m_item->propertyValue(name).toString())) {
+            auto *preview = new FluentQt::PushButton(tr("发送预览"), m_content);
+            preview->setObjectName(QStringLiteral("sendPreview"));
+            addRow(form, QStringLiteral("sendPreview"), {}, preview);
+            connect(preview, &QPushButton::clicked, this, &PropertyEditor::showSendPreview);
+        }
+    }
+    const bool binds = !meta.bindProperty().isEmpty();
+    if (binds || !receive.isEmpty()) {
+        auto *form = addSection(meta.typeName == QLatin1String("PushButton") ? tr("标题绑定") : tr("接收与绑定"));
+        if (binds && !timingChannels)
+            buildBindingForm(form);
+        addItemProperties(form, receive);
+        if (meta.typeName == QLatin1String("RealtimeChart"))
+            addReceiveEditorRow(form, QStringLiteral("curve.receiveFormat"), ReceiveTarget::Curve);
+        else if (meta.typeName == QLatin1String("DataRecvCard") || meta.typeName == QLatin1String("LogBox") ||
+                 meta.typeName == QLatin1String("DataTable"))
+            addReceiveEditorRow(form, QStringLiteral("observer.receiveFormat"), ReceiveTarget::Observer);
+    }
+}
+
+void PropertyEditor::showSendPreview()
+{
+    if (!m_item)
+        return;
+    const QString mode = m_item->propertyValue(QStringLiteral("commandMode")).toString();
+    auto project = m_project ? *m_project : Project{};
+    project.widgets = currentWidgets(m_project, m_scene);
+    const auto &widgets = project.widgets;
+    const auto destination = previewCommandTarget(m_item->properties(), m_item->typeName(), project);
+    const auto resolved = destination.route.isBroadcast() ? QString() : destination.route.connectionId;
+    const auto sources = mode == QLatin1String("CAN") ? canNames(m_project, widgets, resolved).sources
+                                                     : QList<CanPreviewSource>{};
+    const auto inputs = m_item->typeName() == QLatin1String("PushButton") &&
+                        !CommandEncoder::commandInputIds(m_item->properties()).isEmpty()
+        ? inputDefaults(widgets, m_project) : QMap<QString, CommandEncoder::InputValue>{};
+    openCommandPreview(*m_item, sources, destination, inputs, window(), m_project ? m_project->frameTemplates : QJsonObject());
+}
+
+void PropertyEditor::editTransmitFormat()
+{
+    const QPointer<CanvasItem> item = m_item;
+    const auto properties = item->properties();
+    const auto changes = editTransmitFrameFormat(properties,
+        item->propertyValue(QStringLiteral("commandMode")).toString() == QLatin1String("CAN"), window());
+    if (!item || !changes || changes->isEmpty())
+        return;
+    for (auto it = changes->cbegin(); it != changes->cend(); ++it)
+        item->setPropertyValue(it.key(), it.value());
+    emit modified({});
+    const int scroll = verticalScrollBar()->value();
+    QMetaObject::invokeMethod(this, [this, scroll] {
+        rebuild();
+        verticalScrollBar()->setValue(scroll);
+    }, Qt::QueuedConnection);
+}
+
+void PropertyEditor::updateDefaultFrameTemplate(const QJsonObject &previous)
+{
+    using CommandEncoder::InputListMode;
+    const auto properties = m_item->properties();
+    const auto mode = CommandEncoder::inputListMode(properties);
+    if (!CommandEncoder::usesTemplate(mode))
+        return;
+
+    const auto before = CommandEncoder::commandInputs(previous);
+    const auto after = CommandEncoder::commandInputs(properties);
+    if (before.isEmpty() && after.isEmpty())
+        return;
+
+    const bool usesCan = mode == InputListMode::Can || CommandEncoder::inputListMode(previous) == InputListMode::Can;
+    const auto widgets = usesCan ? currentWidgets(m_project, m_scene) : QJsonArray{};
+    const auto inputs = usesCan ? inputDefaults(widgets, m_project) : QMap<QString, CommandEncoder::InputValue>{};
+    const QString key = QStringLiteral("commandTemplate");
+    const QString current = m_item->propertyValue(key).toString();
+    const QString generatedBefore = defaultFrameTemplate(previous, commandCanSources(m_project, widgets, previous), inputs);
+    const bool usesValueVariable = std::any_of(before.cbegin(), before.cend(), [](const auto &input) {
+        return input.variable == QLatin1String("value");
+    });
+    if (!current.trimmed().isEmpty() && !(current == QLatin1String("{value}") && !usesValueVariable) &&
+        current != generatedBefore)
+        return;
+
+    const QString generated = defaultFrameTemplate(properties, commandCanSources(m_project, widgets, properties), inputs);
+    const QString next = generated.isEmpty() ? QStringLiteral("{value}") : generated;
+    if (next == current)
+        return;
+    m_item->setPropertyValue(key, next);
+}
+
+void PropertyEditor::editFrameTemplate()
+{
+    const QPointer<CanvasItem> item = m_item;
+    const QPointer<DesignScene> scene = m_scene;
+    const bool canCreate = scene && item->scene() == scene;
+    const auto widgets = currentWidgets(m_project, m_scene);
+    Project project = m_project ? *m_project : Project{};
+    project.widgets = widgets;
+    openFrameTemplateEditor(*item, project, commandCanSources(m_project, widgets, item->properties()), inputDefaults(widgets, m_project),
+                            canCreate, window(), [self = QPointer<PropertyEditor>(this), item, scene](
+                                const QJsonObject &draft, const QMap<QString, QString> &pending) {
+        if (!self || !item || self->m_item != item)
+            return;
+        if (!pending.isEmpty() && (!scene || item->scene() != scene))
+            return;
+        QJsonObject changes = draft;
+        QHash<QString, QString> created;
+        const auto applyInput = [item, scene, &created, &pending](const QString &id) {
+            if (!pending.contains(id))
+                return id;
+            if (!created.contains(id)) {
+                const auto *input = scene->insertSibling(*item, QStringLiteral("LineEdit"),
+                    {{QStringLiteral("title"), pending.value(id)}, {QStringLiteral("inputOnly"), true}});
+                created.insert(id, input->widgetId());
+            }
+            return created.value(id);
+        };
+        if (!pending.isEmpty()) {
+            for (const auto &key : {QStringLiteral("commandInputs"), FrameTemplates::SendBindings}) {
+                if (!changes.contains(key))
+                    continue;
+                QJsonArray rows = changes.value(key).toArray();
+                for (qsizetype i = 0; i < rows.size(); ++i) {
+                    auto row = rows.at(i).toObject();
+                    const QString inputKey = QStringLiteral("inputId");
+                    if (row.contains(inputKey))
+                        row.insert(inputKey, applyInput(row.value(inputKey).toString()));
+                    rows[i] = row;
+                }
+                changes.insert(key, rows);
+            }
+            const QString single = CommandEncoder::singleInputProperty(CommandEncoder::inputListMode(item->properties()));
+            if (!single.isEmpty() && changes.contains(single))
+                changes.insert(single, applyInput(changes.value(single).toString()));
+        }
+        bool changed = false;
+        for (auto it = changes.begin(); it != changes.end(); ++it) {
+            if (item->propertyValue(it.key()) != it.value()) {
+                item->setPropertyValue(it.key(), it.value());
+                changed = true;
+            }
+        }
+        if (changed) {
+            const int scroll = self->verticalScrollBar()->value();
+            self->rebuild();
+            self->verticalScrollBar()->setValue(scroll);
+            emit self->modified(QString());
+        }
+    });
+}
+
+void PropertyEditor::addItemProperties(QFormLayout *form, const QList<const PropDef *> &properties)
+{
+    for (const PropDef *def : properties) {
+        const QString &name = def->name;
+        if (name == QLatin1String("currentTab") || name == QLatin1String("bitProfile") ||
+            name.startsWith(QLatin1String("curveCan")))
+            continue;
+        if (name == QLatin1String("tabNames")) {
+            addPageRows(form);
+        } else if (name == QLatin1String("canSignals")) {
+            auto *edit = new FluentQt::PushButton(tr("可视化编辑…"), m_content);
+            edit->setObjectName(QStringLiteral("editCanSignals"));
+            addRow(form, name, translated(def->label), edit, def->helpKey);
+            connect(edit, &QPushButton::clicked, this, [this, name] {
+                const QPointer<CanvasItem> item = m_item;
+                std::optional<Project> reviewed;
+                const auto approve = [&](const CanSignalEdit &edit, QWidget *parent) {
+                    if (!item || m_item != item)
+                        return false;
+                    if (!m_project || item->propertyValue(name).toString() == edit.text)
+                        return true;
+                    Project draft = *m_project;
+                    draft.widgets = currentWidgets(m_project, m_scene);
+                    const auto rows = stageCanSignalEdit(draft, item->widgetId(), edit);
+                    if (!rows.isEmpty() && !confirmReferences(parent, tr("CAN 信号变更影响范围"),
+                            tr("确认后会更新可唯一定位的引用。"), rows,
+                            tr("继续保存"), tr("返回编辑"), QStringLiteral("canSignalImpact")))
+                        return false;
+                    reviewed = std::move(draft);
+                    return true;
+                };
+                const auto edit = editCanSignals(m_project, item->properties(), window(), approve);
+                if (!edit || !item || m_item != item || item->propertyValue(name).toString() == edit->text)
+                    return;
+                if (reviewed) {
+                    applyProjectDraft(*reviewed);
+                    emit projectSettingsChanged({});
+                    QMetaObject::invokeMethod(this, [this] { rebuild(); }, Qt::QueuedConnection);
+                } else {
+                    commitProperty(name, edit->text);
+                }
+            });
+        } else if (name == QLatin1String("commandInputs")) {
+            auto *edit = new FluentQt::PushButton(tr("编辑发送配置"), m_content);
+            edit->setObjectName(QStringLiteral("editFrameTemplate"));
+            addRow(form, name, tr("发送配置"), edit);
+            connect(edit, &QPushButton::clicked, this, &PropertyEditor::editFrameTemplate);
+        } else if (!def->columns.isEmpty()) {
+            const auto rows = itemValue(*def).toArray();
+            auto *edit = new FluentQt::PushButton(tr("编辑（%1 项）").arg(rows.size()), m_content);
+            addRow(form, name, translated(def->label), edit, def->helpKey);
+            connect(edit, &QPushButton::clicked, this, [this, def] { editPropertyRows(*def); });
+        } else if (def->type == PropType::Object) {
+            if (name == QLatin1String("s7Command") || name == QLatin1String("curveS7"))
+                addS7Rows(form, *def);
+        } else {
+            auto *editor = createEditor(*def, itemValue(*def), [this, name](const QJsonValue &v) { commitProperty(name, v); });
+            QString label = translated(def->label);
+            if (name == QLatin1String("mbValue")) {
+                const int function = CommandEncoder::functionCode(m_item->propertyValue(QStringLiteral("mbFunc")).toString());
+                const auto argument = CommandEncoder::modbusFunctionSpec(function).argument;
+                label = argument == CommandEncoder::ModbusArgument::ReadCount ? tr("读取数量")
+                      : argument == CommandEncoder::ModbusArgument::Coil ? tr("写入状态") : tr("写入值");
+            }
+            addRow(form, name, label, editor, def->helpKey);
+        }
+        if (name == QLatin1String("defaultParser") && m_project) {
+            addReceiveTemplateRow(form, QStringLiteral("connection.receiveTemplate"), ReceiveTarget::Connection);
+            const auto chosen = FrameTemplates::receiveIds(m_item->properties());
+            const bool inherited = chosen.isEmpty() && LinkParser::inheritsProject(m_item->propertyValue(name).toString());
+            if (inherited && m_scene) {
                 auto *settings = new FluentQt::TransparentPushButton(tr("工程解析设置"), m_content);
-                addRow(props, {}, {}, settings);
+                addRow(form, {}, {}, settings);
                 connect(settings, &QPushButton::clicked, this, [this] {
                     m_scene->clearSelection();
                     if (m_item)
@@ -1611,44 +2569,254 @@ void PropertyEditor::buildItemForm()
                     ensureWidgetVisible(m_rows.value(QStringLiteral("parser")).second);
                 });
             }
-            if (name == QLatin1String("curveCanOffset")) {
-                addRow(props, QStringLiteral("curveCanProblem"), QString(), newProblemLabel(m_content));
-            }
+            if (!chosen.isEmpty())
+                addReceivePreviewRow(form, QStringLiteral("templateParserPreview"));
+            else if (inherited && LinkParser::hasEditableFraming(m_project->parserType()))
+                addReceivePreviewRow(form, QStringLiteral("inheritedParserPreview"));
         }
-        for(const QString &root: {QStringLiteral("s7Command"),QStringLiteral("curveS7")}) {
-            const auto *objectDef=meta.prop(root);if(!objectDef)continue;
-            const QJsonObject object=itemValue(*objectDef).toObject();
-            QList<PropDef> fields{
-                {QStringLiteral("address"),tr("S7 地址"),PropType::String,QStringLiteral("DB1.DBD4"),{},std::nullopt,std::nullopt,false,{},QStringLiteral("s7.addressing")},
-                {QStringLiteral("dataType"),tr("S7 数据类型"),PropType::Enum,QStringLiteral("REAL"),S7::dataTypes(),std::nullopt,std::nullopt,false,{}}};
-            if(root==QLatin1String("curveS7")) fields.append({QStringLiteral("period"),tr("采集周期(ms)"),PropType::Int,0,{},0,60000,false,{}});
-            else {
-                fields.append({QStringLiteral("value"),tr("写入值"),PropType::String,QStringLiteral("1"),{},std::nullopt,std::nullopt,false,{}});
-                fields.append({QStringLiteral("onValue"),tr("开启写入值"),PropType::String,QStringLiteral("1"),{},std::nullopt,std::nullopt,false,{}});
-                fields.append({QStringLiteral("offValue"),tr("关闭写入值"),PropType::String,QStringLiteral("0"),{},std::nullopt,std::nullopt,false,{}});
-            }
-            for(const auto &field:fields) {
-                auto *editor=createEditor(field,object.value(field.name).isUndefined()?field.defaultValue:object.value(field.name),[this,root,name=field.name,defaults=objectDef->defaultValue](const QJsonValue &value) {
-                    auto object=m_item->properties().value(storageKey(root)).toObject();if(object.isEmpty())object=defaults.toObject();
-                    object.insert(name,value);commitProperty(root,object,name);
+        if (name == QLatin1String("curveKey"))
+            addCanBindingRow(form, true);
+        if (name == QLatin1String("highLimit"))
+            addRow(form, QStringLiteral("limitsProblem"), {}, newProblemLabel(m_content));
+    }
+}
+
+void PropertyEditor::addCanBindingRow(QFormLayout *form, bool curve)
+{
+    auto *row = new QWidget(m_content);
+    auto *layout = new QVBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+    auto *summary = new FluentQt::CaptionLabel(row);
+    summary->setWordWrap(true);
+    auto *edit = new FluentQt::PushButton(row);
+    layout->addWidget(summary);
+    layout->addWidget(edit);
+    addRow(form, curve ? QStringLiteral("curve.canSignal") : QStringLiteral("binding.canSignal"), tr("CAN 信号"), row);
+    if (curve)
+        addRow(form, QStringLiteral("curveCanProblem"), {}, newProblemLabel(m_content));
+    connect(edit, &QPushButton::clicked, this, [this, curve, edit] {
+        const QPointer<CanvasItem> item = m_item;
+        const int index = curve ? editorCurve(*item) : -1;
+        const auto binding = curve ? chartCurveBinding(item->properties(), index) : item->binding();
+        const auto widgets = currentWidgets(m_project, m_scene);
+        const bool named = binding.value(QStringLiteral("parseMode")).toString() == ParseMode::CanField;
+        QJsonObject changes;
+        if (named) {
+            const auto picked = chooseCanSignal(m_project, widgets,
+                                                binding.value(QStringLiteral("sourceCardId")).toString(),
+                                                binding.value(QStringLiteral("key")).toString(), edit);
+            if (!picked)
+                return;
+            changes = {{QStringLiteral("sourceCardId"), picked->connectionId},
+                       {QStringLiteral("sourceEndpoint"), QString()},
+                       {QStringLiteral("key"), picked->key}};
+        } else {
+            const DataRoute route{binding.value(QStringLiteral("sourceCardId")).toString(),
+                                  binding.value(QStringLiteral("sourceEndpoint")).toString()};
+            const auto source = resolveProjectRoute(widgets, m_project ? m_project->parserType() : QStringLiteral("line"),
+                                                    RouteTransport::Can, route, RoutePurpose::DataPoint);
+            QJsonObject card;
+            if (source && !source->connectionId.isEmpty()) {
+                visitWidgets(widgets, [&](const QJsonObject &widget) {
+                    if (widget.value(QStringLiteral("id")).toString() != source->connectionId)
+                        return true;
+                    card = widget.value(QStringLiteral("properties")).toObject();
+                    return false;
                 });
-                addRow(props,root+QLatin1Char('.')+field.name,field.label,editor,field.helpKey);
             }
+            const auto fields = editCanBitBinding(m_project, binding, card, edit);
+            if (!fields)
+                return;
+            changes = *fields;
+        }
+        if (!item || m_item != item || (curve && editorCurve(*item) != index))
+            return;
+        if (curve) {
+            const auto prefix = QStringLiteral("_curve_%1_").arg(index);
+            for (auto it = changes.cbegin(); it != changes.cend(); ++it)
+                item->setPropertyValue(prefix + it.key(), it.value());
+        } else {
+            auto updated = binding;
+            for (auto it = changes.cbegin(); it != changes.cend(); ++it)
+                updated.insert(it.key(), it.value());
+            item->setBinding(updated);
+        }
+        const int scroll = verticalScrollBar()->value();
+        rebuild();
+        verticalScrollBar()->setValue(scroll);
+        emit modified(QString());
+    });
+}
+
+void PropertyEditor::updateCanBindingRow(const QJsonObject &binding, bool curve)
+{
+    const auto key = curve ? QStringLiteral("curve.canSignal") : QStringLiteral("binding.canSignal");
+    const auto mode = binding.value(QStringLiteral("parseMode")).toString();
+    const bool named = mode == ParseMode::CanField;
+    setRowVisible(key, named || mode == ParseMode::CanSignal);
+    if (!named && mode != ParseMode::CanSignal)
+        return;
+    auto *row = m_rows.value(key).second;
+    auto *edit = row->findChild<QPushButton *>();
+    auto *summary = row->findChild<QLabel *>();
+    QString text;
+    if (named) {
+        text = binding.value(QStringLiteral("key")).toString();
+    } else {
+        const auto id = binding.value(QStringLiteral("canId")).toString();
+        if (!id.isEmpty()) {
+            const auto address = Can::parseId(id);
+            const auto span = tr("起始位 %1 · %2 位").arg(binding.value(QStringLiteral("canStartBit")).toInt())
+                                  .arg(binding.value(QStringLiteral("canBitLength")).toInt());
+            text = QStringLiteral("%1 · %2 · %3").arg(address ? Can::idText(*address) : id, span,
+                binding.value(QStringLiteral("canByteOrder")).toString(CanByteOrder::Intel));
         }
     }
-    if (meta.prop(QStringLiteral("bitProfile"))) buildBitProfilesForm();
-    // A link card with a mode of its own frames with its own settings, edited like the project's.
-    const PropDef *frame = meta.prop(QStringLiteral("parserConfig"));
-    const QString parser = m_item->propertyValue(QStringLiteral("defaultParser")).toString();
-    if (frame && (parser == QLatin1String("line") || parser == QLatin1String("hex"))) {
-        addFrameRows(
-            addSection(tr("帧格式")), QStringLiteral("parserConfig."), [this]() { return cardFrameConfig(); },
-            [this](const QJsonObject &config, const QString &key) {
-                commitProperty(QStringLiteral("parserConfig"), config, key);
-            });
+    summary->setText(text);
+    summary->setVisible(!text.isEmpty());
+    edit->setText(named ? tr("可视化选信号…") : tr("可视化编辑…"));
+    edit->setAccessibleName(edit->text());
+    edit->setObjectName(named ? (curve ? QStringLiteral("pickCurveCanSignal") : QStringLiteral("pickBindingCanSignal"))
+                              : (curve ? QStringLiteral("editCurveCanBits") : QStringLiteral("editBindingCanBits")));
+}
+
+void PropertyEditor::editPropertyRows(const PropDef &def)
+{
+    const QPointer<CanvasItem> item = m_item;
+    const auto existing = itemValue(def).toArray();
+    const bool editingOptions = def.name == QLatin1String("options");
+    const bool recordColumns = def.name == QLatin1String("recordColumns");
+    const bool pointColumns = recordColumns &&
+                              item->propertyValue(QStringLiteral("recordSource")).toString() == QLatin1String("points");
+    const auto pointFields = pointColumns ? dataPointNames(m_project) + QStringList{QStringLiteral("@time")} : QStringList{};
+    const int previousIndex = editingOptions ? item->propertyValue(QStringLiteral("currentIndex")).toInt() : -1;
+    auto *dialog = new AppDialog(translated(def.label), window());
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setPreferredSize(QSize(560, 430));
+    auto *table = new FluentQt::TableWidget(dialog);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setColumnCount(def.columns.size());
+    QStringList labels;
+    for (const auto &column : def.columns)
+        labels.append(translated(column.second));
+    if (pointColumns)
+        labels[0] = tr("工程数据点");
+    if (recordColumns) {
+        const auto source = item->propertyValue(QStringLiteral("sourceCardId")).toString();
+        const auto fields = pointColumns ? pointFields :
+            receivedFieldNames(m_project, currentWidgets(m_project, m_scene), source) + QStringList{QStringLiteral("@time")};
+        table->setItemDelegateForColumn(0, new RecordFieldDelegate(fields, table));
     }
-    if (!meta.bindProperty().isEmpty()) {
-        buildBindingForm();
+    table->setHorizontalHeaderLabels(labels);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    const auto add = [table, columns = def.columns](const QJsonObject &values, int originalIndex) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        for (int column = 0; column < columns.size(); ++column) {
+            auto *cell = new QTableWidgetItem(values.value(columns.at(column).first).toString());
+            cell->setData(Qt::UserRole, originalIndex);
+            table->setItem(row, column, cell);
+        }
+    };
+    for (int row = 0; row < existing.size(); ++row)
+        add(existing.at(row).toObject(), row);
+    dialog->viewLayout()->addWidget(table, 1);
+
+    auto *actions = new QHBoxLayout;
+    auto *append = new FluentQt::PushButton(tr("添加"), dialog);
+    auto *remove = new FluentQt::PushButton(tr("删除所选"), dialog);
+    auto *up = new FluentQt::PushButton(tr("上移"), dialog);
+    auto *down = new FluentQt::PushButton(tr("下移"), dialog);
+    for (auto *button : {append, remove, up, down})
+        actions->addWidget(button);
+    dialog->viewLayout()->addLayout(actions);
+    auto *problem = newProblemLabel(dialog);
+    problem->hide();
+    dialog->viewLayout()->addWidget(problem);
+    connect(append, &QPushButton::clicked, dialog, [table, add] {
+        add({}, -1);
+        const int row = table->rowCount() - 1;
+        table->setCurrentCell(row, 0);
+        table->editItem(table->item(row, 0));
+    });
+    connect(remove, &QPushButton::clicked, dialog, [table] {
+        if (table->currentRow() >= 0)
+            table->removeRow(table->currentRow());
+    });
+    const auto move = [table](int offset) {
+        const int row = table->currentRow(), target = row + offset;
+        if (row < 0 || target < 0 || target >= table->rowCount())
+            return;
+        for (int column = 0; column < table->columnCount(); ++column) {
+            auto *originItem = table->takeItem(row, column);
+            table->setItem(row, column, table->takeItem(target, column));
+            table->setItem(target, column, originItem);
+        }
+        table->setCurrentCell(target, 0);
+    };
+    connect(up, &QPushButton::clicked, dialog, [move] { move(-1); });
+    connect(down, &QPushButton::clicked, dialog, [move] { move(1); });
+    dialog->setValidator([table, problem, pointFields] {
+        for (int row = 0; row < table->rowCount(); ++row) {
+            const QString field = table->item(row, 0)->text().trimmed();
+            if (field.isEmpty() || (!pointFields.isEmpty() && !pointFields.contains(field))) {
+                problem->setProblem(pointFields.isEmpty() ? tr("请填写第 %1 行的名称或来源字段").arg(row + 1)
+                                                         : tr("请为第 %1 行选择工程数据点或 @time").arg(row + 1));
+                problem->show();
+                table->setCurrentCell(row, 0);
+                return false;
+            }
+        }
+        return true;
+    });
+    connect(dialog, &QDialog::accepted, this, [this, item, table, def, previousIndex, editingOptions] {
+        if (!item || item != m_item)
+            return;
+        QJsonArray rows;
+        int selected = -1;
+        for (int row = 0; row < table->rowCount(); ++row) {
+            QJsonObject values;
+            for (int column = 0; column < def.columns.size(); ++column)
+                values.insert(def.columns.at(column).first, table->item(row, column)->text().trimmed());
+            rows.append(values);
+            if (previousIndex >= 0 && table->item(row, 0)->data(Qt::UserRole).toInt() == previousIndex)
+                selected = row;
+        }
+        if (editingOptions)
+            item->setPropertyValue(QStringLiteral("currentIndex"), std::max(0, selected));
+        commitProperty(def.name, rows);
+    });
+    dialog->open();
+}
+
+void PropertyEditor::addS7Rows(QFormLayout *form, const PropDef &def)
+{
+    const QJsonObject object = itemValue(def).toObject();
+    QList<PropDef> fields{
+        {QStringLiteral("address"), tr("S7 地址"), PropType::String, QStringLiteral("DB1.DBD4"), {},
+         std::nullopt, std::nullopt, false, {}, QStringLiteral("s7.addressing")},
+        {QStringLiteral("dataType"), tr("S7 数据类型"), PropType::Enum, QStringLiteral("REAL"), S7::dataTypes(),
+         std::nullopt, std::nullopt, false, {}}};
+    if (def.name == QLatin1String("curveS7")) {
+        fields.append({QStringLiteral("period"), tr("采集周期(ms)"), PropType::Int, 0, {}, 0, 60000, false, {}});
+    } else {
+        fields.append({QStringLiteral("value"), tr("写入值"), PropType::String, QStringLiteral("1"), {}, std::nullopt, std::nullopt, false, {}});
+        fields.append({QStringLiteral("onValue"), tr("开启写入值"), PropType::String, QStringLiteral("1"), {}, std::nullopt, std::nullopt, false, {}});
+        fields.append({QStringLiteral("offValue"), tr("关闭写入值"), PropType::String, QStringLiteral("0"), {}, std::nullopt, std::nullopt, false, {}});
+    }
+    for (const PropDef &field : fields) {
+        const auto current = object.value(field.name);
+        auto *editor = createEditor(field, current.isUndefined() ? field.defaultValue : current,
+                                    [this, root = def.name, name = field.name, defaults = def.defaultValue.toObject()](const QJsonValue &value) {
+            auto settings = m_item->properties().value(storageKey(root)).toObject();
+            if (settings.isEmpty())
+                settings = defaults;
+            settings.insert(name, value);
+            commitProperty(root, settings, name);
+        });
+        addRow(form, def.name + QLatin1Char('.') + field.name, field.label, editor, field.helpKey);
     }
 }
 
@@ -1656,9 +2824,8 @@ void PropertyEditor::buildItemForm()
 // Binding
 // ---------------------------------------------------------------------------
 
-void PropertyEditor::buildBindingForm()
+void PropertyEditor::buildBindingForm(QFormLayout *form)
 {
-    QFormLayout *form = addSection(tr("数据绑定"));
     const QJsonObject binding = m_item->binding();
     const auto value = [&binding](const char *key, const QJsonValue &fallback) {
         const QJsonValue v = binding.value(QLatin1String(key));
@@ -1701,43 +2868,67 @@ void PropertyEditor::buildBindingForm()
         return box;
     };
 
-    const QString mode = value("parseMode", ParseMode::KeyValue).toString();
-    QStringList modes{ParseMode::KeyValue, ParseMode::DataPoint, ParseMode::JsonPath,
-                      ParseMode::HexBytes, ParseMode::Modbus,    ParseMode::S7};
-    // CAN信号 reads the frames of a CAN card's links, so it is offered only where there is one, and kept where a
-    // binding already uses it.
-    if (mode == ParseMode::CanSignal || hasCanCard(currentWidgets(m_project, m_scene))) {
-        modes.append(ParseMode::CanSignal);
-    }
+    const QString mode = value("parseMode", binding.isEmpty() ? ParseMode::None : ParseMode::KeyValue).toString();
+    QStringList modes{ParseMode::None, ParseMode::KeyValue, ParseMode::DataPoint, ParseMode::JsonPath,
+                      ParseMode::HexBytes, ParseMode::Modbus, ParseMode::S7};
+    const bool canAvailable = hasCanCard(currentWidgets(m_project, m_scene));
+    for (const auto &canMode : {ParseMode::CanField, ParseMode::CanSignal})
+        if (canAvailable || mode == canMode)
+            modes.append(canMode);
     if (m_bindingOnly)
         modes.removeAll(ParseMode::DataPoint);
-    add("parseMode", tr("解析模式"), combo(modes, mode), QStringLiteral("data.binding"));
+    modes.removeIf([this](const QString &candidate) { return !supportsBindingMode(m_item->typeName(), candidate); });
+    auto *modePicker = new FluentQt::ComboBox(m_content);
+    for (const auto &option : modes)
+        modePicker->addItem(option == ParseMode::CanSignal ? tr("CAN 按位取值") : translated(option), {}, option);
+    if (!selectValue(modePicker, mode))
+        modePicker->setCurrentIndex(0);
+    add("parseMode", tr("解析模式"), modePicker, QStringLiteral("data.binding"));
     const auto s7=binding.value(QStringLiteral("s7")).toObject();
-    auto *source = new ConnectionSourceEdit(m_content);
+    auto *source = new ConnectionSourceEdit(m_content, m_bindingOnly ? ConnectionSourceEdit::Purpose::DataPoint
+                                                                    : ConnectionSourceEdit::Purpose::Binding);
     source->setSources(m_project, m_scene, bindingRouteTransport(mode), value("sourceCardId", QString()).toString());
     add("sourceCardId", tr("来源连接"), source, QStringLiteral("data.routing"));
     add("sourceEndpoint", tr("来源子通道"), line(value("sourceEndpoint", QString()).toString(), {}));
+    addReceiveEditorRow(form, QStringLiteral("binding.receiveFormat"), ReceiveTarget::Binding);
     add("s7Address",tr("S7 地址"),line(s7.value(QStringLiteral("address")).toString(QStringLiteral("DB1.DBD4")),QStringLiteral("DB1.DBD4")),QStringLiteral("s7.addressing"));
     add("s7DataType",tr("S7 数据类型"),combo(S7::dataTypes(),s7.value(QStringLiteral("dataType")).toString(QStringLiteral("REAL"))));
     add("s7Period",tr("S7 采集周期(ms)"),spin(0,60000,s7.value(QStringLiteral("period")).toInt(0)));
+    const QString example = industrialCapabilities(m_item->typeName()).inputExample;
+    if (!example.isEmpty()) {
+        auto *hint = new FluentQt::CaptionLabel(tr("接收值示例 %1").arg(example), m_content);
+        hint->setWordWrap(true);
+        addRow(form, QStringLiteral("binding.example"), {}, hint);
+    }
 
     auto *key = new BindingKeyEdit(m_content);
     key->setCurrentText(value("key", QString()).toString());
     add("key", tr("绑定字段"), key);
+    addCanBindingRow(form, false);
     add("jsonPath", tr("JSON路径"), line(value("jsonPath", QString()).toString(), tr("路径 (如 data.sensors.0.temp)")));
+    if (!m_bindingOnly && m_project) {
+        auto *save = new FluentQt::TransparentPushButton(tr("存为工程数据点"), m_content);
+        addRow(form, QStringLiteral("binding.savePoint"), {}, save);
+        connect(save, &QPushButton::clicked, this, [this] {
+            const auto binding = m_item->binding();
+            const auto entry = BindingEntry::fromWidget(m_item->toJson());
+            const auto fallback = entry && entry->s7 ? entry->s7->address.canonical : m_item->widgetId();
+            const auto name = binding.value(QStringLiteral("key")).toString(
+                binding.value(QStringLiteral("jsonPath")).toString(fallback));
+            addDataPoint(binding, name, m_item);
+        });
+    }
     add("byteOffset", tr("字节偏移"), spin(0, 9999, value("byteOffset", 0).toInt()));
     add("dataType", tr("数据类型"),
-        combo({QStringLiteral("uint8"), QStringLiteral("int8"), QStringLiteral("uint16"), QStringLiteral("int16"),
-               QStringLiteral("uint32"), QStringLiteral("int32"), QStringLiteral("float32"), QStringLiteral("ASCII")},
-              value("dataType", QStringLiteral("uint16")).toString()));
+        combo(rawBindingDataTypes(), value("dataType", QStringLiteral("uint16")).toString()));
     add("byteOrder", tr("字节序"),
         combo({QStringLiteral("大端(BE)"), QStringLiteral("小端(LE)")},    // i18n: value
               value("byteOrder", QStringLiteral("大端(BE)")).toString())); // i18n: value
     add("frameHeader", tr("帧头(HEX)"), line(value("frameHeader", QString()).toString(), tr("如 AA 55")));
     add("frameTail", tr("帧尾(HEX)"), line(value("frameTail", QString()).toString(), tr("如 0D 0A")));
-    add("mbArea", tr("寄存器区"),
+    add("mbArea", tr("读取区"),
         combo(ModbusArea::options(), value("mbArea", ModbusArea::HoldingRegisters).toString()));
-    add("mbRegIndex", tr("寄存器地址"), spin(0, 65535, value("mbRegIndex", 0).toInt()), QStringLiteral("modbus.addressing"));
+    add("mbRegIndex", tr("读取地址"), spin(0, 65535, value("mbRegIndex", 0).toInt()), QStringLiteral("modbus.addressing"));
     add("mbDataType", tr("数据类型"),
         combo({QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"), QStringLiteral("int32"),
                QStringLiteral("float32")},
@@ -1745,36 +2936,23 @@ void PropertyEditor::buildBindingForm()
     add("mbRegOrder", tr("寄存器序"),
         combo({QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")},  // i18n: value
               value("mbRegOrder", QStringLiteral("大端(AB CD)")).toString())); // i18n: value
-    add("mbFcFilter", tr("功能码过滤"), spin(-1, 255, value("mbFcFilter", -1).toInt()));
-    add("mbSlaveFilter", tr("从站过滤"), spin(-1, 247, value("mbSlaveFilter", -1).toInt()));
+    auto *function = spin(-1, 255, value("mbFcFilter", -1).toInt());
+    function->setSpecialValueText(tr("不限功能码"));
+    add("mbFcFilter", tr("功能码过滤"), function);
+    auto *station = spin(-1, 247, value("mbSlaveFilter", -1).toInt());
+    station->setSpecialValueText(tr("连接默认从站"));
+    add("mbSlaveFilter", tr("从站过滤"), station);
     auto *period = spin(0, 60000, value("mbPeriod", 0).toInt());
     period->setSpecialValueText(tr("默认周期"));
     add("mbPeriod", tr("采集周期(ms)"), period);
-    add("canId", tr("CAN ID"), line(value("canId", QString()).toString(), tr("如 18FF50E5")));
-    add("canStartBit", tr("起始位"), spin(0, 511, value("canStartBit", 0).toInt()));
-    add("canBitLength", tr("长度"), spin(1, 64, value("canBitLength", 8).toInt()));
-    add("canByteOrder", tr("字节序"),
-        combo(CanByteOrder::options(), value("canByteOrder", CanByteOrder::Intel).toString()));
-    auto *sign = new FluentQt::ComboBox(m_content);
-    sign->addItem(tr("无符号"), QIcon(), false);
-    sign->addItem(tr("有符号"), QIcon(), true);
-    sign->setCurrentIndex(value("canSigned", false).toBool() ? 1 : 0);
-    add("canSigned", tr("有无符号"), sign);
-    // Empty is the default, shown as the placeholder; only numbers can be typed, so none is lost on commit.
-    const auto numberLine = [&](const char *key, const QString &fallback) {
-        const QJsonValue current = value(key, QJsonValue());
-        auto *edit = line(current.isDouble() ? QString::number(current.toDouble(), 'g', QLocale::FloatingPointShortest)
-                                             : QString(),
-                          fallback);
-        edit->setValidator(new QRegularExpressionValidator(numberPattern(), edit));
-        return edit;
-    };
-    add("canFactor", tr("因子"), numberLine("canFactor", QStringLiteral("1")));
-    add("canOffset", tr("偏移"), numberLine("canOffset", QStringLiteral("0")));
-    // Why the signal as set up reads nothing (updateVisibility fills it): the binding is kept while it is typed.
-    add("canProblem", QString(), newProblemLabel(m_content));
+    add("problem", QString(), newProblemLabel(m_content));
     add("expression", tr("转换表达式"), line(value("expression", QString()).toString(), tr("如 value * 0.1")),
          QStringLiteral("data.expression"));
+    if (!commandActivationProperty(m_item->typeName()).isEmpty() || m_item->typeName() == QLatin1String("ToggleSwitch")) {
+        auto *local = new FluentQt::CaptionLabel(tr("本地从站表可读写，启用转换或对外下发时仅回读。"), m_content);
+        local->setWordWrap(true);
+        addRow(form, QStringLiteral("binding.localWrite"), {}, local);
+    }
 }
 
 void PropertyEditor::commitBinding(const QString &field)
@@ -1801,59 +2979,22 @@ void PropertyEditor::commitBinding(const QString &field)
         auto *spin = qobject_cast<QSpinBox *>(m_bindingEditors.value(QLatin1String(key)));
         return spin ? spin->value() : 0;
     };
-    // A number field's value, or Undefined for an empty one, which QJsonObject::insert leaves out: the default.
-    const auto numberOf = [&textOf](const char *key) {
-        bool ok = false;
-        const double number = textOf(key).toDouble(&ok);
-        return ok ? QJsonValue(number) : QJsonValue(QJsonValue::Undefined);
-    };
-    const QString mode = textOf("parseMode");
-    // A CAN信号 binding is kept once it has an ID, so what was typed survives while the signal is still being set
-    // up; the runtime uses it once the ID parses and the signal is valid.
-    const bool configured =
-        ((mode == ParseMode::KeyValue || mode == ParseMode::DataPoint) && !textOf("key").isEmpty()) ||
-        (mode == ParseMode::JsonPath && !textOf("jsonPath").isEmpty()) || mode == ParseMode::HexBytes ||
-        mode == ParseMode::Modbus || mode == ParseMode::S7 ||
-        (mode == ParseMode::CanSignal && !textOf("canId").isEmpty());
-    if (!configured) {
-        m_item->setBinding({});
-    } else {
-        QJsonObject binding{
-            {QStringLiteral("parseMode"), mode},
-            {QStringLiteral("key"), textOf("key")},
-            {QStringLiteral("jsonPath"), textOf("jsonPath")},
-            {QStringLiteral("byteOffset"), intOf("byteOffset")},
-            {QStringLiteral("dataType"), textOf("dataType")},
-            {QStringLiteral("byteOrder"), textOf("byteOrder")},
-            {QStringLiteral("frameHeader"), textOf("frameHeader")},
-            {QStringLiteral("frameTail"), textOf("frameTail")},
-            {QStringLiteral("mbRegIndex"), intOf("mbRegIndex")},
-            {QStringLiteral("mbDataType"), textOf("mbDataType")},
-            {QStringLiteral("mbRegOrder"), textOf("mbRegOrder")},
-            {QStringLiteral("mbFcFilter"), intOf("mbFcFilter")},
-            {QStringLiteral("mbSlaveFilter"), intOf("mbSlaveFilter")},
-            {QStringLiteral("mbArea"), textOf("mbArea")},
-            {QStringLiteral("mbPeriod"), intOf("mbPeriod")},
-        };
-        if (mode == ParseMode::CanSignal) {
-            const auto *sign = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("canSigned")));
-            binding.insert(QStringLiteral("canId"), textOf("canId"));
-            binding.insert(QStringLiteral("canStartBit"), intOf("canStartBit"));
-            binding.insert(QStringLiteral("canBitLength"), intOf("canBitLength"));
-            binding.insert(QStringLiteral("canByteOrder"), textOf("canByteOrder"));
-            binding.insert(QStringLiteral("canSigned"), sign && sign->currentData().toBool());
-            binding.insert(QStringLiteral("canFactor"), numberOf("canFactor"));
-            binding.insert(QStringLiteral("canOffset"), numberOf("canOffset"));
-        }
-        binding.insert(QStringLiteral("sourceCardId"),textOf("sourceCardId"));
-        const QString endpoint = textOf("sourceEndpoint");
-        if (!endpoint.isEmpty())
-            binding.insert(QStringLiteral("sourceEndpoint"), endpoint);
-        binding.insert(QStringLiteral("s7"),QJsonObject{{QStringLiteral("address"),textOf("s7Address")},{QStringLiteral("dataType"),textOf("s7DataType")},{QStringLiteral("period"),intOf("s7Period")}});
-        const QString expression = textOf("expression");
-        binding.insert(QStringLiteral("expression"), expression.isEmpty() ? QJsonValue() : QJsonValue(expression));
-        m_item->setBinding(binding);
-    }
+    // Visual CAN settings live in the binding, alongside the fields in this form.
+    auto binding = m_item->binding();
+    binding.insert(QStringLiteral("parseMode"), textOf("parseMode"));
+    for (const char *key : {"key", "jsonPath", "dataType", "byteOrder", "frameHeader", "frameTail",
+                            "mbDataType", "mbRegOrder", "mbArea", "sourceCardId"})
+        binding.insert(QLatin1String(key), textOf(key));
+    for (const char *key : {"byteOffset", "mbRegIndex", "mbFcFilter", "mbSlaveFilter", "mbPeriod"})
+        binding.insert(QLatin1String(key), intOf(key));
+    const QString endpoint = textOf("sourceEndpoint");
+    binding.insert(QStringLiteral("sourceEndpoint"), endpoint.isEmpty() ? QJsonValue(QJsonValue::Undefined) : QJsonValue(endpoint));
+    binding.insert(QStringLiteral("s7"), QJsonObject{{QStringLiteral("address"), textOf("s7Address")},
+                                                    {QStringLiteral("dataType"), textOf("s7DataType")},
+                                                    {QStringLiteral("period"), intOf("s7Period")}});
+    const QString expression = textOf("expression");
+    binding.insert(QStringLiteral("expression"), expression.isEmpty() ? QJsonValue(QJsonValue::Undefined) : QJsonValue(expression));
+    m_item->setBinding(binding);
     updateVisibility();
     emit modified(QStringLiteral("binding:%1:%2").arg(m_item->widgetId(), field));
 }
@@ -1866,11 +3007,52 @@ void PropertyEditor::updateVisibility()
 {
     if (!m_item) {
         if (m_project) {
+            updateReceiveTemplateRow(QStringLiteral("project.receiveTemplate"), ReceiveTarget::Defaults);
+            setRowVisible(QStringLiteral("parser"), m_project->serial.value(FrameTemplates::ReceiveId).toString().isEmpty());
             setFrameRowsVisible(QString(), m_project->parserType());
         }
         return;
     }
     const WidgetMeta &meta = m_item->meta();
+    for (const PropDef &def : meta.properties) {
+        if (!def.visibilityProperty.isEmpty()) {
+            const bool matches = def.visibilityValues.contains(m_item->propertyValue(def.visibilityProperty));
+            setRowVisible(def.name, matches != def.invertVisibility);
+        }
+    }
+    if (meta.typeName == QLatin1String("LineEdit")) {
+        const bool local = m_item->propertyValue(QStringLiteral("parameterName")).toString().isEmpty();
+        setRowVisible(QStringLiteral("text"), local);
+        setRowVisible(QStringLiteral("inputOnly"), local);
+    }
+    if (meta.typeName == QLatin1String("DataTable")) {
+        const bool recording = m_item->propertyValue(QStringLiteral("recordMode")).toString() ==
+                               QStringLiteral("逐行记录"); // i18n: value
+        const bool points = recording && m_item->propertyValue(QStringLiteral("recordSource")).toString() == QLatin1String("points");
+        setRowVisible(QStringLiteral("recordSource"), recording);
+        setRowVisible(QStringLiteral("recordIntervalMs"), points);
+        setRowVisible(QStringLiteral("recordTriggerPoint"),
+                      points && m_item->propertyValue(QStringLiteral("recordIntervalMs")).toInt() == 0);
+        setRowVisible(QStringLiteral("sourceCardId"), !points);
+        updateRouteEndpoint(QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"), !points);
+    }
+    if (isIndustrialCategory(meta.category)) {
+        const auto caps = industrialCapabilities(meta.typeName, m_item->propertyValue(QStringLiteral("feedbackMode")).toString());
+        for (const char *field : {"minimum", "maximum"})
+            setRowVisible(QLatin1String(field), caps.scale);
+        for (const char *field : {"unit", "decimals"})
+            setRowVisible(QLatin1String(field), caps.numericReadout);
+        const bool showLimits = m_item->propertyValue(QStringLiteral("showLimits")).toBool();
+        for (const char *field : {"lowLimit", "highLimit"})
+            setRowVisible(QLatin1String(field), showLimits);
+        if (auto *label = static_cast<ProblemLabel *>(m_rows.value(QStringLiteral("limitsProblem")).second)) {
+            const bool problem = showLimits && !industrialLimitsValid(
+                m_item->propertyValue(QStringLiteral("lowLimit")).toDouble(),
+                m_item->propertyValue(QStringLiteral("highLimit")).toDouble());
+            label->setProblem(problem ? tr("低限必须小于高限") : QString());
+            setRowVisible(QStringLiteral("limitsProblem"), problem);
+        }
+    }
     if (meta.prop(QStringLiteral("textLayout"))) {
         const bool title = m_item->propertyValue(QStringLiteral("showTitle")).toBool();
         const bool value = m_item->propertyValue(QStringLiteral("showValue")).toBool();
@@ -1890,12 +3072,20 @@ void PropertyEditor::updateVisibility()
             setRowVisible(QLatin1String(field), offset && value);
         }
     }
+    const QString format = m_item->propertyValue(QStringLiteral("displayFormat")).toString();
+    const bool automatic = format == QStringLiteral("自动"); // i18n: value
+    if (meta.typeName == QLatin1String("Label")) {
+        const auto binding = m_item->binding();
+        const bool bound = !binding.isEmpty() && binding.value(QStringLiteral("parseMode")).toString() != ParseMode::None;
+        setRowVisible(QStringLiteral("displayFormat"), bound);
+        setRowVisible(QStringLiteral("decimals"), bound && automatic);
+    }
     if (meta.typeName == QLatin1String("NumericDisplay")) {
         const bool enumeration =
             m_item->propertyValue(QStringLiteral("displayFormat")).toString() == QStringLiteral("枚举"); // i18n: value
         for (const char *key : {"textList", "unknownText", "unknownColor"})
             setRowVisible(QLatin1String(key), enumeration);
-        setRowVisible(QStringLiteral("decimals"), !enumeration);
+        setRowVisible(QStringLiteral("decimals"), automatic);
         setRowVisible(QStringLiteral("unit"), !enumeration);
         setRowVisible(QStringLiteral("fontSize"),
                       m_item->propertyValue(QStringLiteral("displayStyle")).toString() != QStringLiteral("状态徽标")); // i18n: value
@@ -1913,19 +3103,23 @@ void PropertyEditor::updateVisibility()
         help->setVisible(m_item->propertyValue(QStringLiteral("commandMode")).toString() == QLatin1String("CAN"));
     }
     if (meta.typeName == QLatin1String("ToggleSwitch")) {
-        setRowVisible(QStringLiteral("onValue"),
-                      m_item->propertyValue(QStringLiteral("onCondition")).toString() ==
-                          QStringLiteral("等于指定值")); // i18n: value
+        const bool exact = m_item->propertyValue(QStringLiteral("onCondition")).toString() ==
+                           QStringLiteral("等于指定值"); // i18n: value
+        setRowVisible(QStringLiteral("onValue"), exact);
+        setRowVisible(QStringLiteral("offFeedbackValue"), exact);
     }
     if (meta.prop(QStringLiteral("parserConfig"))) {
         const QString parser = m_item->propertyValue(QStringLiteral("defaultParser")).toString();
+        const bool manual = FrameTemplates::receiveIds(m_item->properties()).isEmpty();
+        setRowVisible(QStringLiteral("defaultParser"), manual);
+        updateReceiveTemplateRow(QStringLiteral("connection.receiveTemplate"), ReceiveTarget::Connection);
         setFrameRowsVisible(QStringLiteral("parserConfig."), parser);
-        const QString projectParser = m_project ? m_project->parserType() : QStringLiteral("line");
-        const bool modbus = isModbusParser(LinkParser::effectiveType(parser, projectParser));
-        const bool slave = m_item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave;
-        for (const char *field : {"modbusRole", "modbusSlave"}) {
-            setRowVisible(QLatin1String(field), modbus);
-        }
+        const QString effective = frameFormat(m_project, m_item->properties()).type;
+        const bool modbus = isModbusParser(effective);
+        const bool supportsSlave = LinkParser::supportsModbusSlave(effective);
+        const bool slave = supportsSlave && m_item->propertyValue(QStringLiteral("modbusRole")).toString() == ModbusRole::Slave;
+        setRowVisible(QStringLiteral("modbusRole"), supportsSlave);
+        setRowVisible(QStringLiteral("modbusSlave"), modbus);
         for (const char *field : {"modbusPeriod", "modbusTimeout"}) {
             setRowVisible(QLatin1String(field), modbus && !slave);
         }
@@ -1938,52 +3132,148 @@ void PropertyEditor::updateVisibility()
     if (meta.prop(QStringLiteral("commandMode"))) {
         const QString mode = m_item->propertyValue(QStringLiteral("commandMode")).toString();
         const QString target = m_item->propertyValue(QStringLiteral("commandTargetId")).toString();
+        const auto props = m_item->properties();
         if (auto *box = static_cast<ConnectionSourceEdit *>(m_rows.value(QStringLiteral("commandTargetId")).second))
-            box->setSources(m_project, m_scene, commandRouteTransport(mode, meta.typeName), target);
-        const QSet<QString> shown = modeVisibility().value(mode);
+            box->setSources(m_project, m_scene, CommandEncoder::sendRouteFilter(props, meta.typeName), target);
+        const bool sends = widgetSendsCommands(meta.typeName, props);
+        setRowVisible(CommandEncoder::SendInterval, sends && CommandEncoder::supportsPeriodicSend(mode));
+        bool editsTransmitFrame = sends && mode == QLatin1String("HEX");
+        bool offersSendTemplate = sends && !FrameTemplates::sendParser(mode).isEmpty();
+        const QSet<QString> shown = sends ? modeVisibility().value(mode) : QSet<QString>{};
         for (const QString &field : modeFields()) {
             setRowVisible(field, shown.contains(field));
         }
+        using CommandEncoder::InputListMode;
+        const auto listMode = sends && meta.prop(QStringLiteral("commandInputs")) ? CommandEncoder::inputListMode(props)
+                                                                                 : InputListMode::None;
+        const auto inputs = listMode == InputListMode::None ? QList<CommandEncoder::CommandInput>{}
+                                                           : CommandEncoder::commandInputs(props);
+        const bool batch = !inputs.isEmpty() || CommandEncoder::usesFrameFields(props);
+        if (auto *interval = qobject_cast<QSpinBox *>(m_rows.value(CommandEncoder::SendInterval).second)) {
+            const bool usesCanSettings = mode == QLatin1String("CAN") && meta.typeName != QLatin1String("DataSendCard") &&
+                                         !batch;
+            interval->setSpecialValueText(usesCanSettings ? tr("沿用 CAN 报文设置") : tr("单次发送"));
+        }
+        const bool unified = listMode != InputListMode::None;
+        setRowVisible(QStringLiteral("commandInputs"), unified);
+        if (batch)
+            setRowVisible(QStringLiteral("command"), false);
         for(const QString &field:{QStringLiteral("address"),QStringLiteral("dataType"),QStringLiteral("value"),QStringLiteral("onValue"),QStringLiteral("offValue")}) {
             const bool toggle=meta.typeName==QLatin1String("ToggleSwitch");
-            const bool shown=mode==QLatin1String("S7") && (field==QLatin1String("address") || field==QLatin1String("dataType")
+            const bool shown=sends && mode==QLatin1String("S7") && (field==QLatin1String("address") || field==QLatin1String("dataType")
                 || (toggle ? field==QLatin1String("onValue")||field==QLatin1String("offValue") : field==QLatin1String("value")&&meta.typeName==QLatin1String("PushButton")));
             setRowVisible(QStringLiteral("s7Command.")+field,shown);
         }
-        if (mode == QLatin1String("CAN")) {
+        const bool byteOrder = batch ? std::any_of(inputs.cbegin(), inputs.cend(), [](const auto &input) {
+            return usesByteOrder(input.dataType);
+        }) : usesByteOrder(m_item->propertyValue(QStringLiteral("dataType")).toString());
+        if (sends && mode == QLatin1String("HEX")) {
+            setRowVisible(QStringLiteral("dataType"), !batch);
+            setRowVisible(QStringLiteral("byteOrder"), byteOrder);
+        }
+        if (sends && mode == QLatin1String("CAN") && meta.prop(QStringLiteral("canId"))) {
             // The link ignores these for a message with signals; show them only where they still matter.
-            const auto names = canNames(m_project, currentWidgets(m_project, m_scene), target);
+            const auto names = canNames(m_project, currentWidgets(m_project, m_scene),
+                                        target == DataRoute::Broadcast ? QString() : target);
             if (auto *edit = qobject_cast<FluentQt::LineEdit *>(m_rows.value(QStringLiteral("canId")).second))
                 complete(edit, names.messages);
             const CanTargetKind kind = canTargetKind(names,
                                                      m_item->propertyValue(QStringLiteral("canId")).toString());
-            setRowVisible(QStringLiteral("dataType"), kind.usesRawEncoding);
-            setRowVisible(QStringLiteral("byteOrder"), kind.usesRawEncoding);
+            editsTransmitFrame = kind.usesRawEncoding;
+            offersSendTemplate = kind.usesRawEncoding;
+            setRowVisible(QStringLiteral("dataType"), kind.usesRawEncoding && !batch);
+            setRowVisible(QStringLiteral("byteOrder"), kind.usesRawEncoding && byteOrder);
             setRowVisible(QStringLiteral("canFd"), kind.usesFdSetting);
+            setRowVisible(QStringLiteral("canCycle"), !batch && CommandEncoder::periodicSendInterval(props) == 0);
         }
-        const QString toggle = sendToggle(meta.typeName);
-        // A Modbus-mode control sends whether or not its toggle is on, so its settings stay visible.
-        const bool sends = toggle.isEmpty() || m_item->propertyValue(toggle).toBool() ||
-                           mode == QLatin1String("Modbus") || mode == QLatin1String("S7");
-        setRowVisible(QStringLiteral("commandTargetId"), sends);
-        updateRouteEndpoint(QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"), sends);
-        if (!sends) {
-            for (const QString &field : modeFields()) {
-                setRowVisible(field, false);
+        if (sends && mode == QLatin1String("Modbus") && meta.prop(QStringLiteral("mbFunc"))) {
+            const int function = CommandEncoder::functionCode(m_item->propertyValue(QStringLiteral("mbFunc")).toString());
+            const QString dataType = m_item->propertyValue(QStringLiteral("mbDataType")).toString();
+            const auto spec = CommandEncoder::modbusFunctionSpec(function);
+            const bool registers = spec.argument == CommandEncoder::ModbusArgument::Register;
+            if (auto *box = qobject_cast<FluentQt::ComboBox *>(m_rows.value(QStringLiteral("mbDataType")).second))
+                replaceChoices(box, spec.dataTypes, dataType);
+            const bool writeList = listMode == InputListMode::Registers && batch;
+            setRowVisible(QStringLiteral("mbDataType"), registers && !writeList);
+            const bool usesOrder = writeList ? std::any_of(inputs.cbegin(), inputs.cend(), [](const auto &input) {
+                return CommandEncoder::usesRegisterOrder(input.dataType);
+            }) : registers && spec.dataTypes.contains(dataType) && CommandEncoder::usesRegisterOrder(dataType);
+            setRowVisible(QStringLiteral("mbRegOrder"), usesOrder);
+            setRowVisible(QStringLiteral("mbValue"), !batch && spec.argument != CommandEncoder::ModbusArgument::Unsupported);
+        }
+        if (unified) {
+            for (const char *key : {"command", "commandTemplate", "frameHeader", "frameTail", "dataType", "byteOrder",
+                                    "commandNewline", "commandJsonNewline", "s7Command.value", "mbValue"})
+                setRowVisible(QLatin1String(key), false);
+            if (listMode == InputListMode::Registers)
+                setRowVisible(QStringLiteral("mbRegOrder"), false);
+            if (listMode == InputListMode::S7Value) {
+                setRowVisible(QStringLiteral("s7Command.address"), false);
+                setRowVisible(QStringLiteral("s7Command.dataType"), false);
             }
-            setRowVisible(QStringLiteral("commandMode"), false);
-            setRowVisible(QStringLiteral("commands"), false);
-        } else {
-            setRowVisible(QStringLiteral("commandMode"), true);
-            setRowVisible(QStringLiteral("commands"), true);
         }
+        if (auto *row = m_rows.value(QStringLiteral("sendTemplate")).second; row && offersSendTemplate) {
+            auto *picker = row->findChild<FluentQt::ComboBox *>();
+            fillFrameTemplates(picker, m_project->frameTemplates, props.value(FrameTemplates::SendId).toString(),
+                               tr("独立配置"), FrameTemplates::sendParser(mode));
+            picker->setEnabled(picker->count() > 1);
+        }
+        setRowVisible(QStringLiteral("sendTemplate"), offersSendTemplate);
+        const bool sharedTemplate = offersSendTemplate && m_project &&
+                                    FrameTemplates::sendSettings(m_project->frameTemplates, props).has_value();
+        if (auto *field = qobject_cast<FluentQt::ComboBox *>(m_rows.value(FrameTemplates::SendValueField).second)) {
+            const auto name = props.value(FrameTemplates::SendValueField).toString();
+            const bool supportsMapping = offersSendTemplate && FrameTemplates::isBinarySend(mode);
+            const auto fields = supportsMapping ? FrameTemplates::sendFields(m_project->frameTemplates, props) : QList<HexField>{};
+            const bool show = supportsMapping && (!fields.isEmpty() || !name.isEmpty());
+            setRowVisible(FrameTemplates::SendValueField, show);
+            if (show) {
+                const QSignalBlocker blocker(field);
+                field->clear();
+                field->addItem(tr("整段 HEX"), {}, QString());
+                const auto settings = FrameTemplates::sendSettings(m_project->frameTemplates, props);
+                const auto required = settings ? FrameTemplates::requiredFields(*settings) : QStringList{};
+                for (const auto &entry : fields) {
+                    const auto label = required.contains(entry.name) ? tr("%1（必填）").arg(entry.name) : entry.name;
+                    field->addItem(QStringLiteral("%1 · %2").arg(label, translated(entry.type)), {}, entry.name);
+                }
+                if (!name.isEmpty() && field->findData(name) < 0) {
+                    field->addItem(tr("%1（字段不可用）").arg(name), {}, name);
+                    field->setItemEnabled(field->count() - 1, false);
+                }
+                selectValue(field, name);
+                if (!name.isEmpty())
+                    for (const char *key : {"commandTemplate", "dataType", "byteOrder"})
+                        setRowVisible(QLatin1String(key), false);
+            }
+        }
+        if (sharedTemplate) {
+            for (const char *key : {"frameHeader", "frameTail", "commandNewline", "commandJsonNewline"})
+                setRowVisible(QLatin1String(key), false);
+        }
+        setRowVisible(QStringLiteral("commandTargetId"), sends);
+        setRowVisible(QStringLiteral("confirmBeforeSend"), sends);
+        if (!sends)
+            setRowVisible(QStringLiteral("showSendConfirmationDetails"), false);
+        setRowVisible(QStringLiteral("sendPreview"), sends);
+        setRowVisible(QStringLiteral("transmitFormat"), editsTransmitFrame && !sharedTemplate);
+        if (auto *write = qobject_cast<QLabel *>(m_rows.value(QStringLiteral("modbusSwitchWrite")).second)) {
+            const bool modbus = mode == QLatin1String("Modbus");
+            if (modbus)
+                write->setText(modbusSwitchWriteSummary(m_item->properties()));
+            setRowVisible(QStringLiteral("modbusSwitchWrite"), modbus);
+        }
+        updateRouteEndpoint(QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"), sends);
+        setRowVisible(QStringLiteral("commandMode"), sends);
+        setRowVisible(QStringLiteral("commands"), sends);
     } else {
         updateRouteEndpoint(QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"));
     }
-    updateRouteEndpoint(QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"));
+    if (meta.typeName != QLatin1String("DataTable"))
+        updateRouteEndpoint(QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"));
     if (meta.typeName == QLatin1String("CanMonitor")) {
         setRowVisible(QStringLiteral("autoScroll"),
-                      m_item->propertyValue(QStringLiteral("displayMode")).toString() == QLatin1String("滚动日志")); // i18n: value
+                      m_item->propertyValue(QStringLiteral("displayMode")).toString() == QStringLiteral("滚动日志")); // i18n: value
         setRowVisible(QStringLiteral("autoSaveRows"), m_item->propertyValue(QStringLiteral("autoSave")).toBool());
         setRowVisible(QStringLiteral("autoSaveDirectory"), m_item->propertyValue(QStringLiteral("autoSave")).toBool());
     }
@@ -1997,18 +3287,30 @@ void PropertyEditor::updateVisibility()
             setRowVisible(QLatin1String(field), zlg);
         }
         const auto caps = CanAdapter::caps(adapter, m_item->propertyValue(QStringLiteral("zlgModel")).toString());
+        if (auto *spin = qobject_cast<QSpinBox *>(m_rows.value(QStringLiteral("defaultChannel")).second)) {
+            const QSignalBlocker blocker(spin);
+            spin->setMaximum(caps.channelCount > 0 ? caps.channelCount - 1 : 7);
+            spin->setValue(m_item->propertyValue(QStringLiteral("defaultChannel")).toInt());
+        }
+        const auto presets = [this, &meta](const QString &field, const QStringList &supported) {
+            if (auto *box = qobject_cast<FluentQt::ComboBox *>(m_rows.value(field).second))
+                replaceChoices(box, supported.isEmpty() ? meta.prop(field)->options : supported,
+                               m_item->propertyValue(field).toString());
+        };
+        presets(QStringLiteral("defaultBitrate"), caps.nominalBitrates);
+        presets(QStringLiteral("defaultDataBitrate"), caps.dataBitrates);
         const QString custom = m_item->propertyValue(zlg ? QStringLiteral("zlgCustomTiming")
                                                         : QStringLiteral("customTiming")).toString();
         const auto timing = CanAdapter::timingOverrides(adapter, caps.customTiming ? custom : QString());
         const bool fd = caps.fdEnabled(m_item->propertyValue(QStringLiteral("canFd")).toBool());
         const bool systemTiming = adapter == CanAdapter::SocketCan; // presets fill the ip link command
-        setRowVisible(QStringLiteral("defaultBitrate"), !timing.nominal);
+        setRowVisible(QStringLiteral("defaultBitrate"), (caps.bitrate || systemTiming) && !timing.nominal);
         setRowVisible(QStringLiteral("defaultSamplePoint"), !zlg && (caps.samplePoint || systemTiming) && !timing.nominal);
         setRowVisible(QStringLiteral("zlgSamplePoint"), zlg && caps.samplePoint && !timing.nominal);
         setRowVisible(QStringLiteral("customTiming"), !zlg && caps.customTiming);
         setRowVisible(QStringLiteral("zlgCustomTiming"), zlg && caps.customTiming);
         setRowVisible(QStringLiteral("canFd"), caps.fd);
-        setRowVisible(QStringLiteral("defaultDataBitrate"), fd && !timing.data);
+        setRowVisible(QStringLiteral("defaultDataBitrate"), fd && (caps.bitrate || systemTiming) && !timing.data);
         setRowVisible(QStringLiteral("defaultDataSamplePoint"), fd && (caps.dataSamplePoint || systemTiming) && !timing.data);
         setRowVisible(QStringLiteral("canBrs"), fd);
         setRowVisible(QStringLiteral("listenOnly"), caps.listenOnly);
@@ -2021,34 +3323,48 @@ void PropertyEditor::updateVisibility()
             setRowVisible(QLatin1String(field), notify);
         }
     }
-    if (meta.typeName == QLatin1String("RealtimeChart")) {
-        const QString mode =
-            m_item->properties().value(storageKey(QStringLiteral("curveParseMode"))).toString(ParseMode::KeyValue);
+    if (usesChartSeries(meta.typeName, m_item->properties())) {
+        const QString mode = itemValue(*meta.prop(QStringLiteral("curveParseMode"))).toString();
         auto *key = static_cast<BindingKeyEdit *>(m_rows.value(QStringLiteral("curveKey")).second);
         const QString source = m_item->properties().value(storageKey(QStringLiteral("curveSourceCardId"))).toString();
+        const auto widgets = currentWidgets(m_project, m_scene);
         if (auto *box = static_cast<ConnectionSourceEdit *>(m_rows.value(QStringLiteral("curveSourceCardId")).second))
             box->setSources(m_project, m_scene, bindingRouteTransport(mode), source);
-        key->setNames(mode == ParseMode::DataPoint ? dataPointNames(m_project)
-                                                 : canNames(m_project, currentWidgets(m_project, m_scene), source).keys,
-                      mode == ParseMode::DataPoint ? tr("选择或搜索工程数据点") : tr("字段名 (如 temperature)"));
-        updateRouteEndpoint(QStringLiteral("curveSourceCardId"), QStringLiteral("curveSourceEndpoint"),
-                            mode != ParseMode::DataPoint);
-        setRowVisible(QStringLiteral("curveSourceCardId"), mode != ParseMode::DataPoint);
-        const QSet<QString> shown = chartParseVisibility().value(mode);
+        if (mode == ParseMode::DataPoint)
+            key->setNames(dataPointNames(m_project), tr("选择或搜索工程数据点"));
+        else if (mode == ParseMode::KeyValue)
+            key->setNames(receivedFieldNames(m_project, widgets, source), tr("字段名 (如 temperature)"));
+        const bool usesSource = mode != ParseMode::DataPoint && mode != ParseMode::None;
+        const bool visualValues = updateReceiveTemplateRow(
+            QStringLiteral("curve.receiveFormat.template"), ReceiveTarget::Curve, usesFreeFrame(mode));
+        setRowVisible(QStringLiteral("curve.receiveFormat"), visualValues);
+        updateRouteEndpoint(QStringLiteral("curveSourceCardId"), QStringLiteral("curveSourceEndpoint"), usesSource);
+        setRowVisible(QStringLiteral("curveSourceCardId"), usesSource);
+        const auto shown = visualValues && mode == ParseMode::HexBytes ? QSet<QString>{} : chartParseVisibility().value(mode);
         for (const QSet<QString> &fields : chartParseVisibility()) {
             for (const QString &field : fields) {
                 setRowVisible(field, shown.contains(field));
             }
         }
+        const auto binding = chartCurveBinding(m_item->properties(), editorCurve(*m_item));
+        updateCanBindingRow(binding, true);
+        auto *modePicker = qobject_cast<FluentQt::ComboBox *>(m_rows.value(QStringLiteral("curveParseMode")).second);
+        if (updateTemplateFieldPicker(QStringLiteral("curve.receiveFormat.field"), ReceiveTarget::Curve, modePicker, mode,
+                                      m_item->properties().value(storageKey(QStringLiteral("curveKey"))).toString()))
+            setRowVisible(QStringLiteral("curveKey"), false);
+        if (mode == ParseMode::HexBytes)
+            setRowVisible(QStringLiteral("curveByteOrder"),
+                          !visualValues && usesByteOrder(m_item->properties().value(storageKey(QStringLiteral("curveDataType")))
+                                            .toString(QStringLiteral("float32"))));
+        setRowVisible(QStringLiteral("curveExpression"), mode != ParseMode::None && !visualValues);
+        if (mode == ParseMode::Modbus)
+            setModbusReadFields(binding, QStringLiteral("curveMbDataType"), QStringLiteral("curveMbRegOrder"));
         for(const QString &field:{QStringLiteral("address"),QStringLiteral("dataType"),QStringLiteral("period")})
             setRowVisible(QStringLiteral("curveS7.")+field,mode==ParseMode::S7);
         // Only once the curve has an ID to judge: an empty one is a field still to fill, not a mistake.
         QString problem;
-        if (mode == ParseMode::CanSignal &&
-            !m_item->properties().value(storageKey(QStringLiteral("curveCanId"))).toString().isEmpty()) {
-            problem = canSignalProblem(chartCurveBinding(
-                m_item->properties(), m_item->propertyValue(QStringLiteral("currentCurve")).toInt(0)));
-        }
+        if (mode == ParseMode::CanSignal && !binding.value(QStringLiteral("canId")).toString().isEmpty())
+            problem = canSignalProblem(binding);
         if (const auto row = m_rows.constFind(QStringLiteral("curveCanProblem")); row != m_rows.constEnd()) {
             if (auto *label = dynamic_cast<ProblemLabel *>(row->second)) {
                 label->setProblem(problem);
@@ -2056,42 +3372,79 @@ void PropertyEditor::updateVisibility()
         }
         setRowVisible(QStringLiteral("curveCanProblem"), !problem.isEmpty());
     }
+    if (m_rows.contains(QStringLiteral("observer.receiveFormat"))) {
+        const bool recordsPoints = meta.typeName == QLatin1String("DataTable") &&
+            m_item->propertyValue(QStringLiteral("recordMode")).toString() == QStringLiteral("逐行记录") && // i18n: value
+            m_item->propertyValue(QStringLiteral("recordSource")).toString() == QLatin1String("points");
+        setRowVisible(QStringLiteral("observer.receiveFormat"), updateReceiveTemplateRow(
+            QStringLiteral("observer.receiveFormat.template"), ReceiveTarget::Observer, !recordsPoints));
+    }
     if (!m_bindingEditors.isEmpty()) {
-        const auto *combo = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("parseMode")));
+        auto *combo = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("parseMode")));
         const QString mode = combo ? selectedValue(combo) : ParseMode::KeyValue;
+        const auto binding = m_item->binding();
         auto *source = static_cast<ConnectionSourceEdit *>(m_bindingEditors.value(QStringLiteral("sourceCardId")));
         const QString sourceId = selectedValue(source);
         source->setSources(m_project, m_scene, bindingRouteTransport(mode), sourceId);
         auto *key = static_cast<BindingKeyEdit *>(m_bindingEditors.value(QStringLiteral("key")));
         key->setNames(mode == ParseMode::DataPoint ? dataPointNames(m_project)
-                                                 : canNames(m_project, currentWidgets(m_project, m_scene), sourceId).keys,
+                                                 : receivedFieldNames(m_project, currentWidgets(m_project, m_scene), sourceId),
                       mode == ParseMode::DataPoint ? tr("选择或搜索工程数据点") : tr("字段名 (如 temperature)"));
-        updateRouteEndpoint(QStringLiteral("binding.sourceCardId"), QStringLiteral("binding.sourceEndpoint"),
-                            mode != ParseMode::DataPoint);
+        const bool usesSource = mode != ParseMode::None && mode != ParseMode::DataPoint;
+        updateRouteEndpoint(QStringLiteral("binding.sourceCardId"), QStringLiteral("binding.sourceEndpoint"), usesSource);
         for(const char *field:{"s7Address","s7DataType","s7Period"})
             setRowVisible(QStringLiteral("binding.")+QLatin1String(field),mode==ParseMode::S7);
-        setRowVisible(QStringLiteral("binding.key"), mode == ParseMode::KeyValue || mode == ParseMode::DataPoint);
-        setRowVisible(QStringLiteral("binding.sourceCardId"), mode != ParseMode::DataPoint);
+        const bool usesTemplateField = updateTemplateFieldPicker(
+            QStringLiteral("binding.receiveFormat.field"), ReceiveTarget::Binding, combo, mode,
+            binding.value(QStringLiteral("key")).toString());
+        setRowVisible(QStringLiteral("binding.key"), !usesTemplateField &&
+                      (mode == ParseMode::KeyValue || mode == ParseMode::DataPoint));
+        updateCanBindingRow(binding, false);
+        setRowVisible(QStringLiteral("binding.sourceCardId"), usesSource);
         setRowVisible(QStringLiteral("binding.jsonPath"), mode == ParseMode::JsonPath);
+        const bool visualValues = updateReceiveTemplateRow(
+            QStringLiteral("binding.receiveFormat.template"), ReceiveTarget::Binding, usesFreeFrame(mode));
+        setRowVisible(QStringLiteral("binding.receiveFormat"), visualValues);
         for (const char *field : {"byteOffset", "dataType", "byteOrder", "frameHeader", "frameTail"}) {
-            setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::HexBytes);
+            setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::HexBytes && !visualValues);
+        }
+        if (mode == ParseMode::HexBytes && !visualValues) {
+            const auto *type = qobject_cast<FluentQt::ComboBox *>(m_bindingEditors.value(QStringLiteral("dataType")));
+            setRowVisible(QStringLiteral("binding.byteOrder"), usesByteOrder(selectedValue(type)));
         }
         for (const char *field :
              {"mbArea", "mbRegIndex", "mbDataType", "mbRegOrder", "mbFcFilter", "mbSlaveFilter", "mbPeriod"}) {
             setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::Modbus);
         }
-        for (const char *field :
-             {"canId", "canStartBit", "canBitLength", "canByteOrder", "canSigned", "canFactor", "canOffset"}) {
-            setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::CanSignal);
+        if (mode == ParseMode::Modbus)
+            setModbusReadFields(m_item->binding(), QStringLiteral("binding.mbDataType"), QStringLiteral("binding.mbRegOrder"));
+        setRowVisible(QStringLiteral("binding.savePoint"), usesSource && BindingEntry::fromWidget(m_item->toJson()).has_value());
+        setRowVisible(QStringLiteral("binding.example"), mode != ParseMode::None);
+        if (m_rows.contains(QStringLiteral("binding.localWrite"))) {
+            const auto links = routeConnections(currentWidgets(m_project, m_scene), RouteTransport::ModbusSlave, false,
+                                                m_project ? m_project->parserType() : QStringLiteral("line"));
+            const auto isLocal = [&sourceId](const auto &entry) { return entry.first == sourceId; };
+            setRowVisible(QStringLiteral("binding.localWrite"), mode == ParseMode::Modbus &&
+                          (sourceId.isEmpty() ? links.size() == 1 : std::any_of(links.cbegin(), links.cend(), isLocal)));
         }
-        // Only once there is a binding to judge: an empty ID is a field still to fill, not a mistake.
-        const QJsonObject binding = m_item ? m_item->binding() : QJsonObject();
-        const QString problem =
-            mode == ParseMode::CanSignal && !binding.isEmpty() ? canSignalProblem(binding) : QString();
-        if (auto *label = dynamic_cast<ProblemLabel *>(m_bindingEditors.value(QStringLiteral("canProblem")))) {
+        QString problem;
+        if (mode == ParseMode::CanSignal)
+            problem = canSignalProblem(binding);
+        else if ((mode == ParseMode::KeyValue || mode == ParseMode::DataPoint || mode == ParseMode::CanField) &&
+                 binding.value(QStringLiteral("key")).toString().isEmpty())
+            problem = usesTemplateField ? tr("选择模板字段")
+                : mode == ParseMode::CanField ? tr("选择 CAN 信号")
+                : mode == ParseMode::DataPoint ? tr("请选择工程数据点") : tr("请填写绑定字段");
+        else if (mode == ParseMode::JsonPath && binding.value(QStringLiteral("jsonPath")).toString().isEmpty())
+            problem = tr("请填写 JSON 路径");
+        else if (m_bindingOnly && usesSource && m_project)
+            problem = dataPointSourceProblem(binding, m_project->widgets, m_project->parserType());
+        setRowVisible(QStringLiteral("binding.expression"), mode != ParseMode::None && !visualValues &&
+                      !industrialCapabilities(meta.typeName).structuredInput);
+        if (auto *label = static_cast<ProblemLabel *>(m_bindingEditors.value(QStringLiteral("problem")))) {
             label->setProblem(problem);
         }
-        setRowVisible(QStringLiteral("binding.canProblem"), !problem.isEmpty());
+        setRowVisible(QStringLiteral("binding.problem"), !problem.isEmpty());
     }
 }
 

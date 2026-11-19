@@ -56,4 +56,30 @@ QString toHexString(const QByteArray &bytes, bool spaced)
     return QString::fromLatin1(spaced ? bytes.toHex(' ').toUpper() : bytes.toHex().toUpper());
 }
 
+qsizetype HexFrameLayout::lengthCoverageStart() const
+{
+    return lengthCovers == LengthCovers::Frame ? 0 : lengthOffset + lengthSize;
+}
+
+qsizetype HexFrameLayout::lengthBase() const
+{
+    const auto excludedTrailer = lengthCovers == LengthCovers::Data ? footerSize + checksumSize : 0;
+    return lengthCoverageStart() + excludedTrailer;
+}
+
+std::optional<FrameByteRange> HexFrameLayout::lengthCoverage(qsizetype frameSize) const
+{
+    if (lengthSize == 0 || frameSize < lengthOffset + lengthSize || frameSize < lengthBase())
+        return std::nullopt;
+    return FrameByteRange{lengthCoverageStart(), frameSize - lengthBase()};
+}
+
+std::optional<FrameByteRange> HexFrameLayout::checksumCoverage(qsizetype frameSize) const
+{
+    const auto end = checksumOffset(frameSize);
+    if (checksumSize == 0 || end < checksumStart)
+        return std::nullopt;
+    return FrameByteRange{checksumStart, end - checksumStart};
+}
+
 } // namespace fhmi

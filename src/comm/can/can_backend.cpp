@@ -9,8 +9,50 @@
 #endif
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
+#include <QtCore/QPointer>
 
 namespace fhmi {
+namespace {
+
+class LoopbackCanBackend final : public CanBackend
+{
+  public:
+    bool open(const CanSettings &, QString *) override
+    {
+        m_open = true;
+        return true;
+    }
+    void close() override { m_open = false; }
+    bool isOpen() const override { return m_open; }
+    QString description() const override
+    {
+        return QCoreApplication::translate("fhmi", "虚拟 CAN 回环");
+    }
+    bool send(const CanFrame &frame, QString *error) override
+    {
+        if (!m_open) {
+            if (error)
+                *error = QCoreApplication::translate("fhmi", "CAN 未连接");
+            return false;
+        }
+        CanFrame sent = frame;
+        sent.timestampMs = QDateTime::currentMSecsSinceEpoch();
+        sent.receivedAtMs = Can::monotonicMs();
+        CanFrame received = sent;
+        received.submissionId = 0;
+        const QPointer<LoopbackCanBackend> alive(this);
+        emit framesSent({sent});
+        if (alive && m_open)
+            emit framesReceived({received});
+        return true;
+    }
+
+  private:
+    bool m_open = false;
+};
+
+} // namespace
 
 namespace CanAdapter {
 
@@ -27,10 +69,12 @@ CanAdapterCaps caps(const QString &adapter, const QString &zlgModel)
     if (adapter == Zlg) {
         return ZlgBackend::caps(zlgModel);
     }
-    if (adapter == SocketCan) {
-        caps.autoRecover = true;
+    if (adapter == SocketCan || adapter == Virtual) {
+        const bool systemChannel = adapter == SocketCan;
+        caps.channelList = systemChannel;
+        caps.autoRecover = systemChannel;
 #ifndef Q_OS_LINUX
-        caps.supported = false;
+        caps.supported = !systemChannel;
 #endif
         caps.bitrate = false;
         caps.samplePoint = false;
@@ -142,6 +186,8 @@ std::unique_ptr<CanBackend> CanBackend::create(const QString &adapter, QString *
     if (adapter == CanAdapter::Slcan) {
         return std::make_unique<SlcanBackend>();
     }
+    if (adapter == CanAdapter::Virtual)
+        return std::make_unique<LoopbackCanBackend>();
     return unsupported(QCoreApplication::translate("fhmi", "未知的 CAN 适配器: %1").arg(adapter));
 }
 

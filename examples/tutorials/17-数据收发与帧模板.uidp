@@ -1,0 +1,332 @@
+{
+  "version": "1.3",
+  "appName": "数据收发与帧模板",
+  "canvas": {
+    "width": 1120,
+    "height": 750,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line"
+  },
+  "frameTemplates": {
+    "speed-frame": {
+      "name": "转速帧",
+      "parser": "hex",
+      "parserConfig": {
+        "header": "AA 55",
+        "footer": "0D",
+        "lengthOffset": 2,
+        "lengthSize": 1,
+        "lengthCovers": "数据",
+        "checksum": "CRC16-Modbus",
+        "checksumStart": 2,
+        "checksumEndian": "小端(LE)",
+        "fields": [
+          [
+            "cmd",
+            1,
+            1,
+            "uint8"
+          ],
+          [
+            "rpm",
+            2,
+            2,
+            "uint16",
+            "小端(LE)"
+          ]
+        ],
+        "sendDefaults": {
+          "cmd": "16"
+        },
+        "sendRequiredFields": [
+          "rpm"
+        ]
+      },
+      "sample": "AA 55 03 10 DC 05 99 66 0D"
+    }
+  },
+  "widgets": [
+    {
+      "type": "Label",
+      "id": "lessonTitle",
+      "geometry": {
+        "x": 24,
+        "y": 16,
+        "w": 1070,
+        "h": 34
+      },
+      "properties": {
+        "text": "数据收发与帧模板",
+        "fontSize": 24,
+        "bold": true
+      }
+    },
+    {
+      "type": "Label",
+      "id": "lessonSteps",
+      "geometry": {
+        "x": 24,
+        "y": 58,
+        "w": 1070,
+        "h": 24
+      },
+      "properties": {
+        "text": "先连接右侧，再连接左侧。输入转速后回车或点「发送转速」，再到右侧回送并查看反馈。",
+        "fontSize": 13
+      }
+    },
+    {
+      "type": "TcpConfigCard",
+      "id": "hmi",
+      "geometry": {
+        "x": 24,
+        "y": 96,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "上位机 · TCP 客户端",
+        "defaultMode": "客户端",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39172,
+        "receiveFrameTemplateId": "speed-frame"
+      }
+    },
+    {
+      "type": "TcpConfigCard",
+      "id": "device",
+      "geometry": {
+        "x": 568,
+        "y": 96,
+        "w": 528,
+        "h": 200
+      },
+      "properties": {
+        "title": "模拟设备 · TCP 服务端",
+        "defaultMode": "服务端",
+        "defaultHost": "127.0.0.1",
+        "defaultPort": 39172,
+        "receiveFrameTemplateId": "speed-frame"
+      }
+    },
+    {
+      "type": "LineEdit",
+      "id": "rpmInput",
+      "geometry": {
+        "x": 24,
+        "y": 302,
+        "w": 370,
+        "h": 36
+      },
+      "properties": {
+        "title": "目标转速（回车）",
+        "text": "1500",
+        "placeholderText": "输入转速，可按回车发送",
+        "inputOnly": false,
+        "commandMode": "HEX",
+        "commandTargetId": "hmi",
+        "sendFrameTemplateId": "speed-frame",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendFrameField": "rpm"
+      }
+    },
+    {
+      "type": "PushButton",
+      "id": "sendSpeed",
+      "geometry": {
+        "x": 408,
+        "y": 302,
+        "w": 144,
+        "h": 36
+      },
+      "properties": {
+        "text": "发送转速",
+        "buttonStyle": "强调",
+        "commandMode": "HEX",
+        "commandTargetId": "hmi",
+        "sendFrameTemplateId": "speed-frame",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendUseTemplateFields": true,
+        "sendFrameFieldBindings": [
+          {
+            "field": "rpm",
+            "inputId": "rpmInput"
+          }
+        ]
+      }
+    },
+    {
+      "type": "PushButton",
+      "id": "sendFeedback",
+      "geometry": {
+        "x": 938,
+        "y": 302,
+        "w": 158,
+        "h": 36
+      },
+      "properties": {
+        "text": "回送设备反馈",
+        "commandMode": "HEX",
+        "commandTargetId": "device",
+        "sendFrameTemplateId": "speed-frame",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true,
+        "sendUseTemplateFields": true,
+        "sendFrameFieldBindings": [
+          {
+            "field": "cmd",
+            "value": "17"
+          },
+          {
+            "field": "rpm",
+            "inputId": "@data:设备收到的目标"
+          }
+        ]
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "hmiSpeed",
+      "geometry": {
+        "x": 24,
+        "y": 356,
+        "w": 528,
+        "h": 90
+      },
+      "properties": {
+        "title": "上位机收到的反馈",
+        "value": "—",
+        "unit": "rpm",
+        "fontSize": 28,
+        "decimals": "0"
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "反馈转速"
+      }
+    },
+    {
+      "type": "NumericDisplay",
+      "id": "deviceSpeed",
+      "geometry": {
+        "x": 568,
+        "y": 356,
+        "w": 528,
+        "h": 90
+      },
+      "properties": {
+        "title": "设备收到的目标",
+        "value": "—",
+        "unit": "rpm",
+        "fontSize": 28,
+        "decimals": "0"
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "device",
+        "key": "rpm"
+      }
+    },
+    {
+      "type": "RealtimeChart",
+      "id": "rpmTrace",
+      "geometry": {
+        "x": 24,
+        "y": 462,
+        "w": 528,
+        "h": 262
+      },
+      "properties": {
+        "title": "反馈转速曲线",
+        "curveCount": 1,
+        "_curve_0_name": "反馈转速 (rpm)",
+        "_curve_0_parseMode": "键值匹配",
+        "_curve_0_sourceCardId": "hmi",
+        "_curve_0_key": "rpm"
+      }
+    },
+    {
+      "type": "TabWidget",
+      "id": "deviceLogs",
+      "geometry": {
+        "x": 568,
+        "y": 462,
+        "w": 528,
+        "h": 262
+      },
+      "properties": {
+        "tabNames": "收发报文\n记录表格",
+        "navigationStyle": "下划线导航",
+        "currentTab": 0
+      },
+      "children": [
+        {
+          "type": "DataRecvCard",
+          "id": "devicePackets",
+          "geometry": {
+            "x": 10,
+            "y": 46,
+            "w": 506,
+            "h": 204
+          },
+          "properties": {
+            "title": "模拟设备报文",
+            "sourceCardId": "device"
+          }
+        },
+        {
+          "type": "DataTable",
+          "id": "deviceRecords",
+          "geometry": {
+            "x": 10,
+            "y": 46,
+            "w": 506,
+            "h": 204
+          },
+          "properties": {
+            "sourceCardId": "device",
+            "recordMode": "逐行记录",
+            "recordSource": "messages",
+            "recordColumns": [
+              {
+                "field": "cmd",
+                "label": "命令码"
+              },
+              {
+                "field": "rpm",
+                "label": "目标转速 (rpm)"
+              }
+            ]
+          },
+          "tabIndex": 1
+        }
+      ]
+    }
+  ],
+  "logic": {
+    "points": [
+      {
+        "name": "设备收到的目标",
+        "unit": "rpm",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "rpm"
+        }
+      },
+      {
+        "name": "反馈转速",
+        "unit": "rpm",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "rpm"
+        }
+      }
+    ]
+  }
+}

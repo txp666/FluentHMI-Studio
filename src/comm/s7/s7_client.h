@@ -16,6 +16,7 @@ public:
     void remove(const QString &id);
     void clear();
     bool connected(const QString &id) const;
+    quint64 sendSession(const QString &id) const;
     void setNeeds(const QList<S7::Need> &needs);
     bool write(const S7::Command &command, QString *error = nullptr);
 signals:

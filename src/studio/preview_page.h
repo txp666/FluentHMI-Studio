@@ -41,6 +41,7 @@ class PreviewPage : public QWidget
     RuntimeSurface *m_surface = nullptr;
     FluentQt::PrimaryPushButton *m_run = nullptr;
     FluentQt::PushButton *m_export = nullptr;
+    FluentQt::PushButton *m_dataMonitor = nullptr;
     FluentQt::CaptionLabel *m_status = nullptr;
 };
 

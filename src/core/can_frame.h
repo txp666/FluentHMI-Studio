@@ -75,7 +75,18 @@ QString frameLine(const CanFrame &frame);
 // DataSendCard on a CAN link, cansend syntax: <ID>#<data> a classic frame, <ID>#R a remote frame (optionally
 // #R<len>), <ID>##<flags><data> an FD frame whose flags nibble has BRS at bit 0. Data is hex bytes; dots and
 // spaces between them are allowed. nullopt for anything else.
-std::optional<CanFrame> parseSendText(const QString &text, QString *error = nullptr);
+std::optional<CanFrame> parseSendText(const QString &text, QString *error = nullptr, bool padFd = true);
+
+struct FrameSample
+{
+    std::optional<CanId> id;
+    QByteArray bytes;
+    bool fd = false;
+    QString error;
+};
+
+// Accepts bare payload bytes, a frameLine(), or cansend syntax. An identified sample describes the wire as-is.
+FrameSample parseFrameSample(const QString &text);
 
 } // namespace Can
 

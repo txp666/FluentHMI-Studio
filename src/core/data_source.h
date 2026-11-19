@@ -4,6 +4,7 @@
 #include <QtCore/QString>
 
 #include <atomic>
+#include <optional>
 
 namespace fhmi {
 
@@ -21,11 +22,13 @@ struct DataSource
 
 struct DataRoute
 {
-    QString connectionId; // empty: all matching connections, preserving existing projects
+    inline static const QString Broadcast = QStringLiteral("@all");
+
+    QString connectionId; // empty: automatic for actions and bindings
     QString endpoint;     // empty: the connection's normal destination / all incoming streams
 
-    bool isExplicit() const { return !connectionId.isEmpty() || !endpoint.isEmpty(); }
-    bool acceptsConnection(QStringView id) const { return connectionId.isEmpty() || connectionId == id; }
+    bool isBroadcast() const { return connectionId == Broadcast; }
+    bool acceptsConnection(QStringView id) const { return connectionId.isEmpty() || isBroadcast() || connectionId == id; }
 
     bool accepts(const DataSource &source) const
     {
@@ -39,14 +42,27 @@ struct DataRoute
 
 enum class RouteTransport { Any, Bytes, Can, S7, ModbusSlave };
 
-inline RouteTransport commandRouteTransport(QStringView mode, QStringView widgetType)
+struct ModbusDestination
 {
-    if (mode == QLatin1String("CAN"))
-        return RouteTransport::Can;
-    if (mode == QLatin1String("S7"))
-        return RouteTransport::S7;
-    return widgetType == QLatin1String("DataSendCard") ? RouteTransport::Any : RouteTransport::Bytes;
-}
+    int slave;
+    int function;
+
+    bool acceptsLocalSlave(int unit) const
+    {
+        return slave == unit && (function == 0x05 || function == 0x06 || function == 0x10);
+    }
+    bool operator==(const ModbusDestination &other) const { return slave == other.slave && function == other.function; }
+};
+
+struct RouteFilter
+{
+    RouteTransport transport;
+    std::optional<ModbusDestination> modbus;
+
+    RouteFilter(RouteTransport transport) : transport(transport) {}
+    RouteFilter(ModbusDestination modbus) : transport(RouteTransport::Bytes), modbus(modbus) {}
+    bool operator==(const RouteFilter &other) const { return transport == other.transport && modbus == other.modbus; }
+};
 
 inline RouteTransport widgetReceiveTransport(QStringView widgetType)
 {

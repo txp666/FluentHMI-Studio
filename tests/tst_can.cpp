@@ -6,6 +6,7 @@
 #include "core/can_frame.h"
 #include "core/can_signal.h"
 #include "core/can_timing.h"
+#include "core/command_encoder.h"
 #include "core/dbc.h"
 
 #include <QtCore/QFile>
@@ -334,6 +335,16 @@ class TestCan : public QObject
         QCOMPARE(lines->at(1).signal.factor, 0.5);
         QCOMPARE(lines->at(1).signal.offset, -40.0);
         QCOMPARE(lines->at(2).id, (CanId{0x123, true}));
+        InlineSignal crossByte = lines->at(1);
+        crossByte.signal.start = 2;
+        crossByte.signal.length = 5;
+        QCOMPARE(crossByte.signal.bitPositions(), QList<int>({2, 1, 0, 15, 14}));
+        const auto roundTrip = parseInlineSignals(formatInlineSignal(crossByte), &error);
+        QVERIFY2(roundTrip, qPrintable(error));
+        QCOMPARE(roundTrip->first().id, crossByte.id);
+        QCOMPARE(roundTrip->first().signal.bitPositions(), crossByte.signal.bitPositions());
+        QCOMPARE(roundTrip->first().signal.offset, crossByte.signal.offset);
+        QCOMPARE(roundTrip->first().signal.factor, crossByte.signal.factor);
 
         QVERIFY(!parseInlineSignals(QStringLiteral("102 A : 0|8@1+\n102 B : 8|8@2+\n"), &error));
         QVERIFY2(error.contains(QStringLiteral("2")), qPrintable(error)); // names the line
@@ -345,6 +356,9 @@ class TestCan : public QObject
         CanFrame frame{0x102, false, false, false, false, false, hex(QStringLiteral("75 40 B8 0B 00 00 00 2A")), 0};
         const Message message = set->decode(frame);
         QCOMPARE(message.value(QStringLiteral("Extra")).toLongLong(), 42);
+        QCOMPARE(message.value(QStringLiteral("0x102.Extra")).toLongLong(), 42);
+        QVERIFY(set->definesSignal(CanId{0x102, false}, QStringLiteral("0x102.Extra")));
+        QVERIFY(!set->definesSignal(CanId{0x102, true}, QStringLiteral("0x102.Extra")));
         QCOMPARE(message.keys().last(), QStringLiteral("Extra")); // DBC signals first, then inline ones
     }
 
@@ -435,6 +449,38 @@ class TestCan : public QObject
         QCOMPARE(Can::frameLine(frame), QStringLiteral("0x102 [8] 75 40 B8 0B 00 00 00 00"));
         const CanFrame fd{0x18FF50E5, true, true, true, false, false, hex(QStringLiteral("01")), 0};
         QCOMPARE(Can::frameLine(fd), QStringLiteral("0x18FF50E5 [FD] [BRS] [EXT] [1] 01"));
+        const auto sample = Can::parseFrameSample(Can::frameLine(fd));
+        QVERIFY(sample.error.isEmpty() && sample.id && sample.id->extended && sample.fd);
+        QCOMPARE(sample.bytes, fd.data);
+        const auto fdSample = Can::parseFrameSample(QStringLiteral("123##1000102030405060708090A0B"));
+        QVERIFY(fdSample.error.isEmpty() && fdSample.fd);
+        QCOMPARE(fdSample.bytes.size(), 12);
+        for (const QString &invalid : {QStringLiteral("123 [9] 11 22 33 44 55 66 77 88 99"),
+                                       QStringLiteral("123#112233445566778899"),
+                                       QStringLiteral("123##1112233445566778899"),
+                                       QStringLiteral("123 [FD] [9] 11 22 33 44 55 66 77 88 99"),
+                                       QStringLiteral("123 [2] 11"), QStringLiteral("123 [RTR] [8]")})
+            QVERIFY2(!Can::parseFrameSample(invalid).error.isEmpty(), qPrintable(invalid));
+        QVERIFY(Can::parseFrameSample(QStringLiteral("11 22 33 44 55 66 77 88 99")).error.isEmpty());
+    }
+
+    void overlappingAssignmentsRejectDifferentValuesInEitherOrder()
+    {
+        const auto set = CanSignalSet::build({}, QStringLiteral("123 whole : 0|8@1+\n123 ready : 0|1@0+"));
+        QVERIFY(set);
+        CanCommand command;
+        command.target = QStringLiteral("123");
+        for (const QString &assignment : {QStringLiteral("whole=0, ready=1"), QStringLiteral("ready=1; whole=0")}) {
+            command.assignments = assignment;
+            QString error;
+            QVERIFY(!set->preparePayload(command, &error));
+            QVERIFY(error.contains(QStringLiteral("重叠位")));
+        }
+        command.assignments = QStringLiteral("whole=3, ready=1");
+        const auto payload = set->preparePayload(command);
+        QVERIFY(payload);
+        QCOMPARE(payload->frame.data, hex("0300000000000000"));
+        QCOMPARE(payload->signalMask, hex("FF00000000000000"));
     }
 
     void filter()

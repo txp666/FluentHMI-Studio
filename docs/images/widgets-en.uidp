@@ -49,7 +49,8 @@
         "h": 36
       },
       "properties": {
-        "placeholderText": "Add a note"
+        "placeholderText": "Add a note",
+        "commandTargetId": "serialLink"
       }
     },
     {
@@ -125,7 +126,11 @@
         "h": 36
       },
       "properties": {
-        "items": "Manual\nAuto\nService",
+        "options": [
+          {"label": "Manual", "value": ""},
+          {"label": "Auto", "value": ""},
+          {"label": "Service", "value": ""}
+        ],
         "currentIndex": 1
       }
     },
@@ -139,7 +144,11 @@
         "h": 36
       },
       "properties": {
-        "items": "Manual\nAuto\nService",
+        "options": [
+          {"label": "Manual", "value": ""},
+          {"label": "Auto", "value": ""},
+          {"label": "Service", "value": ""}
+        ],
         "currentIndex": 1,
         "selectionStyle": "分段"
       }
@@ -154,7 +163,11 @@
         "h": 36
       },
       "properties": {
-        "items": "Manual\nAuto\nService",
+        "options": [
+          {"label": "Manual", "value": ""},
+          {"label": "Auto", "value": ""},
+          {"label": "Service", "value": ""}
+        ],
         "currentIndex": 1,
         "selectionStyle": "单选组"
       }
@@ -443,8 +456,10 @@
         "displayPoints": 48,
         "curveCount": 2,
         "_curve_0_name": "Measured",
+        "_curve_0_sourceCardId": "serialLink",
         "_curve_0_key": "temperature",
         "_curve_1_name": "Setpoint",
+        "_curve_1_sourceCardId": "serialLink",
         "_curve_1_key": "setpoint"
       }
     },

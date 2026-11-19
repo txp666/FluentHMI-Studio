@@ -1,12 +1,27 @@
 #pragma once
+#include "core/data_source.h"
 #include "core/message.h"
 #include <QtCore/QDateTime>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QObject>
 #include <QtCore/QSet>
+#include <QtCore/QTimer>
 
 namespace fhmi {
+
+enum class DataQuality { Waiting, Current, Old, Invalid, ConversionFailed, Ambiguous, ConfigurationError };
+QString dataQualityText(DataQuality quality);
+
+struct DataPointSample
+{
+    QVariant value; // Last good value remains available for diagnostics.
+    DataSource source;
+    QDateTime timestamp;
+    DataQuality quality = DataQuality::Waiting;
+    QString detail;
+};
+
 struct AlarmState
 {
     QString id, text;
@@ -22,12 +37,17 @@ class ProjectData : public QObject
   public:
     explicit ProjectData(QObject *parent = nullptr);
     void configure(const QJsonObject &logic, const QString &historyFile = {});
-    void setValue(const QString &name, const QVariant &value, quint64 stream = 0);
+    void setSample(const QString &name, const QVariant &value, const DataSource &source, DataQuality quality,
+                   const QDateTime &timestamp = {}, const QString &detail = {});
+    void setProblem(const QString &name, DataQuality quality, const QString &detail = {});
+    bool setParameter(const QString &name, const QString &text, bool invalidateOnError = false);
+    void markOld(const QString &name, quint64 stream);
     void invalidateStream(quint64 stream);
     void clearValues();
     void evaluate(); // commit one incoming message/frame atomically before evaluating dependencies
     Message values() const { return m_values; }
-    quint64 valueStream(const QString &name) const { return m_streams.value(name); }
+    DataPointSample sample(const QString &name) const;
+    QList<quint64> sampleStreams(const QString &name) const;
     QList<AlarmState> alarms() const { return m_states; }
     QJsonArray history() const { return m_history; }
     bool audible() const;
@@ -52,16 +72,27 @@ class ProjectData : public QObject
         QString name;
         Condition formula;
     };
+    struct Point
+    {
+        DataPointSample sample;
+        QHash<quint64, DataPointSample> sources;
+        QVariant initial;
+        int staleAfterMs = 0;
+    };
     static Condition condition(const QString &expression);
     void record(const AlarmState &state, const QString &event, const QDateTime &time);
     QVariant calculate(const QString &expression) const;
     void updateHistory(const QString &file, const QJsonArray &records);
     void reportHistoryError(const QString &file, const QString &message);
+    void publish(const QString &name, Point &point, DataPointSample sample);
+    void selectSample(const QString &name, Point &point);
+    void expireSamples();
     QList<DerivedPoint> m_derived;
     QList<Condition> m_alarmConditions;
     Message m_values;
     QSet<QString> m_changed;
-    QHash<QString, quint64> m_streams;
+    QHash<QString, Point> m_points;
+    QTimer m_expiry;
     QList<AlarmState> m_states;
     QJsonArray m_history;
     QJsonArray m_recent;

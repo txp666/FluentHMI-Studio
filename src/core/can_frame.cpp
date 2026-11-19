@@ -178,7 +178,7 @@ QString frameLine(const CanFrame &frame)
     return parts.join(QLatin1Char(' '));
 }
 
-std::optional<CanFrame> parseSendText(const QString &text, QString *error)
+std::optional<CanFrame> parseSendText(const QString &text, QString *error, bool padFd)
 {
     const QString input = text.trimmed();
     const auto invalid = [error]() {
@@ -210,10 +210,12 @@ std::optional<CanFrame> parseSendText(const QString &text, QString *error)
         frame.fd = true;
         frame.brs = flags & 0x1;
         frame.data = *data;
-        if (!padFdPayload(frame.data)) {
+        if (frame.data.size() > 64) {
             fail(error, QCoreApplication::translate("fhmi", "CAN FD 数据最多 64 字节"));
             return std::nullopt;
         }
+        if (padFd)
+            padFdPayload(frame.data);
         return frame;
     }
     if (rest.startsWith(u'R') || rest.startsWith(u'r')) {
@@ -238,6 +240,55 @@ std::optional<CanFrame> parseSendText(const QString &text, QString *error)
     }
     frame.data = *data;
     return frame;
+}
+
+FrameSample parseFrameSample(const QString &text)
+{
+    const auto tr = [](const char *source) { return QCoreApplication::translate("fhmi", source); };
+    const QString input = text.trimmed();
+    FrameSample sample;
+    bool dataFrame = true;
+    qsizetype declaredSize = -1;
+    if (input.contains(u'#')) {
+        const auto frame = parseSendText(input, &sample.error, false);
+        if (!frame)
+            return sample;
+        sample.id = CanId{frame->id, frame->extended};
+        sample.fd = frame->fd;
+        sample.bytes = frame->data;
+        dataFrame = !frame->rtr && !frame->error;
+    } else {
+        static const QRegularExpression line(
+            QStringLiteral(R"(^(\S+)\s+((?:\[(?:ERR|FD|BRS|EXT|RTR)\]\s*)*)\[(\d{1,2})\]\s*(.*)$)"));
+        const auto match = line.match(input);
+        if (match.hasMatch()) {
+            sample.id = parseId(match.capturedView(1), &sample.error);
+            if (!sample.id)
+                return sample;
+            const auto flags = match.capturedView(2);
+            if (flags.contains(QLatin1String("[EXT]")))
+                sample.id->extended = true;
+            sample.fd = flags.contains(QLatin1String("[FD]"));
+            dataFrame = !flags.contains(QLatin1String("[RTR]")) && !flags.contains(QLatin1String("[ERR]"));
+            declaredSize = match.capturedView(3).toInt();
+        }
+        const auto bytes = sendData(match.hasMatch() ? match.capturedView(4) : QStringView(input));
+        if (!bytes || bytes->size() > 64) {
+            sample.error = tr("请输入完整的 HEX 字节，最多 64 字节");
+            return sample;
+        }
+        sample.bytes = *bytes;
+    }
+    const auto length = sample.bytes.size();
+    if (!dataFrame)
+        sample.error = tr("远程帧或错误帧没有可解析的数据");
+    else if (declaredSize >= 0 && declaredSize != length)
+        sample.error = tr("样例报文的字节数与标记不符");
+    else if (sample.id && !sample.fd && length > 8)
+        sample.error = tr("CAN 数据最多 8 字节，CAN FD 请用 ID##标志数据");
+    else if (sample.fd && !isValidFdLength(int(length)))
+        sample.error = tr("CAN FD 样例长度应为 0–8、12、16、20、24、32、48 或 64 字节");
+    return sample;
 }
 
 } // namespace Can

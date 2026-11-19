@@ -1,12 +1,16 @@
 #include "core/widget_meta.h"
 
+#include "core/binding.h"
+#include "core/command_encoder.h"
 #include "core/i18n.h"
 #include "core/industrial_catalog.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QHash>
+#include <QtCore/QJsonArray>
 
 #include <algorithm>
+#include <cmath>
 
 namespace fhmi {
 
@@ -52,6 +56,17 @@ QJsonObject WidgetMeta::newWidgetProperties() const
     for (const PropDef &def : properties) {
         if ((def.type == PropType::String || def.type == PropType::Text) && def.defaultValue.isString()) {
             props.insert(def.name, translated(def.defaultValue.toString()));
+        } else if (def.defaultValue.isArray() && std::any_of(def.columns.cbegin(), def.columns.cend(), [](const auto &column) {
+                       return column.first == QLatin1String("label");
+                   })) {
+            QJsonArray rows;
+            for (const auto &entry : def.defaultValue.toArray()) {
+                auto row = entry.toObject();
+                const QString label = row.value(QStringLiteral("label")).toString();
+                row.insert(QStringLiteral("label"), translated(label));
+                rows.append(row);
+            }
+            props.insert(def.name, rows);
         }
     }
     if (typeName == QLatin1String("RealtimeChart")) { // a curve without a name shows 曲线1 whatever the language
@@ -78,7 +93,6 @@ QString WidgetMeta::bindProperty() const
     static const QHash<QString, QString> mapping = {
         {QStringLiteral("Label"), QStringLiteral("text")},
         {QStringLiteral("PushButton"), QStringLiteral("text")},
-        {QStringLiteral("LineEdit"), QStringLiteral("text")},
         {QStringLiteral("ComboBox"), QStringLiteral("currentIndex")},
         {QStringLiteral("LEDIndicator"), QStringLiteral("on")},
         {QStringLiteral("NumericDisplay"), QStringLiteral("value")},
@@ -132,58 +146,168 @@ QList<WidgetCategory> WidgetRegistry::categories() const
     return out;
 }
 
+QString commandActivationProperty(QStringView typeName)
+{
+    if (typeName == QLatin1String("LineEdit"))
+        return QStringLiteral("inputOnly");
+    if (typeName == QLatin1String("ComboBox"))
+        return QStringLiteral("sendOnSelect");
+    if (typeName == QLatin1String("Slider") || typeName == QLatin1String("SpinBox"))
+        return QStringLiteral("sendOnChange");
+    return {};
+}
+
+namespace {
+
+bool lineEditInputOnly(const QJsonObject &properties)
+{
+    const auto inputOnly = properties.value(QStringLiteral("inputOnly"));
+    if (!inputOnly.isUndefined())
+        return inputOnly.toBool(inputOnly.toDouble() != 0);
+    const auto readOnly = properties.value(QStringLiteral("readOnly"));
+    if (readOnly.toBool(readOnly.toDouble() != 0))
+        return true;
+    const auto sendOnEnter = properties.value(QStringLiteral("sendOnEnter"));
+    const auto mode = CommandEncoder::commandMode(properties.value(QStringLiteral("commandMode")).toString());
+    // Legacy Modbus and S7 inputs sent on Return independently of the text-mode checkbox.
+    return mode != CommandEncoder::Mode::Modbus && mode != CommandEncoder::Mode::S7 &&
+           !sendOnEnter.toBool(sendOnEnter.toDouble() != 0);
+}
+
+} // namespace
+
+bool widgetSendsCommands(QStringView typeName, const QJsonObject &properties)
+{
+    if (typeName == QLatin1String("LineEdit"))
+        return properties.value(QStringLiteral("parameterName")).toString().isEmpty() && !lineEditInputOnly(properties);
+    const QString activation = commandActivationProperty(typeName);
+    if (activation.isEmpty())
+        return true;
+    const auto value = properties.value(activation);
+    return value.toBool(value.toDouble() != 0);
+}
+
+bool widgetReadsStoredBinding(const WidgetMeta &meta, const QJsonObject &properties)
+{
+    if (isTimingChart(meta.typeName) && TimingSource::usesChannels(properties))
+        return false;
+    if (!meta.bindProperty().isEmpty())
+        return true;
+    const auto readOnly = properties.value(QStringLiteral("readOnly"));
+    return meta.typeName == QLatin1String("LineEdit") && lineEditInputOnly(properties) &&
+           readOnly.toBool(readOnly.toDouble() != 0) && properties.value(QStringLiteral("parameterName")).toString().isEmpty();
+}
+
+namespace {
+
+bool integerSpinBox(const WidgetMeta &meta, const QJsonObject &props)
+{
+    return meta.typeName == QLatin1String("SpinBox") &&
+           props.value(QStringLiteral("numberMode")).toString() != QStringLiteral("小数"); // i18n: value
+}
+
+double boundedNumber(const PropDef &definition, const QJsonObject &props)
+{
+    double number = props.value(definition.name).toDouble(definition.defaultValue.toDouble());
+    if (definition.minimum)
+        number = std::max(number, *definition.minimum);
+    if (definition.maximum)
+        number = std::min(number, *definition.maximum);
+    return number;
+}
+
+std::optional<WidgetValueRange> configuredValueRange(const WidgetMeta &meta, const QJsonObject &props,
+                                                    QStringView changed = {})
+{
+    const auto *minimum = meta.prop(QStringLiteral("minimum"));
+    const auto *maximum = meta.prop(QStringLiteral("maximum"));
+    if (!maximum || !meta.prop(QStringLiteral("value")))
+        return std::nullopt;
+    WidgetValueRange range{minimum ? boundedNumber(*minimum, props) : 0, boundedNumber(*maximum, props)};
+    if (maximum->type == PropType::Int || integerSpinBox(meta, props)) {
+        range.minimum = qRound64(range.minimum);
+        range.maximum = qRound64(range.maximum);
+    }
+    if (range.minimum > range.maximum) {
+        if (changed == QLatin1String("maximum"))
+            range.minimum = range.maximum;
+        else
+            range.maximum = range.minimum;
+    }
+    return range;
+}
+
+void storeNumber(QJsonObject &props, const PropDef &definition, double value)
+{
+    // Omitted properties keep their metadata default unless another property changes their effective value.
+    if (props.contains(definition.name) || definition.defaultValue != QJsonValue(value))
+        props.insert(definition.name, value);
+}
+
+IndustrialCapabilities widgetIndustrialCapabilities(const WidgetMeta &meta, const QJsonObject &props)
+{
+    return isIndustrialCategory(meta.category)
+               ? industrialCapabilities(meta.typeName, props.value(QStringLiteral("feedbackMode")).toString())
+               : IndustrialCapabilities{};
+}
+
+} // namespace
+
+std::optional<WidgetValueRange> widgetValueRange(const WidgetMeta &meta, const QJsonObject &props)
+{
+    const auto capabilities = widgetIndustrialCapabilities(meta, props);
+    if (capabilities.sampleMaximum >= 0)
+        return WidgetValueRange{0, double(capabilities.sampleMaximum)};
+    return configuredValueRange(meta, props);
+}
+
 QJsonObject normalizedWidgetProperties(const QString &typeName, QJsonObject props, const QString &changed)
 {
+    if (typeName == QLatin1String("LineEdit")) {
+        props.insert(QStringLiteral("inputOnly"), lineEditInputOnly(props));
+        props.remove(QStringLiteral("sendOnEnter"));
+        if (!props.value(QStringLiteral("inputOnly")).toBool())
+            props.remove(QStringLiteral("readOnly"));
+    }
+    if (typeName == QLatin1String("PushButton")) {
+        const QString previous = QStringLiteral("mbWriteInputs");
+        const QString current = QStringLiteral("commandInputs");
+        if (props.contains(current))
+            props.remove(previous);
+        else if (props.contains(previous) && CommandEncoder::inputListMode(props) == CommandEncoder::InputListMode::Registers)
+            props.insert(current, props.take(previous));
+    }
     if (typeName == QLatin1String("CanMonitor") && !props.contains(QStringLiteral("autoSaveRows"))) {
         // Freeze the old shared limit once; later display-limit edits must not change recording.
         props.insert(QStringLiteral("autoSaveRows"),
                      std::clamp(props.value(QStringLiteral("maxMessages")).toInt(1000), 1, 50000));
     }
     const auto *meta = WidgetRegistry::instance().find(typeName);
-    if (meta && isIndustrialCategory(meta->category) && meta->prop(QStringLiteral("minimum")) && meta->prop(QStringLiteral("maximum"))) {
-        const auto defaults = meta->defaultProperties();
-        double lo = props.value(QStringLiteral("minimum")).toDouble(defaults.value(QStringLiteral("minimum")).toDouble());
-        double hi = props.value(QStringLiteral("maximum")).toDouble(defaults.value(QStringLiteral("maximum")).toDouble());
-        if (lo > hi) {
-            if (changed == QLatin1String("maximum")) {
-                lo = hi;
-                props.insert(QStringLiteral("minimum"), lo);
-            } else {
-                hi = lo;
-                props.insert(QStringLiteral("maximum"), hi);
-            }
-        }
-        if (props.contains(QStringLiteral("value"))) {
-            const double value = props.value(QStringLiteral("value")).toDouble(defaults.value(QStringLiteral("value")).toDouble());
-            props.insert(QStringLiteral("value"), std::clamp(value, lo, hi));
-        }
-        return props; // omitted properties keep their catalog defaults and stay omitted in the saved project
-    }
-    const bool isGauge = typeName == QLatin1String("GaugeMeter");
-    if (typeName != QLatin1String("Slider") && typeName != QLatin1String("SpinBox") && !isGauge) {
+    if (!meta)
+        return props;
+    const auto *valueDefinition = meta->prop(QStringLiteral("value"));
+    const auto capabilities = widgetIndustrialCapabilities(*meta, props);
+    if (capabilities.sampleMaximum >= 0) {
+        const auto sample = props.value(QStringLiteral("value")).toDouble(capabilities.sampleDefault);
+        const bool valid = sample >= 0 && sample <= capabilities.sampleMaximum && std::floor(sample) == sample;
+        storeNumber(props, *valueDefinition, valid ? sample : capabilities.sampleDefault);
         return props;
     }
-    double lo = props.value(QStringLiteral("minimum")).toDouble(0);
-    double hi = props.value(QStringLiteral("maximum")).toDouble(100);
-    if (lo > hi) {
-        if (changed == QLatin1String("maximum")) {
-            lo = hi;
-        } else {
-            hi = lo;
-        }
+    if (const auto range = configuredValueRange(*meta, props, changed)) {
+        if (const auto *minimum = meta->prop(QStringLiteral("minimum")))
+            storeNumber(props, *minimum, range->minimum);
+        storeNumber(props, *meta->prop(QStringLiteral("maximum")), range->maximum);
+        double sample = props.value(valueDefinition->name).toDouble(valueDefinition->defaultValue.toDouble());
+        if (valueDefinition->type == PropType::Int || integerSpinBox(*meta, props))
+            sample = std::round(sample);
+        storeNumber(props, *valueDefinition, std::clamp(sample, range->minimum, range->maximum));
     }
-    const double fallback = typeName == QLatin1String("Slider") ? 50 : 0;
-    const double value = std::clamp(props.value(QStringLiteral("value")).toDouble(fallback), lo, hi);
-    const bool decimalInput = typeName == QLatin1String("SpinBox") &&
-                              props.value(QStringLiteral("numberMode")).toString() == QStringLiteral("小数"); // i18n: value
-    if (isGauge || decimalInput) {
-        props.insert(QStringLiteral("minimum"), lo);
-        props.insert(QStringLiteral("maximum"), hi);
-        props.insert(QStringLiteral("value"), value);
-    } else {
-        props.insert(QStringLiteral("minimum"), qRound64(lo));
-        props.insert(QStringLiteral("maximum"), qRound64(hi));
-        props.insert(QStringLiteral("value"), qRound64(value));
+    if (typeName == QLatin1String("SpinBox")) {
+        const auto &step = *meta->prop(QStringLiteral("singleStep"));
+        const auto &decimals = *meta->prop(QStringLiteral("decimals"));
+        const int precision = integerSpinBox(*meta, props) ? 0 : int(boundedNumber(decimals, props));
+        const double scale = std::pow(10., precision);
+        storeNumber(props, step, std::max(1., std::round(boundedNumber(step, props) * scale)) / scale);
     }
     return props;
 }

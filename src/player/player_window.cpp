@@ -1,6 +1,7 @@
 #include "player/player_window.h"
 
 #include "runtime/runtime_context.h"
+#include "runtime/periodic_task_view.h"
 #include "runtime/runtime_surface.h"
 #include "runtime/ui_helpers.h"
 
@@ -107,6 +108,7 @@ PlayerWindow::PlayerWindow(const Project &project, QWidget *parent, bool startRu
     layout->setContentsMargins(0, titleBar()->height(), 0, 0);
     m_surface = new RuntimeSurface;
     layout->addWidget(new CanvasView(m_surface, this));
+    layout->addWidget(createPeriodicTasksButton(m_surface->context()->periodicSender(), this), 0, Qt::AlignRight);
 
     connect(m_surface, &RuntimeSurface::notificationRequested, this,
             [this](const QString &title, const QString &content, const QString &type, int duration) {

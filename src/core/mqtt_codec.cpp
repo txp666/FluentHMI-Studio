@@ -220,4 +220,30 @@ QStringList topics(const QString &text)
     return out;
 }
 
+namespace {
+
+QString replaceTopicLevel(const QString &topic, const QString &from, const QString &to)
+{
+    if (from.isEmpty() || to.isEmpty() || !topic.contains(from))
+        return topic;
+    auto levels = topic.split(u'/');
+    for (auto &level : levels) {
+        if (level == from)
+            level = to;
+    }
+    return levels.join(u'/');
+}
+
+} // namespace
+
+QString expandTopicSession(const QString &topic, const QString &session)
+{
+    return replaceTopicLevel(topic, SessionTopicLevel, session);
+}
+
+QString restoreTopicSession(const QString &topic, const QString &session)
+{
+    return replaceTopicLevel(topic, session, SessionTopicLevel);
+}
+
 } // namespace fhmi::Mqtt

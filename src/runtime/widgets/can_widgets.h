@@ -43,6 +43,7 @@ class CanConfigCardWidget : public LinkCardBase
 
   private:
     CanSettings settings() const;
+    void resetAdapterOptions(bool restoreDefaults);
     void resetSamplePointOptions();
     // Shows the rows and enables the fields of the selected adapter.
     void updateAdapterUi();
@@ -90,6 +91,7 @@ class CanConfigCardWidget : public LinkCardBase
     FluentQt::CaptionLabel *m_hint = nullptr;   // SocketCAN's ip command, or ZLG's effective bit timing
     FluentQt::CaptionLabel *m_counters = nullptr;
     QPointer<QWidget> m_hintCaption; // its label in the grid, rebuilt by apply()
+    QPointer<QWidget> m_targetCaption;
     QTimer *m_statusTimer = nullptr;
     CanLink *m_link = nullptr;
     QString m_connectionError;
@@ -111,6 +113,7 @@ class CanMonitorWidget : public HmiWidget
     void onDetached() override;
 
   private:
+    void refreshRows();
     void scheduleViewLayout();
     // A row is as tall as the lines of its data. True when visible rows were resized.
     bool fitRowHeights();
@@ -141,6 +144,8 @@ class CanMonitorWidget : public HmiWidget
     CanMonitorModel *m_model = nullptr;
     CanMonitorProxy *m_sorted = nullptr;
     bool m_viewLayoutPending = false;
+    bool m_viewLayoutRunning = false;
+    bool m_followLogTail = true;
     QTimer *m_refresh = nullptr;
 };
 

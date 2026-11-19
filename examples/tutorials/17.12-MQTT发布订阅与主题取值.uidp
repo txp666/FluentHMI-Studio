@@ -1,0 +1,279 @@
+{
+  "version": "1.3",
+  "appName": "17.12 MQTT 发布订阅与主题取值",
+  "canvas": {
+    "width": 1120,
+    "height": 829,
+    "gridSize": 10
+  },
+  "serial": {
+    "parser": "line"
+  },
+  "widgets": [
+    {
+      "id": "lessonTitle",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 16,
+        "w": 1072,
+        "h": 38
+      },
+      "properties": {
+        "text": "17.12 MQTT 发布订阅与主题取值",
+        "fontSize": 24,
+        "bold": true
+      }
+    },
+    {
+      "id": "lessonSteps",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 60,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "两张卡已配置 EMQX 公共 Broker。连接后左侧回车发布，右侧回送 A 或 B，按主题分别查看读数。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "hmi",
+      "type": "MqttConfigCard",
+      "geometry": {
+        "x": 24,
+        "y": 94,
+        "w": 528,
+        "h": 320
+      },
+      "properties": {
+        "title": "上位机 · MQTT",
+        "defaultSubscribe": "fluenthmi/17/{session}/+/state",
+        "defaultPublish": "fluenthmi/17/{session}/a/target",
+        "defaultHost": "broker.emqx.io",
+        "defaultPort": 1883,
+        "defaultQos": "1"
+      }
+    },
+    {
+      "id": "device",
+      "type": "MqttConfigCard",
+      "geometry": {
+        "x": 568,
+        "y": 94,
+        "w": 528,
+        "h": 320
+      },
+      "properties": {
+        "title": "模拟设备 · MQTT",
+        "defaultSubscribe": "fluenthmi/17/{session}/a/target",
+        "defaultPublish": "fluenthmi/17/{session}/a/state",
+        "defaultHost": "broker.emqx.io",
+        "defaultPort": 1883,
+        "defaultQos": "1"
+      }
+    },
+    {
+      "id": "rpmInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 24,
+        "y": 426,
+        "w": 528,
+        "h": 36
+      },
+      "properties": {
+        "title": "目标转速（回车）",
+        "text": "900",
+        "inputOnly": false,
+        "commandMode": "文本",
+        "commandTargetId": "hmi",
+        "commandTemplate": "rpm={value}",
+        "commandNewline": "无",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true
+      }
+    },
+    {
+      "id": "replyA",
+      "type": "PushButton",
+      "geometry": {
+        "x": 568,
+        "y": 426,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "回送 A 的反馈",
+        "commandMode": "文本",
+        "commandTargetId": "device",
+        "commandTemplate": "rpm={rpm},ready=1",
+        "commandNewline": "无",
+        "commandInputs": [
+          {
+            "inputId": "@data:模拟设备目标",
+            "variable": "rpm"
+          }
+        ],
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true
+      }
+    },
+    {
+      "id": "cycleTopic",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 426,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "周期回送 A · 1000 ms",
+        "commandMode": "文本",
+        "commandTargetId": "device",
+        "commandTemplate": "rpm={rpm},ready=1",
+        "commandNewline": "无",
+        "sendIntervalMs": 1000,
+        "commandInputs": [
+          {
+            "inputId": "@data:模拟设备目标",
+            "variable": "rpm"
+          }
+        ],
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true
+      }
+    },
+    {
+      "id": "hmiA",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 24,
+        "y": 477,
+        "w": 258,
+        "h": 64
+      },
+      "properties": {
+        "title": "A 反馈 · …/a/state",
+        "value": "—",
+        "decimals": "0",
+        "fontSize": 20,
+        "unit": "rpm"
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "hmi",
+        "key": "rpm",
+        "sourceEndpoint": "fluenthmi/17/{session}/a/state"
+      }
+    },
+    {
+      "id": "hmiB",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 294,
+        "y": 477,
+        "w": 258,
+        "h": 64
+      },
+      "properties": {
+        "title": "B 反馈 · …/b/state",
+        "value": "—",
+        "decimals": "0",
+        "fontSize": 20,
+        "unit": "rpm"
+      },
+      "binding": {
+        "parseMode": "键值匹配",
+        "sourceCardId": "hmi",
+        "key": "rpm",
+        "sourceEndpoint": "fluenthmi/17/{session}/b/state"
+      }
+    },
+    {
+      "id": "devTarget",
+      "type": "NumericDisplay",
+      "geometry": {
+        "x": 568,
+        "y": 477,
+        "w": 258,
+        "h": 64
+      },
+      "properties": {
+        "title": "设备收到的目标 · …/a/target",
+        "value": "—",
+        "decimals": "0",
+        "fontSize": 20,
+        "unit": "rpm"
+      },
+      "binding": {
+        "parseMode": "工程数据点",
+        "key": "模拟设备目标"
+      }
+    },
+    {
+      "id": "replyB",
+      "type": "PushButton",
+      "geometry": {
+        "x": 838,
+        "y": 491,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "text": "回送 B 的固定反馈",
+        "commandMode": "文本",
+        "commandTargetId": "device",
+        "commandEndpoint": "fluenthmi/17/{session}/b/state",
+        "command": "rpm=1234,ready=0",
+        "commandNewline": "无",
+        "confirmBeforeSend": true,
+        "showSendConfirmationDetails": true
+      }
+    },
+    {
+      "id": "hmiLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 24,
+        "y": 555,
+        "w": 528,
+        "h": 250
+      },
+      "properties": {
+        "title": "上位机收发报文",
+        "sourceCardId": "hmi"
+      }
+    },
+    {
+      "id": "deviceLog",
+      "type": "DataRecvCard",
+      "geometry": {
+        "x": 568,
+        "y": 555,
+        "w": 528,
+        "h": 250
+      },
+      "properties": {
+        "title": "模拟设备收发报文",
+        "sourceCardId": "device"
+      }
+    }
+  ],
+  "logic": {
+    "points": [
+      {
+        "name": "模拟设备目标",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "sourceEndpoint": "fluenthmi/17/{session}/a/target",
+          "key": "rpm"
+        }
+      }
+    ]
+  }
+}

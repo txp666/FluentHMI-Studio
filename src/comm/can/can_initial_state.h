@@ -10,6 +10,10 @@ class CanInitialState
 {
   public:
     static std::optional<CanInitialState> build(const CanSignalSet &signalSet, const QString &mapping, QString *error);
+    // Preserve the actual signal pairs, including those inferred by message-to-message rules.
+    // Each changed qualified key maps to its new name, or its old name when it has no replacement.
+    static std::optional<QString> migrateSignalMapping(const CanSignalSet &before, const CanSignalSet &after,
+                                                       const QString &mapping, const QHash<QString, QString> &changes);
     bool acceptsFilter(const CanFilter &filter, QString *error) const;
     void observe(const CanFrame &frame, qint64 receivedAtMs);
     void clearReceived();

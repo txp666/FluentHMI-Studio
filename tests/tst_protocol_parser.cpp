@@ -292,6 +292,91 @@ class TestProtocolParser : public QObject
         QCOMPARE(out.at(0).value("x").toLongLong(), 1);
     }
 
+    void mixedHexTemplatesIdentifyFramesBeforeDecoding()
+    {
+        const QJsonArray field{QJsonValue(QJsonArray{"value", 1, 2, "uint16", "小端(LE)"})};
+        const auto entry = [](const QString &id, const QJsonObject &config) {
+            return QJsonObject{{"id", id}, {"name", id}, {"parser", "hex"}, {"parserConfig", config}};
+        };
+        const auto speed = entry("speed", {{"header", "A55A"}, {"footer", ""}, {"fixedLength", 6},
+            {"matchOffset", 2}, {"matchBytes", "10"}, {"checksum", "CRC8"}, {"checksumStart", 2},
+            {"fields", field}});
+        auto temperatureConfig = QJsonObject{{"header", "A55A"}, {"footer", "0D"}, {"lengthOffset", 3},
+            {"matchOffset", 2}, {"matchBytes", "20"}, {"checksum", "CRC16-Modbus"}, {"checksumStart", 2},
+            {"checksumEndian", "小端(LE)"}, {"maxFrameLength", 64}, {"idleTimeout", 350},
+            {"fields", QJsonArray{QJsonValue(QJsonArray{"value", 2, 2, "int16"})}}};
+        const auto status = entry("status", {{"header", "7E7F"}, {"footer", "0D0A"},
+            {"checksum", "异或"}, {"checksumStart", 2},
+            {"fields", QJsonArray{QJsonValue(QJsonArray{"state", 0, 1, "uint8"})}}});
+        const auto idle = entry("idle", {{"header", ""}, {"footer", ""}, {"matchBytes", "D0"}, {"idleTimeout", 140},
+            {"checksum", "和校验"}, {"fields", QJsonArray{QJsonValue(QJsonArray{"reading", 1, 1, "uint8"})}}});
+        QJsonObject config{{LinkParser::GroupTemplates, QJsonArray{speed, entry("temperature", temperatureConfig), status, idle}}};
+        QString error;
+        const auto parser = createParser(LinkParser::HexGroup, config, &error);
+        QVERIFY2(parser, qPrintable(error));
+        const auto a = QByteArray::fromHex("A55A10DC05FF");
+        const auto b = QByteArray::fromHex("A55A2002FF83AA750D");
+        const auto c = QByteArray::fromHex("7E7F0200FAF80D0A");
+        QVERIFY(parser->frames(QByteArray::fromHex("00") + a.left(2)).isEmpty());
+        QCOMPARE(parser->idleTimeout(), 350); // Still waiting for the discriminator.
+        QCOMPARE(parser->frames(a.mid(2) + b + c), (QList<QByteArray>{a, b, c}));
+        const auto first = parser->parse(a).value(0);
+        QCOMPARE(first.value("speed.value").toInt(), 1500);
+        QVERIFY(!first.contains("value"));
+        QVERIFY(!first.contains("temperature.value"));
+        QCOMPARE(parser->parse(b).value(0).value("temperature.value").toInt(), -125);
+        const auto third = parser->parse(c).value(0);
+        QCOMPARE(third.value("status.state").toInt(), 2);
+        QCOMPARE(third.value("state").toInt(), 2);
+
+        auto bad = b;
+        bad[7] = char(0x74);
+        QCOMPARE(parser->frames(bad + a), QList<QByteArray>{a});
+        const auto checksumFailure = parser->takeFrameNotice();
+        QVERIFY(checksumFailure && checksumFailure->reason == FrameNotice::Reason::Checksum);
+        bad = b;
+        bad[3] = char(0xF0);
+        QCOMPARE(parser->frames(bad + a), QList<QByteArray>{a});
+        const auto badLength = parser->takeFrameNotice();
+        QVERIFY(badLength);
+        QCOMPARE(badLength->expected, 247);
+        QCOMPARE(badLength->received, bad.size());
+        QCOMPARE(badLength->sample, bad);
+        bad[3] = char(0x30); // Still a legal length, so keep waiting until this frame expires.
+        QVERIFY(parser->frames(bad + a).isEmpty());
+        QCOMPARE(parser->frameProgress().expected, 55);
+        QCOMPARE(parser->idleTimeout(), 350);
+        QCOMPARE(parser->flush(), QList<QByteArray>{a});
+        const auto expired = parser->takeFrameNotice();
+        QVERIFY(expired && expired->reason == FrameNotice::Reason::Timeout);
+        QCOMPARE(expired->sample, bad);
+        const auto outer = buildHexFrame(QByteArray(1, '\x20') + a + QByteArray(3, '\x22'), temperatureConfig);
+        QVERIFY(outer);
+        QVERIFY(parser->frames(outer->left(10)).isEmpty()); // the nested frame is valid, but still payload
+        QCOMPARE(parser->frames(outer->mid(10)), QList<QByteArray>{*outer});
+        const auto timed = QByteArray::fromHex("D005D5");
+        QVERIFY(parser->frames(timed.left(1)).isEmpty());
+        QCOMPARE(parser->idleTimeout(), 140);
+        QVERIFY(parser->frames(timed.mid(1)).isEmpty());
+        QCOMPARE(parser->flush(), QList<QByteArray>{timed});
+        QCOMPARE(parser->parse(timed).value(0).value("idle.reading").toInt(), 5);
+        QCOMPARE(parser->idleTimeout(), 0);
+
+        auto defaultTimeout = temperatureConfig;
+        defaultTimeout.remove("idleTimeout");
+        auto recover = createParser(LinkParser::HexGroup,
+            {{LinkParser::GroupTemplates, QJsonArray{speed, entry("temperature", defaultTimeout)}}});
+        QVERIFY(recover);
+        QVERIFY(recover->frames(bad + a).isEmpty());
+        QVERIFY(recover->idleTimeout() > 0);
+        QCOMPARE(recover->flush(), QList<QByteArray>{a});
+
+        temperatureConfig.insert("matchBytes", "10");
+        config.insert(LinkParser::GroupTemplates, QJsonArray{speed, entry("temperature", temperatureConfig)});
+        QVERIFY(!createParser(LinkParser::HexGroup, config, &error));
+        QVERIFY(error.contains("speed") && error.contains("temperature"));
+    }
+
     void hexFrameFields()
     {
         HexFrameConfig config; // header AA55, footer 55AA

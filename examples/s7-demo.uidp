@@ -1,5 +1,5 @@
 {
-  "version": "1.1",
+  "version": "1.3",
   "appName": "S7 local demo",
   "canvas": {
     "width": 1040,
@@ -170,7 +170,8 @@
         "h": 40
       },
       "properties": {
-        "placeholderText": "Speed (rpm)",
+        "placeholderText": "Speed (rpm) + Enter",
+        "sendOnEnter": true,
         "commandMode": "S7",
         "commandTargetId": "s7Local",
         "s7Command": {
@@ -179,15 +180,6 @@
           "value": "1",
           "onValue": "1",
           "offValue": "0"
-        }
-      },
-      "binding": {
-        "parseMode": "S7",
-        "sourceCardId": "s7Local",
-        "s7": {
-          "address": "DB1.DBW12",
-          "dataType": "INT",
-          "period": 0
         }
       }
     },
@@ -203,6 +195,7 @@
       "properties": {
         "minimum": 0,
         "maximum": 2000,
+        "sendOnChange": true,
         "commandMode": "S7",
         "commandTargetId": "s7Local",
         "s7Command": {
@@ -236,6 +229,7 @@
         "minimum": 0,
         "maximum": 2000,
         "showRange": true,
+        "sendOnChange": true,
         "commandMode": "S7",
         "commandTargetId": "s7Local",
         "s7Command": {
@@ -266,8 +260,12 @@
         "h": 40
       },
       "properties": {
-        "items": "Low\nMedium\nHigh",
-        "commands": "500\n1200\n1800",
+        "options": [
+          {"label": "Low", "value": "500"},
+          {"label": "Medium", "value": "1200"},
+          {"label": "High", "value": "1800"}
+        ],
+        "sendOnSelect": true,
         "commandMode": "S7",
         "commandTargetId": "s7Local",
         "s7Command": {

@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.3",
   "appName": "AT 指令调试助手",
   "canvas": {
     "width": 900,
@@ -232,10 +232,13 @@
         "h": 36.0
       },
       "properties": {
-        "items": "普通模式\n省电模式\n调试模式",
+        "options": [
+          {"label": "普通模式", "value": "AT+MODE=1"},
+          {"label": "省电模式", "value": "AT+MODE=2"},
+          {"label": "调试模式", "value": "AT+MODE=3"}
+        ],
         "currentIndex": 0,
         "sendOnSelect": true,
-        "commands": "AT+MODE=1\nAT+MODE=2\nAT+MODE=3",
         "commandMode": "文本",
         "commandTemplate": "{value}",
         "frameHeader": "",

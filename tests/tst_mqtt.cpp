@@ -61,6 +61,7 @@ class FakeBroker : public QObject
     QList<Mqtt::Packet> received;
     int connAckCode = 0;
     int connections = 0;
+    bool acknowledge = true;
 
   private:
     void answer(const Mqtt::Packet &p)
@@ -82,6 +83,8 @@ class FakeBroker : public QObject
             break;
         }
         case Mqtt::Publish: {
+            if (!acknowledge)
+                break;
             const auto m = Mqtt::decodePublish(p);
             if (m && m->qos == 1) {
                 client->write(Mqtt::encodeAck(Mqtt::PubAck, m->packetId));
@@ -91,7 +94,8 @@ class FakeBroker : public QObject
             break;
         }
         case Mqtt::PubRel:
-            client->write(Mqtt::encodeAck(Mqtt::PubComp, *Mqtt::packetId(p)));
+            if (acknowledge)
+                client->write(Mqtt::encodeAck(Mqtt::PubComp, *Mqtt::packetId(p)));
             break;
         case Mqtt::PingReq:
             client->write(QByteArray::fromHex("D000"));
@@ -248,6 +252,53 @@ class TestMqtt : public QObject
         QCOMPARE(m->qos, 2);
         QTRY_COMPARE(broker.ofType(Mqtt::PubRel).size(), 1); // the client finished the QoS 2 handshake
         QCOMPARE(sent.size(), 1);
+    }
+
+    void sessionTopicsUseWireNamesAndKeepProjectReferences()
+    {
+        FakeBroker broker;
+        MqttLink link;
+        auto settings = settingsFor(broker);
+        settings.topicSession = QStringLiteral("run-test-01");
+        settings.topics = {QStringLiteral("demo/{session}/+/state")};
+        settings.publishTopic = QStringLiteral("demo/{session}/a/target");
+        QSignalSpy messages(&link, &Link::messageReceived);
+        QVERIFY(link.connectTo(settings));
+        QTRY_COMPARE(broker.ofType(Mqtt::Subscribe).size(), 1);
+        QVERIFY(broker.ofType(Mqtt::Subscribe).first().body.contains("demo/run-test-01/+/state"));
+        QCOMPARE(link.sendEndpoints(), QStringList{QStringLiteral("demo/{session}/a/target")});
+        QVERIFY(link.send("rpm=1234", QStringLiteral("demo/{session}/b/state")));
+        QTRY_COMPARE(broker.ofType(Mqtt::Publish).size(), 1);
+        QCOMPARE(Mqtt::decodePublish(broker.ofType(Mqtt::Publish).first())->topic,
+                 QStringLiteral("demo/run-test-01/b/state"));
+        broker.publish(QStringLiteral("demo/run-test-01/b/state"), "rpm=1234");
+        QTRY_COMPARE(messages.size(), 1);
+        QCOMPARE(messages.first().at(1).value<DataSource>().endpoint, QStringLiteral("demo/{session}/b/state"));
+    }
+
+    void periodicPublishWaitsForQos2CompletionWhenWindowIsFull()
+    {
+        FakeBroker broker;
+        broker.acknowledge = false;
+        MqttLink link;
+        auto settings = settingsFor(broker);
+        settings.qos = 2;
+        QVERIFY(link.connectTo(settings));
+        QTRY_VERIFY(link.isConnected());
+        for (int i = 0; i < 8; ++i)
+            QVERIFY(link.send("START"));
+        QTRY_COMPARE(broker.ofType(Mqtt::Publish).size(), 8);
+        QCOMPARE(link.sendPeriodic("START", {}), SendStatus::Busy);
+        QVERIFY(!link.send("START"));
+        const auto first = Mqtt::decodePublish(broker.ofType(Mqtt::Publish).first());
+        QVERIFY(first);
+        broker.client->write(Mqtt::encodeAck(Mqtt::PubRec, first->packetId));
+        QTRY_COMPARE(broker.ofType(Mqtt::PubRel).size(), 1);
+        QCOMPARE(link.sendPeriodic("START", {}), SendStatus::Busy);
+        broker.client->write(Mqtt::encodeAck(Mqtt::PubComp, first->packetId));
+        QTRY_VERIFY(!link.hasPendingWrite({}));
+        QCOMPARE(link.sendPeriodic("START", {}), SendStatus::Submitted);
+        QTRY_COMPARE(broker.ofType(Mqtt::Publish).size(), 9);
     }
 
     // A read published over MQTT is noted like any other send, so its reply is named by address.
