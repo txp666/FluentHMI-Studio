@@ -10,6 +10,10 @@ Start with **17** for a command and feedback round trip. Use **17.10** for mixed
 
 [中文分步实训](../../docs/tutorials/17-frame-io.zh.md) · [English lab instructions](../../docs/tutorials/17-frame-io.en.md)
 
+打开任意 17 系列工程，按画布顶部的两步操作连接和发送。修改输入后查看对端读数，点运行预览工具栏的「工程数据监视」可核对工程数据点的来源和当前值。坏帧、拆包和主题对照样例会标明使用固定值。
+
+Open a Series 17 project and follow the two steps on its canvas. After changing an input and sending, use **Project data monitor** in the preview toolbar to inspect current values and sources. Fixed samples are labelled for fault, frame reassembly, or topic comparison exercises.
+
 | 工程 / Project | 练习 / What to verify |
 | --- | --- |
 | [17 数据收发与帧模板](17-数据收发与帧模板.uidp) | TCP、同一模板收发、必填字段、回车和按钮、设备反馈与记录 / Shared HEX template, Enter and button sends, feedback and history |
@@ -19,11 +23,11 @@ Start with **17** for a command and feedback round trip. Use **17.10** for mixed
 | [17.4 帧尾分帧与异或](17.4-帧尾分帧与异或.uidp) | 帧尾、异或、ASCII 与 HEX 字段 / Footer, XOR, ASCII and HEX fields |
 | [17.5 双字节长度与 CCITT](17.5-双字节长度与CCITT.uidp) | 两字节整帧长度、混合类型、CRC16-CCITT / Two-byte total length, mixed types, CCITT |
 | [17.6 Modbus 混合寄存器](17.6-Modbus混合寄存器.uidp) | 四区轮询、FC05／06／16、寄存器范围 / Four areas, FC05, FC06, and FC16, register ranges |
-| [17.7 CAN 经典帧与 FD 信号](17.7-CAN经典帧与FD信号.uidp) | 虚拟 CAN、标准／扩展帧、RTR、FD+BRS / Virtual CAN, standard and extended frames, RTR, FD+BRS · [位图实训](../../docs/tutorials/can-bit-map.zh.md) / [Bit-map tutorial](../../docs/tutorials/can-bit-map.en.md) |
+| [17.7 CAN 经典帧与 FD 信号](17.7-CAN经典帧与FD信号.uidp) | 改转速、压力并回环到工程数据点，练标准帧、FD+BRS 和 RTR / Editable speed and pressure, loopback, FD and RTR · [位图实训](../../docs/tutorials/can-bit-map.zh.md) / [Bit-map tutorial](../../docs/tutorials/can-bit-map.en.md) |
 | [17.8 空闲分帧与和校验](17.8-空闲分帧与和校验.uidp) | 空闲分帧、和校验、默认字段 / Idle gap, sum checksum, field defaults |
-| [17.9 同连接多种 HEX 帧](17.9-同连接多种HEX帧.uidp) | 共用分帧、命令字、半帧、坏 CRC / Common framing, command bytes, partial frames, invalid CRC |
-| [17.10 同连接多接收模板](17.10-同连接多接收模板.uidp) | 三种分帧、同名字段、坏帧恢复、周期当前值 / Three layouts, shared field names, recovery, live periodic input |
-| [17.11 串口收发与数据发送卡](17.11-串口收发与数据发送卡.uidp) | 虚拟串口 A/B、长度字段、发送卡周期 / Virtual serial A/B, length field, periodic send card |
+| [17.9 同连接多种 HEX 帧](17.9-同连接多种HEX帧.uidp) | 修改数据后按命令字发送，核对独立读数与拆包 / Editable values per command, separate readings, frame reassembly |
+| [17.10 同连接多接收模板](17.10-同连接多接收模板.uidp) | 三模板混发、周期读取四项输入、全局取值、坏帧恢复 / Three layouts, four live inputs, shared data points, frame recovery |
+| [17.11 串口收发与数据发送卡](17.11-串口收发与数据发送卡.uidp) | 虚拟串口 A/B、按字段或载荷发送、周期内改值 / Virtual serial A/B, field or payload entry, live updates during a task |
 | [17.12 MQTT 发布订阅与主题取值](17.12-MQTT发布订阅与主题取值.uidp) | QoS 1、主题与相同键、当前工程值 / QoS 1, topic selection, current project values |
 
 17–17.11 可用本机回环、内置虚拟串口或虚拟 CAN。17.12 预设公共 MQTT Broker，可以换成已有的本地 Broker。两张卡需使用同一 Broker。
@@ -31,6 +35,10 @@ Start with **17** for a command and feedback round trip. Use **17.10** for mixed
 Labs 17 to 17.11 use loopback or the built-in virtual links. Lab 17.12 uses a public MQTT broker. You can set both cards to the same local broker.
 
 ## 设备与界面专题 / Device and interface labs
+
+01–08 使用串口设备或虚拟串口对端的数据。10 需要提供寄存器数据的 Modbus 从站，11 自身是从站。12 可切到虚拟 CAN，13 使用下面的 S7 模拟器，14 需要 TCP 对端发送样例。15 和 16 可以直接离线预览。
+
+Labs 01–08 expect serial data from a device or virtual peer. Lab 10 connects to a Modbus slave and Lab 11 serves as one. Lab 12 can use Virtual CAN and Lab 13 uses the simulator below. Provide sample data from a TCP peer for Lab 14. Labs 15 and 16 run offline.
 
 | 工程 / Project | 练习 / What to verify |
 | --- | --- |

@@ -2,6 +2,7 @@
 
 #include "comm/can/can_initial_state.h"
 #include "core/binding.h"
+#include "core/chart_limits.h"
 #include "core/command_encoder.h"
 #include "core/dbc.h"
 #include "core/project.h"
@@ -223,7 +224,8 @@ class ReferenceEdits
             widget.insert(QStringLiteral("binding"), binding);
         }
         if (type == QLatin1String("RealtimeChart") || isTimingChart(type)) {
-            for (int curve = 0; curve < 8; ++curve) {
+            const int limit = isTimingChart(type) ? MaxTimingChannels : MaxRealtimeCurves;
+            for (int curve = 0; curve < limit; ++curve) {
                 const auto original = chartCurveBinding(props, curve);
                 auto series = original;
                 const auto detail = reviewBinding(series);

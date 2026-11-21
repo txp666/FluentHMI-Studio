@@ -3,7 +3,7 @@
   "appName": "17.1 文本键值与CSV",
   "canvas": {
     "width": 1120,
-    "height": 762,
+    "height": 790,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "先连接右侧，再连接左侧。转速回车只发转速。用按钮发多项键值或 CSV，两种周期可同时运行。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。先连接右侧模拟设备，再连接左侧上位机。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 改左侧转速、温度或状态码，点「发键值命令」，看右侧读数。也可同时启动两种周期。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -61,7 +75,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -78,7 +92,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 24,
-        "y": 298,
+        "y": 326,
         "w": 168,
         "h": 36
       },
@@ -99,7 +113,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 202,
-        "y": 298,
+        "y": 326,
         "w": 168,
         "h": 36
       },
@@ -114,7 +128,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 380,
-        "y": 298,
+        "y": 326,
         "w": 172,
         "h": 36
       },
@@ -129,7 +143,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 24,
-        "y": 346,
+        "y": 374,
         "w": 254,
         "h": 36
       },
@@ -154,7 +168,8 @@
             "variable": "state",
             "inputId": "stateInput"
           }
-        ]
+        ],
+        "buttonStyle": "强调"
       }
     },
     {
@@ -162,7 +177,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 290,
-        "y": 346,
+        "y": 374,
         "w": 262,
         "h": 36
       },
@@ -191,7 +206,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 24,
-        "y": 392,
+        "y": 420,
         "w": 254,
         "h": 36
       },
@@ -226,7 +241,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 290,
-        "y": 392,
+        "y": 420,
         "w": 262,
         "h": 36
       },
@@ -257,7 +272,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 824,
-        "y": 298,
+        "y": 326,
         "w": 272,
         "h": 36
       },
@@ -286,7 +301,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 354,
+        "y": 382,
         "w": 254,
         "h": 54
       },
@@ -308,7 +323,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 354,
+        "y": 382,
         "w": 260,
         "h": 54
       },
@@ -330,7 +345,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 24,
-        "y": 440,
+        "y": 468,
         "w": 254,
         "h": 56
       },
@@ -351,7 +366,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 290,
-        "y": 440,
+        "y": 468,
         "w": 262,
         "h": 56
       },
@@ -373,7 +388,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 440,
+        "y": 468,
         "w": 254,
         "h": 56
       },
@@ -398,7 +413,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 440,
+        "y": 468,
         "w": 260,
         "h": 56
       },
@@ -419,7 +434,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 508,
+        "y": 536,
         "w": 528,
         "h": 230
       },
@@ -433,7 +448,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 508,
+        "y": 536,
         "w": 528,
         "h": 230
       },

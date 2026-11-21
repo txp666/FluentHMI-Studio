@@ -289,10 +289,74 @@ DataPointSample ProjectData::sample(const QString &name) const
     return point == m_points.cend() ? DataPointSample{} : point->sample;
 }
 
-QList<quint64> ProjectData::sampleStreams(const QString &name) const
+void RoutedSample::update(DataPointSample sample)
 {
-    const auto point = m_points.constFind(name);
-    return point == m_points.cend() ? QList<quint64>{} : point->sources.keys();
+    const auto &source = sample.source;
+    if (m_primary) {
+        const auto &primary = m_primary->source;
+        const bool sameDevice = primary.connectionId == source.connectionId && primary.deviceKey() == source.deviceKey();
+        const bool sameStream = primary.stream == source.stream && primary.endpoint == source.endpoint;
+        // A surviving TCP peer may send this field for the first time after the primary closes.
+        // Only a newly opened session can be a reconnect at a different port.
+        const bool conflictingPeer = sameDevice && primary.endpoint != source.endpoint && (source.stream <= m_closedEpoch ||
+            std::any_of(m_otherSources.cbegin(), m_otherSources.cend(), [&](const DataSource &peer) {
+                return peer.connectionId == source.connectionId && peer.deviceKey() == source.deviceKey();
+            }));
+        if (!sameDevice || (!sameStream && (m_present || conflictingPeer || m_otherSources.contains(source.stream)))) {
+            m_otherSources.insert(source.stream, source);
+            return;
+        }
+    }
+    m_primary = std::move(sample);
+    m_present = true;
+}
+
+bool RoutedSample::close(quint64 stream)
+{
+    if (m_present && m_primary->source.stream == stream) {
+        if (!m_primary->source.device.isEmpty() && !m_primary->source.endpoint.isEmpty())
+            m_closedEpoch = nextDataStream();
+        m_present = false;
+        return true;
+    }
+    return m_otherSources.remove(stream);
+}
+
+bool RoutedSample::markOld(quint64 stream)
+{
+    if (!m_present || m_primary->source.stream != stream || m_primary->quality == DataQuality::Old)
+        return false;
+    m_primary->quality = DataQuality::Old;
+    return true;
+}
+
+bool RoutedSample::expire(const QDateTime &now, int ageMs)
+{
+    return m_present && m_primary->quality == DataQuality::Current && m_primary->timestamp.msecsTo(now) >= ageMs &&
+           markOld(m_primary->source.stream);
+}
+
+DataPointSample RoutedSample::sample() const
+{
+    if (!m_primary)
+        return {};
+    const auto label = [](const DataSource &source) {
+        const auto peer = source.endpoint.isEmpty() ? source.device : source.endpoint;
+        return peer.isEmpty() ? source.connectionId : source.connectionId + QStringLiteral(" / ") + peer;
+    };
+    if (!m_present)
+        return {{}, m_primary->source, {}, DataQuality::Old,
+                ProjectData::tr("等待原来源 %1 重新送达数据").arg(label(m_primary->source))};
+    if (!m_otherSources.isEmpty()) {
+        QStringList sources{label(m_primary->source)};
+        for (const auto &source : m_otherSources)
+            sources.append(label(source));
+        sources.removeDuplicates();
+        sources.sort();
+        return {{}, m_primary->source, {}, DataQuality::Ambiguous,
+                ProjectData::tr("收到多个来源的数据 · %1").arg(sources.join(QStringLiteral(", ")))};
+    }
+    return *m_primary;
 }
 
 void ProjectData::publish(const QString &name, Point &point, DataPointSample sample)
@@ -306,37 +370,14 @@ void ProjectData::publish(const QString &name, Point &point, DataPointSample sam
     m_changed.insert(name);
 }
 
-void ProjectData::selectSample(const QString &name, Point &point)
-{
-    if (point.sources.size() > 1) {
-        auto sample = point.sample;
-        sample.quality = DataQuality::Ambiguous;
-        QStringList sources;
-        for (const auto &entry : std::as_const(point.sources)) {
-            const auto &source = entry.source;
-            const auto label = source.endpoint.isEmpty() ? source.connectionId
-                : source.connectionId + QStringLiteral(" / ") + source.endpoint;
-            sources.append(label);
-        }
-        sources.sort();
-        sample.detail = tr("收到多个来源的数据 · %1").arg(sources.join(QStringLiteral(", ")));
-        publish(name, point, std::move(sample));
-    } else if (point.sources.size() == 1) {
-        publish(name, point, point.sources.constBegin().value());
-    } else {
-        setProblem(name, DataQuality::Old);
-    }
-}
-
 void ProjectData::setSample(const QString &name, const QVariant &value, const DataSource &source, DataQuality quality,
                             const QDateTime &timestamp, const QString &detail)
 {
     const auto point = m_points.find(name);
     if (point == m_points.end() || point->initial.isValid())
         return;
-    point->sources.insert(source.stream,
-                          {value, source, timestamp.isValid() ? timestamp : QDateTime::currentDateTimeUtc(), quality, detail});
-    selectSample(name, *point);
+    point->source.update({value, source, timestamp.isValid() ? timestamp : QDateTime::currentDateTimeUtc(), quality, detail});
+    publish(name, *point, point->source.sample());
 }
 
 void ProjectData::setProblem(const QString &name, DataQuality quality, const QString &detail)
@@ -383,11 +424,8 @@ void ProjectData::markOld(const QString &name, quint64 stream)
     const auto point = m_points.find(name);
     if (point == m_points.end())
         return;
-    const auto sample = point->sources.find(stream);
-    if (sample != point->sources.end()) {
-        sample->quality = DataQuality::Old;
-        selectSample(name, *point);
-    }
+    if (point->source.markOld(stream))
+        publish(name, *point, point->source.sample());
 }
 
 void ProjectData::expireSamples()
@@ -396,15 +434,8 @@ void ProjectData::expireSamples()
     for (auto point = m_points.begin(); point != m_points.end(); ++point) {
         if (point->staleAfterMs <= 0)
             continue;
-        bool changed = false;
-        for (auto &sample : point->sources) {
-            if (sample.quality == DataQuality::Current && sample.timestamp.msecsTo(now) >= point->staleAfterMs) {
-                sample.quality = DataQuality::Old;
-                changed = true;
-            }
-        }
-        if (changed)
-            selectSample(point.key(), *point);
+        if (point->source.expire(now, point->staleAfterMs))
+            publish(point.key(), *point, point->source.sample());
     }
     evaluate();
 }
@@ -412,14 +443,14 @@ void ProjectData::expireSamples()
 void ProjectData::invalidateStream(quint64 stream)
 {
     for (auto point = m_points.begin(); point != m_points.end(); ++point)
-        if (point->sources.remove(stream))
-            selectSample(point.key(), *point);
+        if (point->source.close(stream))
+            publish(point.key(), *point, point->source.sample());
     evaluate();
 }
 void ProjectData::clearValues()
 {
     for (auto point = m_points.begin(); point != m_points.end(); ++point) {
-        point->sources.clear();
+        point->source = {};
         if (!point->initial.isValid() && point->sample.quality != DataQuality::ConfigurationError)
             setProblem(point.key(), DataQuality::Waiting);
     }

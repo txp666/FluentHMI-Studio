@@ -1,5 +1,7 @@
 #include "runtime/runtime_context.h"
 #include "core/can_frame.h"
+#include "core/frame_templates.h"
+#include "core/i18n.h"
 #include "core/industrial_catalog.h"
 #include "core/project_logic.h"
 
@@ -14,15 +16,38 @@
 #include <FluentQtWidgets/Widgets/LineEdit.h>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QFileInfo>
+#include <QtCore/QMetaMethod>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QGraphicsProxyWidget>
 #include <QtWidgets/QGraphicsView>
 
+#include <algorithm>
+
 namespace fhmi {
 
 namespace {
+
+QString commandSummary(const EncodedCommand &command, const QString &mode)
+{
+    const auto tr = [](const char *source) { return QCoreApplication::translate("fhmi", source); };
+    switch (command.kind) {
+    case EncodedCommand::Kind::Bytes:
+        if (!command.frames.isEmpty())
+            return tr("HEX · %1 帧 · %2 字节").arg(command.frames.size()).arg(command.bytes.size());
+        return tr("%1 · %2 字节").arg(translated(mode)).arg(command.bytes.size());
+    case EncodedCommand::Kind::Can:
+        return tr("CAN 报文 %1").arg(command.can.target);
+    case EncodedCommand::Kind::CanFrame:
+        return tr("CAN 报文 %1 · %2 字节")
+            .arg(Can::idText(command.frame.id, command.frame.extended)).arg(command.frame.data.size());
+    case EncodedCommand::Kind::Modbus:
+    case EncodedCommand::Kind::S7:
+        return CommandEncoder::describe(command, mode).simplified();
+    }
+    return {};
+}
 
 QString commandDetails(const EncodedCommand &command, const QString &mode, const QStringList &labels,
                        const QList<SendTarget> &targets, bool periodic)
@@ -171,17 +196,9 @@ RuntimeContext::RuntimeContext(QObject *parent) : QObject(parent), m_hub(new Com
     connect(m_hub, &CommHub::streamClosed, this, [this](const DataSource &source) {
         for (BindingEntry &binding : m_bindings) {
             binding.resetStream(source.stream);
-        }
-        for (auto it = m_widgetStreams.begin(); it != m_widgetStreams.end();) {
-            if (it.value() == source.stream) {
-                if (auto widget = m_widgets.value(it.key())) {
-                    widget->setBindingStatus(HmiWidget::BindingStatus::Stale);
-                    widget->setBindingProblem(dataQualityText(DataQuality::Old));
-                }
-                it = m_widgetStreams.erase(it);
-            } else {
-                ++it;
-            }
+            auto sample = m_widgetSamples.find(binding.widgetId);
+            if (sample != m_widgetSamples.end() && sample->close(source.stream))
+                applyWidgetSample(binding, sample->sample());
         }
         m_data->invalidateStream(source.stream);
     });
@@ -232,18 +249,12 @@ void RuntimeContext::addBinding(BindingEntry binding)
 {
     if (auto widget = m_widgets.value(binding.widgetId))
         widget->setBindingStatus(HmiWidget::BindingStatus::Waiting);
-    if (!binding.projectPoint.isEmpty()) {
-        QString error;
-        const auto route = resolveProjectRoute(m_connectionCards, m_projectParser, bindingRouteTransport(binding.parseMode),
-                                               binding.route(), RoutePurpose::DataPoint, &error);
-        if (!route) {
+    QString error;
+    if (!resolveBindingSource(binding, &error)) {
+        if (!binding.projectPoint.isEmpty())
             m_data->setProblem(binding.projectPoint, DataQuality::ConfigurationError, error);
-            return;
-        }
-        binding.sourceCardId = route->connectionId;
-    } else if (!resolveBindingSource(binding)) {
-        if (auto widget = m_widgets.value(binding.widgetId))
-            widget->setBindingProblem(tr("请选择来源连接"));
+        else if (auto widget = m_widgets.value(binding.widgetId))
+            widget->setBindingProblem(tr("请选择来源连接"), error);
         return;
     }
     if (binding.parseMode == ParseMode::CanSignal) {
@@ -255,16 +266,89 @@ void RuntimeContext::addBinding(BindingEntry binding)
     m_bindings.push_back(std::move(binding));
 }
 
-bool RuntimeContext::resolveBindingSource(BindingEntry &binding) const
+bool RuntimeContext::resolveBindingSource(BindingEntry &binding, QString *error) const
 {
-    if (binding.parseMode == ParseMode::DataPoint || !binding.sourceCardId.isEmpty() || m_connectionCards.isEmpty())
+    if (binding.parseMode == ParseMode::DataPoint)
         return true;
-    const auto candidates = routeConnections(m_connectionCards, bindingRouteTransport(binding.parseMode),
-                                              !binding.sourceEndpoint.isEmpty(), m_projectParser);
-    if (candidates.size() != 1)
+    const auto purpose = binding.projectPoint.isEmpty() ? RoutePurpose::Binding : RoutePurpose::DataPoint;
+    const auto route = resolveProjectRoute(m_connectionCards, m_projectParser, bindingRouteTransport(binding.parseMode),
+                                           binding.route(), purpose, error, ModbusParserChoice::OnConnect);
+    if (!route)
         return false;
-    binding.sourceCardId = candidates.first().first;
+    binding.sourceCardId = route->connectionId;
     return true;
+}
+
+std::optional<QJsonObject> RuntimeContext::pointWriteProperties(const QJsonObject &properties, QString *error) const
+{
+    return pointWriteProperties(properties, u"PushButton", error);
+}
+
+std::function<void(const QJsonObject &, const QString &)> RuntimeContext::receivePointAction()
+{
+    if (!isSignalConnected(QMetaMethod::fromSignal(&RuntimeContext::receivePointRequested)))
+        return {};
+    return [context = QPointer<RuntimeContext>(this)](const QJsonObject &binding, const QString &name) {
+        if (context)
+            emit context->receivePointRequested(binding, name);
+    };
+}
+
+std::optional<QJsonObject> RuntimeContext::pointWriteProperties(const QJsonObject &properties, QStringView widgetType,
+                                                              QString *error) const
+{
+    auto resolved = resolvePointWrite(properties, m_projectLogic, m_connectionCards, m_projectParser, error, widgetType,
+                                      ModbusParserChoice::OnConnect);
+    const auto point = properties.value(ModbusWritePoint).toString();
+    if (!resolved || point.isEmpty() || properties.value(QStringLiteral("commandMode")).toString() != ParseMode::Modbus)
+        return resolved;
+
+    const DataRoute route{resolved->value(QStringLiteral("commandTargetId")).toString(),
+                          resolved->value(QStringLiteral("commandEndpoint")).toString()};
+    const auto links = m_hub->connectedLinks(route);
+    const auto link = std::find_if(links.cbegin(), links.cend(), [](const Link *candidate) {
+        return candidate->parsesModbus();
+    });
+    if (link == links.cend())
+        return resolved;
+    const Link *active = *link;
+    const auto sample = m_data->sample(point);
+    if (!active->hasPeerStreams()) {
+        const auto device = active->deviceIdentity();
+        if (!device.isEmpty() && !sample.source.device.isEmpty() && device != sample.source.device) {
+            if (error)
+                *error = tr("数据点 %1 · 当前连接的设备不是原来源 %2").arg(point, sample.source.device);
+            return std::nullopt;
+        }
+        return resolved;
+    }
+    if (!route.endpoint.isEmpty() && active->canSendTo(route.endpoint))
+        return resolved;
+
+    if (sample.quality == DataQuality::Current && !sample.source.endpoint.isEmpty() && route.accepts(sample.source) &&
+        active->ownsStream(sample.source.stream, sample.source.endpoint)) {
+        resolved->insert(QStringLiteral("commandEndpoint"), sample.source.endpoint);
+        return resolved;
+    }
+    if (error)
+        *error = tr("数据点 %1 · 请先收到所选设备的有效反馈，或为数据点指定子通道").arg(point);
+    return std::nullopt;
+}
+
+bool RuntimeContext::acceptsMessage(const BindingEntry &binding, const Message &message, const DataSource &source) const
+{
+    if (!binding.usesParsedData() || !binding.route().accepts(source))
+        return false;
+    if (binding.parseMode != ParseMode::Modbus)
+        return true;
+    if (source.slaveData)
+        return true;
+    if (!source.modbus)
+        return false;
+    if (binding.mbSlaveFilter >= 0)
+        return true; // BindingEntry applies the explicit unit filter.
+    auto *link = m_hub->sourceLink(source);
+    return link && message.value(QStringLiteral("slave")).toInt() == m_poller->settings(link).fallbackSlave;
 }
 
 void RuntimeContext::configureData(const Project &project)
@@ -276,6 +360,7 @@ void RuntimeContext::configureData(const Project &project)
         m_projectPreferencesGroup = QStringLiteral("runtimeProjects/") + QString::fromLatin1(hash);
     }
     m_connectionCards = {};
+    m_projectLogic = project.logic;
     m_frameTemplates = project.frameTemplates;
     m_projectParser = project.parserType();
     visitWidgets(project.widgets, [this](const QJsonObject &widget) {
@@ -295,7 +380,7 @@ void RuntimeContext::configureData(const Project &project)
     m_alarmSound->setProperty("enabled", project.logic.value(QStringLiteral("soundEnabled")).toBool());
     for (const auto &p : project.logic.value(QStringLiteral("points")).toArray()) {
         const auto point = p.toObject();
-        if (isProjectParameter(point) || !point.value(QStringLiteral("expression")).toString().trimmed().isEmpty())
+        if (!isDeviceDataPoint(point))
             continue;
         const QString name = point.value(QStringLiteral("name")).toString();
         if (auto binding =
@@ -315,8 +400,9 @@ void RuntimeContext::clear()
     m_widgets.clear();
     m_projectPreferencesGroup.clear();
     m_connectionCards = {};
+    m_projectLogic = {};
     m_frameTemplates = {};
-    m_widgetStreams.clear();
+    m_widgetSamples.clear();
     m_bindings.clear();
     m_canBindings.clear();
     m_parsedProjectBindings.clear();
@@ -356,23 +442,31 @@ void RuntimeContext::modbusReadFailed(const Link &link, const QString &endpoint,
                                       int fallbackSlave)
 {
     for (const auto &binding : m_bindings) {
-        const auto need = modbusNeed(binding);
-        if (!need || (need->slave > 0 ? need->slave : fallbackSlave) != block.slave ||
-            modbusReadFunction(need->table) != block.fc || (binding.mbFcFilter >= 0 && binding.mbFcFilter != block.fc) ||
-            need->address < block.start || need->address + need->count > block.start + block.count)
+        if (binding.parseMode != ParseMode::Modbus)
             continue;
         if (!binding.projectPoint.isEmpty()) {
-            for (quint64 stream : m_data->sampleStreams(binding.projectPoint))
-                if (link.ownsStream(stream, endpoint))
-                    m_data->markOld(binding.projectPoint, stream);
-        } else if (const quint64 stream = m_widgetStreams.value(binding.widgetId); stream && link.ownsStream(stream, endpoint)) {
-            if (auto widget = m_widgets.value(binding.widgetId)) {
-                widget->setBindingStatus(HmiWidget::BindingStatus::Stale);
-                widget->setBindingProblem(dataQualityText(DataQuality::Old));
-            }
+            const auto source = m_data->sample(binding.projectPoint).source;
+            if (matchesModbusRead(binding, source, link, endpoint, block, fallbackSlave))
+                m_data->markOld(binding.projectPoint, source.stream);
+        } else if (auto sample = m_widgetSamples.find(binding.widgetId); sample != m_widgetSamples.end()) {
+            const auto source = sample->sample().source;
+            if (matchesModbusRead(binding, source, link, endpoint, block, fallbackSlave) && sample->markOld(source.stream))
+                applyWidgetSample(binding, sample->sample());
         }
     }
     m_data->evaluate();
+    emit modbusReadUnavailable(link, endpoint, block, fallbackSlave);
+}
+
+bool RuntimeContext::matchesModbusRead(const BindingEntry &binding, const DataSource &source, const Link &link,
+                                      const QString &endpoint, const ModbusBlock &block, int fallbackSlave)
+{
+    if (!source.stream || source.connectionId != link.connectionId() || !link.ownsStream(source.stream, endpoint))
+        return false;
+    const auto need = modbusNeed(binding);
+    return need && (need->slave > 0 ? need->slave : fallbackSlave) == block.slave &&
+           modbusReadFunction(need->table) == block.fc && (binding.mbFcFilter < 0 || binding.mbFcFilter == block.fc) &&
+           need->address >= block.start && need->address + need->count <= block.start + block.count;
 }
 
 void RuntimeContext::setCurveNeeds(const QObject *chart, const QList<ModbusNeed> &needs)
@@ -407,6 +501,7 @@ void RuntimeContext::setActive(bool active)
             m_sendConfirmation->deleteLater();
             m_sendConfirmation.clear();
         }
+        m_widgetSamples.clear();
         m_data->clearValues();
         m_data->flushHistory();
     } else
@@ -433,7 +528,8 @@ std::optional<DataRoute> RuntimeContext::resolveCommandRoute(const EncodedComman
             *error = reason;
         return std::nullopt;
     };
-    const auto configured = resolveProjectRoute(m_connectionCards, m_projectParser, CommandEncoder::sendRouteFilter(original), original.route,
+    const auto cards = kind == Kind::Modbus ? activeModbusCards() : m_connectionCards;
+    const auto configured = resolveProjectRoute(cards, m_projectParser, CommandEncoder::sendRouteFilter(original), original.route,
                                                 RoutePurpose::Send, error);
     if (!configured || configured->isBroadcast())
         return configured;
@@ -459,10 +555,34 @@ std::optional<DataRoute> RuntimeContext::resolveCommandRoute(const EncodedComman
     return route;
 }
 
+QJsonArray RuntimeContext::activeModbusCards() const
+{
+    auto cards = m_connectionCards;
+    for (auto *link : m_hub->connectedLinks()) {
+        for (qsizetype index = 0; index < cards.size(); ++index) {
+            auto card = cards.at(index).toObject();
+            if (card.value(QStringLiteral("id")).toString() != link->connectionId())
+                continue;
+            auto props = card.value(QStringLiteral("properties")).toObject();
+            props.insert(QStringLiteral("defaultParser"), link->parserType());
+            props.remove(FrameTemplates::ReceiveId);
+            props.remove(FrameTemplates::ReceiveIds);
+            if (!link->answersModbus())
+                props.remove(QStringLiteral("modbusRole"));
+            card.insert(QStringLiteral("properties"), props);
+            cards[index] = card;
+            break;
+        }
+    }
+    return cards;
+}
+
 RuntimeContext::CommandTargets RuntimeContext::commandTargets(const EncodedCommand &command) const
 {
     CommandTargets targets;
     targets.links = m_hub->sendTargets(command);
+    if (command.kind == EncodedCommand::Kind::Modbus)
+        targets.links.removeIf([](const SendTarget &target) { return !target.link->parsesModbus(); });
     if (command.kind == EncodedCommand::Kind::S7)
         targets.s7Session = m_s7->sendSession(command.route.connectionId);
     if (command.kind == EncodedCommand::Kind::Modbus) {
@@ -559,6 +679,16 @@ void RuntimeContext::requestSend(HmiWidget *sender, const CommandResult &result,
             notify(tr("提示"), tr("发送目标已变化，请重新下发"), NotifyType::Warning);
             return;
         }
+        if (command.kind == EncodedCommand::Kind::Modbus &&
+            !source->properties().value(ModbusWritePoint).toString().isEmpty()) {
+            QString problem;
+            const auto point = pointWriteProperties(source->properties(), source->typeName(), &problem);
+            if (!point || point->value(QStringLiteral("commandTargetId")).toString() != command.route.connectionId ||
+                point->value(QStringLiteral("commandEndpoint")).toString() != command.route.endpoint) {
+                notify(tr("提示"), problem.isEmpty() ? tr("发送目标已变化，请重新下发") : problem, NotifyType::Warning);
+                return;
+            }
+        }
         if (sendResolved(command, targets) && source && source->context() == this && onSent)
             onSent();
     };
@@ -571,7 +701,7 @@ void RuntimeContext::requestSend(HmiWidget *sender, const CommandResult &result,
     dialog->setObjectName(QStringLiteral("sendConfirmationDialog"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     const bool hasInputValues = !command.inputValues.isEmpty();
-    const QSize panelSize = showDetails ? QSize(520, 440) : hasInputValues ? QSize(440, 300) : QSize(410, 200);
+    const QSize panelSize = showDetails ? QSize(520, 440) : hasInputValues ? QSize(480, 350) : QSize(460, 275);
     dialog->setPreferredSize(panelSize);
     auto *question = new FluentQt::BodyLabel(periodic ? tr("确定每 %1 ms 发送一次吗？").arg(intervalMs)
                                                      : tr("确定发送这条命令吗？"), dialog->widget());
@@ -579,6 +709,15 @@ void RuntimeContext::requestSend(HmiWidget *sender, const CommandResult &result,
         question->setText(question->text() + u'\n' + tr("确认后发送首轮，后续每轮读取当时的输入值。"));
     question->setWordWrap(true);
     dialog->viewLayout()->addWidget(question);
+    if (!showDetails) {
+        auto *summary = new FluentQt::BodyLabel(
+            tr("发送目标 %1\n操作 %2").arg(commandTargetLabels(command, targets).join(u'\n'), commandSummary(command, mode)),
+            dialog->widget());
+        summary->setTextFormat(Qt::PlainText);
+        summary->setWordWrap(true);
+        summary->setObjectName(QStringLiteral("sendConfirmationSummary"));
+        dialog->viewLayout()->addWidget(summary);
+    }
     if (showDetails || hasInputValues) {
         auto *details = new FluentQt::PlainTextEdit(dialog->widget());
         details->setObjectName(QStringLiteral("sendConfirmationDetails"));
@@ -708,16 +847,9 @@ void RuntimeContext::onUnit(const QByteArray &bytes, const Message &message, con
 void RuntimeContext::applyMessage(const Message &message, const DataSource &source)
 {
     for (const BindingEntry &binding : m_bindings) {
-        if (!binding.usesParsedData() || !binding.route().accepts(source) ||
+        if (!acceptsMessage(binding, message, source) ||
             (source.canText && !binding.projectPoint.isEmpty())) {
             continue;
-        }
-        if (!binding.projectPoint.isEmpty() && binding.parseMode == ParseMode::Modbus &&
-            binding.mbSlaveFilter < 0 && !source.slaveData) {
-            // A point using the default unit must read back from the same unit its poll requests target.
-            if (auto *link = m_hub->sourceLink(source);
-                link && message.value(QStringLiteral("slave")).toInt() != m_poller->settings(link).fallbackSlave)
-                continue;
         }
         const QVariant value = binding.extractFromParsed(message);
         const bool special = binding.typeName==QLatin1String("DigitalTimingChart")||binding.typeName==QLatin1String("RotaryEncoder")||binding.typeName==QLatin1String("StatusWordPanel")||binding.typeName==QLatin1String("BmsCellMatrix")||binding.typeName==QLatin1String("DcPowerSupply");
@@ -775,7 +907,7 @@ void RuntimeContext::onCanFrame(const CanFrame &frame, const Message &message, c
     // Confirm DBC and bit bindings together so calculations see a complete received frame.
     for (const auto index : m_parsedProjectBindings) {
         const auto &binding = m_bindings[index];
-        if (!binding.route().accepts(source))
+        if (!acceptsMessage(binding, message, source))
             continue;
         const auto value = binding.extractFromParsed(message);
         if (value.isValid())
@@ -798,8 +930,8 @@ void RuntimeContext::onCanFrame(const CanFrame &frame, const Message &message, c
 
 void RuntimeContext::push(const BindingEntry &binding, const QVariant &raw, const DataSource &source)
 {
+    const bool present = raw.isValid() && !raw.isNull();
     if (!binding.projectPoint.isEmpty()) {
-        const bool present = raw.isValid() && !raw.isNull();
         const auto value = present ? binding.evaluateStrict(raw) : QVariant();
         const auto quality = !present ? DataQuality::Invalid
             : value.isValid() ? DataQuality::Current : DataQuality::ConversionFailed;
@@ -807,19 +939,30 @@ void RuntimeContext::push(const BindingEntry &binding, const QVariant &raw, cons
                           quality == DataQuality::ConversionFailed ? binding.expression : QString());
         return;
     }
-    const QPointer<HmiWidget> widget = m_widgets.value(binding.widgetId);
-    if (widget) {
-        if (!raw.isValid() || raw.isNull()) {
-            if (binding.parseMode == ParseMode::DataPoint) {
-                if (widget->bindingStatus() == HmiWidget::BindingStatus::Live)
-                    widget->setBindingStatus(HmiWidget::BindingStatus::Stale);
-            } else {
+    if (!m_widgets.value(binding.widgetId))
+        return;
+    if (binding.parseMode == ParseMode::DataPoint || binding.parseMode == ParseMode::S7) {
+        if (present)
+            applyWidgetSample(binding, {raw, source, {}, DataQuality::Current, {}});
+        return;
+    }
+    auto &sample = m_widgetSamples[binding.widgetId];
+    sample.update({raw, source, {}, present ? DataQuality::Current : DataQuality::Invalid, {}});
+    applyWidgetSample(binding, sample.sample());
+}
+
+void RuntimeContext::applyWidgetSample(const BindingEntry &binding, const DataPointSample &sample)
+{
+    if (const auto widget = m_widgets.value(binding.widgetId)) {
+        if (sample.quality != DataQuality::Current) {
+            const bool connected = sample.quality == DataQuality::Invalid;
+            widget->setBindingStatus(connected ? HmiWidget::BindingStatus::Live : HmiWidget::BindingStatus::Stale);
+            widget->setBindingProblem(dataQualityText(sample.quality), sample.detail);
+            if (connected)
                 widget->applyBoundValue({}, binding);
-            }
             return;
         }
-        if (source.stream)
-            m_widgetStreams.insert(binding.widgetId, source.stream);
+        const auto &raw = sample.value;
         widget->setBindingStatus(HmiWidget::BindingStatus::Live);
         widget->setBindingProblem({});
         const QString type=widget->typeName();

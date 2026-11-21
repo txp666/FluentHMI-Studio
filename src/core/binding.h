@@ -13,6 +13,15 @@
 
 namespace fhmi {
 
+struct TextFieldValue
+{
+    QString path;
+    QVariant value;
+    bool nested = false;
+    bool supportsJsonPath() const { return nested || (!path.isEmpty() && !path.contains(u'.')); }
+};
+QList<TextFieldValue> textFieldValues(const Message &message);
+
 // The register table a Modbus binding reads, by register address: a reply names its registers that way
 // (hr100) once the request it answers is known.
 namespace ModbusArea {
@@ -35,11 +44,13 @@ inline const QString CanField = QStringLiteral("CAN 信号名称"); // i18n: val
 
 inline RouteTransport bindingRouteTransport(QStringView mode)
 {
-if (mode == ParseMode::CanSignal || mode == ParseMode::CanField)
+    if (mode == ParseMode::CanSignal || mode == ParseMode::CanField)
         return RouteTransport::Can;
     if (mode == ParseMode::S7)
         return RouteTransport::S7;
-    return mode == ParseMode::HexBytes || mode == ParseMode::Modbus ? RouteTransport::Bytes : RouteTransport::Any;
+    if (mode == ParseMode::Modbus)
+        return RouteTransport::Modbus;
+    return mode == ParseMode::HexBytes ? RouteTransport::Bytes : RouteTransport::Any;
 }
 
 bool supportsBindingMode(const QString &typeName, QStringView mode);

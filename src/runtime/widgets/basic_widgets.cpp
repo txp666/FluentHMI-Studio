@@ -30,6 +30,14 @@ namespace fhmi {
 
 namespace {
 
+template<class Encode>
+CommandResult encodeWidgetCommand(const HmiWidget &widget, Encode encode)
+{
+    QString error;
+    const auto props = widget.context()->pointWriteProperties(widget.properties(), widget.typeName(), &error);
+    return props ? encode(*props) : CommandResult::failure(error);
+}
+
 QHBoxLayout *fill(QWidget *owner, QWidget *child, const QMargins &margins = {})
 {
     auto *layout = new QHBoxLayout(owner);
@@ -124,9 +132,11 @@ void PushButtonWidget::sendCommand()
     if (!context() || stopPeriodicSend()) {
         return;
     }
-    const auto encode = [this, props = properties()] {
-        return CommandEncoder::buttonFromProperties(props,
-            [this](const QString &id) { return context()->inputValue(id); }, nullptr, frameTemplates());
+    const auto encode = [this] {
+        return encodeWidgetCommand(*this, [this](const QJsonObject &props) {
+            return CommandEncoder::buttonFromProperties(props,
+                [this](const QString &id) { return context()->inputValue(id); }, nullptr, frameTemplates());
+        });
     };
     const auto command = encode();
     const auto notify = [this] {
@@ -142,7 +152,8 @@ void PushButtonWidget::sendCommand()
         return;
     }
     if (command.command || !command.error.isEmpty()) {
-        if (confirmsSend() || CommandEncoder::usesFrameFields(properties()) || !CommandEncoder::commandInputs(properties()).isEmpty()) {
+        if (confirmsSend() || CommandEncoder::usesFrameFields(properties()) || CommandEncoder::usesFrameSequence(properties()) ||
+            !CommandEncoder::commandInputs(properties()).isEmpty()) {
             requestSend(command, notify);
             return;
         }
@@ -258,7 +269,9 @@ void LineEditWidget::onAttached()
             if (field.isEmpty() || !settings || !FrameTemplates::requiredFields(*settings).contains(field))
                 return;
         }
-        requestSend(CommandEncoder::encode(props, value, nullptr, frameTemplates()));
+        requestSend(encodeWidgetCommand(*this, [this, &value](const QJsonObject &effective) {
+            return CommandEncoder::encode(effective, value, nullptr, frameTemplates());
+        }));
     }));
 }
 
@@ -410,6 +423,9 @@ void ComboBoxWidget::selectIndex(int index)
     if (index >= m_options.size() || index == m_currentIndex)
         return;
     const bool sends = context() && widgetSendsCommands(typeName(), properties());
+    const auto command = sends ? encodeWidgetCommand(*this, [this, index](const QJsonObject &props) {
+        return CommandEncoder::selectionFromProperties(props, m_options.at(index), frameTemplates());
+    }) : CommandResult{};
     if (sends && confirmsSend()) {
         const int previous = m_currentIndex;
         if (m_segmented && previous < 0) {
@@ -421,7 +437,7 @@ void ComboBoxWidget::selectIndex(int index)
         } else {
             setCurrentIndex(previous);
         }
-        requestSend(CommandEncoder::selectionFromProperties(properties(), m_options.at(index), frameTemplates()), [this, previous, index] {
+        requestSend(command, [this, previous, index] {
             if (m_currentIndex == previous)
                 setCurrentIndex(index);
         });
@@ -430,7 +446,7 @@ void ComboBoxWidget::selectIndex(int index)
     m_currentIndex = index;
     ensureSelectionVisible();
     if (sends)
-        requestSend(CommandEncoder::selectionFromProperties(properties(), m_options.at(index), frameTemplates()));
+        requestSend(command);
 }
 
 void ComboBoxWidget::ensureSelectionVisible()
@@ -553,7 +569,9 @@ void ToggleSwitchWidget::checkedEdited(bool checked)
         m_checked = checked;
         return;
     }
-    const auto command = CommandEncoder::switchFromProperties(properties(), checked, frameTemplates());
+    const auto command = encodeWidgetCommand(*this, [this, checked](const QJsonObject &props) {
+        return CommandEncoder::switchFromProperties(props, checked, frameTemplates());
+    });
     const bool sends = command.command || !command.error.isEmpty();
     const auto notify = [this] {
         if (flag("notify"))
@@ -669,10 +687,13 @@ bool SliderWidget::eventFilter(QObject *watched, QEvent *event)
 void SliderWidget::sendValue(int value)
 {
     const bool sends = widgetSendsCommands(typeName(), properties());
+    const auto command = sends ? encodeWidgetCommand(*this, [this, value](const QJsonObject &props) {
+        return CommandEncoder::encode(props, QString::number(value), nullptr, frameTemplates());
+    }) : CommandResult{};
     if (sends && confirmsSend()) {
         const int previous = m_value;
         setValue(previous);
-        requestSend(CommandEncoder::encode(properties(), QString::number(value), nullptr, frameTemplates()), [this, previous, value] {
+        requestSend(command, [this, previous, value] {
             if (m_value == previous)
                 setValue(value);
         });
@@ -681,7 +702,7 @@ void SliderWidget::sendValue(int value)
     m_value = value;
     context()->writeModbusSlaves(this, value, sends);
     if (sends)
-        requestSend(CommandEncoder::encode(properties(), QString::number(value), nullptr, frameTemplates()));
+        requestSend(command);
 }
 
 // ---------------------------------------------------------------------------
@@ -784,10 +805,13 @@ void SpinBoxWidget::valueEdited(double value)
     const bool sends = context() && widgetSendsCommands(typeName(), properties());
     const QString number = m_doubleSpin ? QString::number(value, 'g', QLocale::FloatingPointShortest)
                                         : QString::number(int(value));
+    const auto command = sends ? encodeWidgetCommand(*this, [this, &number](const QJsonObject &props) {
+        return CommandEncoder::encode(props, number, nullptr, frameTemplates());
+    }) : CommandResult{};
     if (sends && confirmsSend()) {
         const double previous = m_value;
         setValue(previous);
-        requestSend(CommandEncoder::encode(properties(), number, nullptr, frameTemplates()), [this, previous, value] {
+        requestSend(command, [this, previous, value] {
             if (m_value == previous)
                 setValue(value);
         });
@@ -798,7 +822,7 @@ void SpinBoxWidget::valueEdited(double value)
         return;
     context()->writeModbusSlaves(this, value, sends);
     if (sends)
-        requestSend(CommandEncoder::encode(properties(), number, nullptr, frameTemplates()));
+        requestSend(command);
 }
 
 } // namespace fhmi

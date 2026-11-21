@@ -1,9 +1,13 @@
 #include "runtime/bit_map_view.h"
 
+#include "core/can_signal.h"
+#include "runtime/frame_bytes_view.h"
+
 #include <FluentQtWidgets/StyleSheet.h>
 #include <QtCore/QAbstractTableModel>
 #include <QtGui/QBrush>
 #include <QtGui/QFontDatabase>
+#include <QtGui/QKeyEvent>
 #include <QtWidgets/QHeaderView>
 
 #include <algorithm>
@@ -110,11 +114,34 @@ BitMapView::BitMapView(QWidget *parent) : FluentQt::TableView(parent), m_bits(ne
     connect(this, &QTableView::clicked, this, [this](const QModelIndex &cell) { emit bitClicked(absoluteBit(cell)); });
 }
 
+void BitMapView::keyPressEvent(QKeyEvent *event)
+{
+    const auto current = currentIndex();
+    if (current.isValid() && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
+                              event->key() == Qt::Key_Space)) {
+        emit bitClicked(absoluteBit(current));
+        event->accept();
+        return;
+    }
+    FluentQt::TableView::keyPressEvent(event);
+}
+
 void BitMapView::setBits(int byteCount, const QByteArray *sample, QList<BitRange> marked, int locateBit)
 {
     m_bits->setBits(byteCount, sample, std::move(marked));
     if (locateBit >= 0 && locateBit / 8 < byteCount)
         scrollTo(m_bits->index(locateBit / 8, 7 - locateBit % 8));
+}
+
+void BitMapView::setCanSignal(int byteCount, const QByteArray *sample, const CanSignalDef *signal, int locateBit)
+{
+    QList<BitRange> marked;
+    if (signal) {
+        const auto color = frameByteColor(FrameByteKind::Field, 1);
+        for (const int bit : signal->bitPositions())
+            marked.append({bit, 1, color});
+    }
+    setBits(byteCount, sample, std::move(marked), locateBit);
 }
 
 } // namespace fhmi

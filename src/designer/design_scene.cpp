@@ -1,4 +1,5 @@
 #include "designer/design_scene.h"
+#include "core/chart_limits.h"
 #include "runtime/widgets/industrial_widget.h"
 
 #include "comm/modbus_slave.h"
@@ -137,12 +138,17 @@ QJsonObject remapWidgetReferences(QJsonObject widget, const QHash<QString, QStri
     const QString source=binding.value(QStringLiteral("sourceCardId")).toString();
     if(ids.contains(source)){binding.insert(QStringLiteral("sourceCardId"),ids.value(source));widget.insert(QStringLiteral("binding"),binding);}
     auto props=widget.value(QStringLiteral("properties")).toObject();
-    for(const QString &key:{QStringLiteral("sourceCardId"),QStringLiteral("commandTargetId"),
-                           QStringLiteral("_curve_0_sourceCardId"),QStringLiteral("_curve_1_sourceCardId"),
-                           QStringLiteral("_curve_2_sourceCardId"),QStringLiteral("_curve_3_sourceCardId"),QStringLiteral("_curve_4_sourceCardId"),
-                           QStringLiteral("_curve_5_sourceCardId"),QStringLiteral("_curve_6_sourceCardId"),QStringLiteral("_curve_7_sourceCardId")}) {
-        const QString id=props.value(key).toString();if(ids.contains(id))props.insert(key,ids.value(id));
-    }
+    const auto remap = [&](const QString &key) {
+        const auto replacement = ids.constFind(props.value(key).toString());
+        if (replacement != ids.cend())
+            props.insert(key, replacement.value());
+    };
+    remap(QStringLiteral("sourceCardId"));
+    remap(QStringLiteral("commandTargetId"));
+    const auto type = widget.value(QStringLiteral("type")).toString();
+    const int series = isTimingChart(type) ? MaxTimingChannels : type == u"RealtimeChart" ? MaxRealtimeCurves : 0;
+    for (int index = 0; index < series; ++index)
+        remap(QStringLiteral("_curve_%1_sourceCardId").arg(index));
     CommandEncoder::mapInputIds(props, [&](const QString &id) {
         const auto replacement = ids.constFind(widgetIdForInput(id));
         return pointNameForInput(id).isEmpty() && replacement != ids.cend() ? widgetInputId(*replacement) : id;

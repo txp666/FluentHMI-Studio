@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     FluentHMIStudio
-    VERSION 0.9.0
+    VERSION 0.9.1
     DESCRIPTION "Visual HMI designer for hardware engineers, built on FluentQtWidgets"
     HOMEPAGE_URL "https://github.com/txp666/FluentHMI-Studio"
     LANGUAGES CXX
@@ -201,6 +201,8 @@ add_library(fhmi_runtime STATIC
     src/runtime/bit_map_view.h
     src/runtime/frame_bytes_view.cpp
     src/runtime/frame_bytes_view.h
+    src/runtime/send_frame_fields.cpp
+    src/runtime/send_frame_fields.h
     src/runtime/receive_frame_preview.cpp
     src/runtime/receive_frame_preview.h
     src/runtime/hmi_widget.cpp

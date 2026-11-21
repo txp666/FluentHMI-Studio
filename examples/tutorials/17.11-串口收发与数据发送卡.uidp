@@ -3,7 +3,7 @@
   "appName": "17.11 串口收发与数据发送卡",
   "canvas": {
     "width": 1120,
-    "height": 816,
+    "height": 844,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "两张卡已选虚拟串口 A 和 B，分别点连接。按卡片上方给出的载荷，试单发和周期发送。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。分别连接左侧虚拟串口 A 和右侧虚拟串口 B。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 左侧点「按字段发送…」，填序号 1 和采样 -100。右侧查看接收读数。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "SerialConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 242
       },
@@ -64,7 +78,7 @@
       "type": "SerialConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 242
       },
@@ -84,12 +98,12 @@
       "type": "Label",
       "geometry": {
         "x": 24,
-        "y": 342,
+        "y": 370,
         "w": 528,
         "h": 24
       },
       "properties": {
-        "text": "载荷输入 01 FF 9C，回车或点发送",
+        "text": "按字段填序号 1、采样 -100，或输入 HEX 载荷 01 FF 9C。",
         "fontSize": 13
       }
     },
@@ -98,12 +112,12 @@
       "type": "DataSendCard",
       "geometry": {
         "x": 24,
-        "y": 372,
+        "y": 400,
         "w": 528,
         "h": 138
       },
       "properties": {
-        "title": "单发 HEX 载荷",
+        "title": "A → B · 单次发送",
         "commandMode": "HEX",
         "sendFrameTemplateId": "serial-frame",
         "commandTargetId": "hmi",
@@ -117,12 +131,12 @@
       "type": "Label",
       "geometry": {
         "x": 568,
-        "y": 342,
+        "y": 370,
         "w": 528,
         "h": 24
       },
       "properties": {
-        "text": "载荷输入 02 00 FA，启动后可直接改值",
+        "text": "按字段填序号 2、采样 250，或输入 HEX 载荷 02 00 FA。",
         "fontSize": 13
       }
     },
@@ -131,12 +145,12 @@
       "type": "DataSendCard",
       "geometry": {
         "x": 568,
-        "y": 372,
+        "y": 400,
         "w": 528,
         "h": 138
       },
       "properties": {
-        "title": "周期 HEX 载荷 · 700 ms",
+        "title": "B → A · 周期发送 700 ms",
         "commandMode": "HEX",
         "sendFrameTemplateId": "serial-frame",
         "commandTargetId": "device",
@@ -150,21 +164,20 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 24,
-        "y": 527,
+        "y": 555,
         "w": 258,
         "h": 64
       },
       "properties": {
-        "title": "收到的序号",
+        "title": "A 收到的序号",
         "value": "—",
         "decimals": "0",
         "fontSize": 20,
         "unit": ""
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "hmi",
-        "key": "sequence"
+        "parseMode": "工程数据点",
+        "key": "串口 A 收到的序号"
       }
     },
     {
@@ -172,21 +185,20 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 294,
-        "y": 527,
+        "y": 555,
         "w": 258,
         "h": 64
       },
       "properties": {
-        "title": "收到的采样值",
+        "title": "A 收到的采样",
         "value": "—",
         "decimals": "0",
         "fontSize": 20,
         "unit": ""
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "hmi",
-        "key": "sample"
+        "parseMode": "工程数据点",
+        "key": "串口 A 收到的采样"
       }
     },
     {
@@ -194,21 +206,20 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 527,
+        "y": 555,
         "w": 258,
         "h": 64
       },
       "properties": {
-        "title": "收到的序号",
+        "title": "B 收到的序号",
         "value": "—",
         "decimals": "0",
         "fontSize": 20,
         "unit": ""
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "sequence"
+        "parseMode": "工程数据点",
+        "key": "串口 B 收到的序号"
       }
     },
     {
@@ -216,21 +227,20 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 838,
-        "y": 527,
+        "y": 555,
         "w": 258,
         "h": 64
       },
       "properties": {
-        "title": "收到的采样值",
+        "title": "B 收到的采样",
         "value": "—",
         "decimals": "0",
         "fontSize": 20,
         "unit": ""
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "sample"
+        "parseMode": "工程数据点",
+        "key": "串口 B 收到的采样"
       }
     },
     {
@@ -238,7 +248,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 607,
+        "y": 635,
         "w": 528,
         "h": 184
       },
@@ -252,7 +262,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 607,
+        "y": 635,
         "w": 528,
         "h": 184
       },
@@ -276,21 +286,61 @@
         "checksum": "无",
         "fields": [
           [
-            "sequence",
+            "序号",
             2,
             1,
             "uint8"
           ],
           [
-            "sample",
+            "采样",
             3,
             2,
             "int16",
             "大端(BE)"
           ]
+        ],
+        "sendRequiredFields": [
+          "序号",
+          "采样"
         ]
       },
       "sample": "D5 5D 00 05 01 FF 9C 0D 0A"
     }
+  },
+  "logic": {
+    "points": [
+      {
+        "name": "串口 A 收到的序号",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "序号"
+        }
+      },
+      {
+        "name": "串口 A 收到的采样",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "采样"
+        }
+      },
+      {
+        "name": "串口 B 收到的序号",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "序号"
+        }
+      },
+      {
+        "name": "串口 B 收到的采样",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "采样"
+        }
+      }
+    ]
   }
 }

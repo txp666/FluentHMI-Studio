@@ -3,7 +3,7 @@
   "appName": "17.7 CAN经典帧与FD信号",
   "canvas": {
     "width": 1120,
-    "height": 847,
+    "height": 875,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "已选虚拟 CAN，连接后发出的报文会回环接收。可试回车、周期发送、扩展帧和远程帧。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。点左侧虚拟 CAN 的「连接」。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 改右侧转速，再点「发 0x321 标准帧」或启动周期。回环读数和收发记录会同步更新。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "CanConfigCard",
       "geometry": {
         "x": 24,
-        "y": 96,
+        "y": 124,
         "w": 528,
         "h": 250
       },
@@ -62,8 +76,8 @@
       "type": "LineEdit",
       "geometry": {
         "x": 568,
-        "y": 102,
-        "w": 528,
+        "y": 130,
+        "w": 254,
         "h": 36
       },
       "properties": {
@@ -79,11 +93,26 @@
       }
     },
     {
+      "id": "pressureInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 836,
+        "y": 130,
+        "w": 260,
+        "h": 36
+      },
+      "properties": {
+        "title": "压力原码（0.01 bar）",
+        "text": "250",
+        "inputOnly": true
+      }
+    },
+    {
       "id": "sendClassic",
       "type": "PushButton",
       "geometry": {
         "x": 568,
-        "y": 150,
+        "y": 178,
         "w": 254,
         "h": 36
       },
@@ -94,7 +123,15 @@
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
         "canId": "321",
-        "command": "rpm=1500,temp=-35.2,ready=1"
+        "commandTemplate": "rpm={rpm},temp=-35.2,ready=1",
+        "commandInputs": [
+          {
+            "variable": "rpm",
+            "inputId": "rpmInput",
+            "dataType": "uint16"
+          }
+        ],
+        "buttonStyle": "强调"
       }
     },
     {
@@ -102,7 +139,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 836,
-        "y": 150,
+        "y": 178,
         "w": 260,
         "h": 36
       },
@@ -115,8 +152,14 @@
         "canFd": true,
         "canBrs": true,
         "canId": "18FF0055",
-        "command": "00 FA 01 02 03 04 05 06 07 08 09 0A",
-        "dataType": "HEX字符串"
+        "commandTemplate": "{pressure} 01 02 03 04 05 06 07 08 09 0A",
+        "commandInputs": [
+          {
+            "variable": "pressure",
+            "inputId": "pressureInput",
+            "dataType": "uint16"
+          }
+        ]
       }
     },
     {
@@ -124,7 +167,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 568,
-        "y": 198,
+        "y": 226,
         "w": 254,
         "h": 36
       },
@@ -135,9 +178,16 @@
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
         "canId": "321",
-        "command": "rpm=1500,temp=-35.2,ready=1",
         "sendIntervalMs": 500,
-        "buttonStyle": "描边"
+        "buttonStyle": "描边",
+        "commandTemplate": "rpm={rpm},temp=-35.2,ready=1",
+        "commandInputs": [
+          {
+            "variable": "rpm",
+            "inputId": "rpmInput",
+            "dataType": "uint16"
+          }
+        ]
       }
     },
     {
@@ -145,7 +195,7 @@
       "type": "DataSendCard",
       "geometry": {
         "x": 24,
-        "y": 360,
+        "y": 388,
         "w": 528,
         "h": 110
       },
@@ -162,12 +212,26 @@
       "type": "Label",
       "geometry": {
         "x": 24,
-        "y": 473,
+        "y": 501,
         "w": 528,
         "h": 24
       },
       "properties": {
-        "text": "可输入 321#R8 或 00000321#11223344",
+        "text": "手工试发：321#R8（远程帧）或 00000321#11223344（扩展帧）",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "canFixedFields",
+      "type": "Label",
+      "geometry": {
+        "x": 836,
+        "y": 231,
+        "w": 260,
+        "h": 24
+      },
+      "properties": {
+        "text": "标准帧预设 −35.2 °C / 就绪",
         "fontSize": 13
       }
     },
@@ -176,7 +240,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 246,
+        "y": 274,
         "w": 254,
         "h": 70
       },
@@ -188,9 +252,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "can",
-        "key": "rpm"
+        "parseMode": "工程数据点",
+        "key": "回环转速"
       }
     },
     {
@@ -198,7 +261,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 246,
+        "y": 274,
         "w": 260,
         "h": 70
       },
@@ -210,9 +273,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "can",
-        "key": "temp"
+        "parseMode": "工程数据点",
+        "key": "回环温度"
       }
     },
     {
@@ -220,7 +282,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 327,
+        "y": 355,
         "w": 254,
         "h": 70
       },
@@ -235,9 +297,8 @@
         "textList": "0=未就绪|#64748b\n1=就绪|#107c10"
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "can",
-        "key": "ready"
+        "parseMode": "工程数据点",
+        "key": "回环就绪"
       }
     },
     {
@@ -245,7 +306,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 327,
+        "y": 355,
         "w": 260,
         "h": 70
       },
@@ -257,13 +318,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "CAN信号",
-        "sourceCardId": "can",
-        "canId": "18FF0055",
-        "canStartBit": 7,
-        "canBitLength": 16,
-        "canByteOrder": "Motorola MSB",
-        "canFactor": 0.01
+        "parseMode": "工程数据点",
+        "key": "回环压力"
       }
     },
     {
@@ -271,7 +327,7 @@
       "type": "CanMonitor",
       "geometry": {
         "x": 24,
-        "y": 510,
+        "y": 538,
         "w": 1072,
         "h": 313
       },
@@ -283,5 +339,48 @@
         "showSignals": true
       }
     }
-  ]
+  ],
+  "logic": {
+    "points": [
+      {
+        "name": "回环转速",
+        "unit": "rpm",
+        "binding": {
+          "parseMode": "CAN 信号名称",
+          "sourceCardId": "can",
+          "key": "0x321.rpm"
+        }
+      },
+      {
+        "name": "回环温度",
+        "unit": "°C",
+        "binding": {
+          "parseMode": "CAN 信号名称",
+          "sourceCardId": "can",
+          "key": "0x321.temp"
+        }
+      },
+      {
+        "name": "回环就绪",
+        "binding": {
+          "parseMode": "CAN 信号名称",
+          "sourceCardId": "can",
+          "key": "0x321.ready"
+        }
+      },
+      {
+        "name": "回环压力",
+        "unit": "bar",
+        "binding": {
+          "parseMode": "CAN信号",
+          "sourceCardId": "can",
+          "canId": "18FF0055",
+          "canStartBit": 7,
+          "canBitLength": 16,
+          "canByteOrder": "Motorola MSB",
+          "canFactor": 0.01
+        }
+      }
+    ]
+  }
 }

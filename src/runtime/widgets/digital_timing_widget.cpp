@@ -16,6 +16,8 @@
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/Menu.h>
+#include <FluentQtWidgets/Widgets/ScrollArea.h>
+#include <FluentQtWidgets/Widgets/SmoothScrollDelegate.h>
 #include <FluentQtWidgets/Widgets/SpinBox.h>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
@@ -30,6 +32,7 @@
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
+#include <QtGui/QWheelEvent>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QVBoxLayout>
@@ -44,6 +47,8 @@ namespace {
 constexpr int kDefaultWindowSeconds = 10;
 constexpr int kHistorySeconds = 3600;
 constexpr int kHistoryTransitions = 10000;
+constexpr int kMinimumLaneHeight = 16;
+constexpr int kChannelScrollWidth = 12;
 constexpr qreal kMinimumSpan = 0.02;
 
 std::optional<bool> digitalLevel(const BindingEntry &binding, const QVariant &raw)
@@ -82,8 +87,12 @@ qreal tickInterval(qreal span, qreal width)
 class DigitalTimingPlot : public ChartViewport
 {
   public:
-    explicit DigitalTimingPlot(QWidget *parent) : ChartViewport(parent)
+    explicit DigitalTimingPlot(QWidget *parent)
+        : ChartViewport(parent), m_channelScroll(new FluentQt::ScrollBar(Qt::Vertical, this))
     {
+        m_channelScroll->setAccessibleName(tr("通道滚动"));
+        m_channelScroll->hide();
+        connect(m_channelScroll, &FluentQt::ScrollBar::valueChanged, this, [this] { update(); });
         setValueTagsVisible(true); // right gutter for each bit's 0/1 readout
         setCrosshairVisible(false);
         setAutoYRange(false);
@@ -109,20 +118,21 @@ class DigitalTimingPlot : public ChartViewport
 
     std::function<void()> viewChanged;
 
-    void setChannels(const QJsonArray &bits, quint16 visible, bool fitNames)
+    void setChannels(const QJsonArray &bits, TimingMask visible, bool fitNames)
     {
         m_channels.clear();
         m_labelWidth = 58;
         for (int i = 0; i < bits.size(); ++i) {
-            if (visible & (1u << i)) {
+            const TimingMask mask = TimingMask{1} << i;
+            if (visible & mask) {
                 const auto entry = bits.at(i).toObject();
                 const auto name = entry.value(QStringLiteral("name")).toString();
-                m_channels.append({quint16(1u << i), name,
-                                   QColor(entry.value(QStringLiteral("color")).toString())});
+                m_channels.append({mask, name, QColor(entry.value(QStringLiteral("color")).toString())});
                 if (fitNames)
                     m_labelWidth = std::max(m_labelWidth, fontMetrics().horizontalAdvance(name) + 20);
             }
         }
+        updateChannelScroll();
         update();
     }
 
@@ -150,6 +160,7 @@ class DigitalTimingPlot : public ChartViewport
     void setRecording(std::optional<TimingRecording> recording)
     {
         m_recording = std::move(recording);
+        m_channelScroll->setValue(0);
         if (m_recording) {
             hideCursor();
             const qreal start = oldestTime();
@@ -234,6 +245,26 @@ class DigitalTimingPlot : public ChartViewport
 
     void paintEvent(QPaintEvent *) override;
 
+    void resizeEvent(QResizeEvent *event) override
+    {
+        ChartViewport::resizeEvent(event);
+        updateChannelScroll();
+    }
+
+    void wheelEvent(QWheelEvent *event) override
+    {
+        const QRectF plot = plotArea();
+        const QPointF position = event->position();
+        const int delta = event->pixelDelta().isNull() ? event->angleDelta().y() : event->pixelDelta().y();
+        if (m_channelScroll->maximum() > 0 && delta && position.y() >= plot.top() && position.y() <= plot.bottom() &&
+            !plot.contains(position)) {
+            m_channelScroll->setValue(m_channelScroll->value() + (delta > 0 ? -1 : 1));
+            event->accept();
+            return;
+        }
+        ChartViewport::wheelEvent(event);
+    }
+
     void mousePressEvent(QMouseEvent *event) override
     {
         // The analog context menu's Y scale and data-series actions do not apply to fixed bit lanes.
@@ -248,7 +279,7 @@ class DigitalTimingPlot : public ChartViewport
   private:
     struct Channel
     {
-        quint16 mask;
+        TimingMask mask;
         QString name;
         QColor color;
     };
@@ -271,8 +302,11 @@ class DigitalTimingPlot : public ChartViewport
     }
     void updateRange(qreal requestedSpan = 0);
     void setTimeRange(qreal start, qreal end);
+    int visibleLaneCount() const;
+    void updateChannelScroll();
     void drawTrace(QPainter &painter, const QRectF &plot, const QRectF &lane, const Channel &channel) const;
 
+    FluentQt::ScrollBar *m_channelScroll;
     QList<Channel> m_channels;
     std::deque<TimingSample> m_samples;
     std::optional<TimingRecording> m_recording;
@@ -284,6 +318,22 @@ class DigitalTimingPlot : public ChartViewport
     int m_labelWidth = 58;
     bool m_settingRange = false;
 };
+
+int DigitalTimingPlot::visibleLaneCount() const
+{
+    const int capacity = std::max(1, int(plotArea().height()) / kMinimumLaneHeight);
+    return std::min(int(m_channels.size()), capacity);
+}
+
+void DigitalTimingPlot::updateChannelScroll()
+{
+    const int visible = visibleLaneCount();
+    const QRectF plot = plotArea();
+    m_channelScroll->setGeometry(width() - kChannelScrollWidth - 2, int(plot.top()), kChannelScrollWidth,
+                                 std::max(0, int(plot.height())));
+    m_channelScroll->setPageStep(visible);
+    m_channelScroll->setRange(0, int(m_channels.size()) - visible);
+}
 
 void DigitalTimingPlot::updateRange(qreal requestedSpan)
 {
@@ -360,8 +410,10 @@ void DigitalTimingPlot::paintEvent(QPaintEvent *)
         return;
 
     painter.fillRect(plot, dark ? QColor(22, 22, 22) : QColor(248, 250, 252));
-    const qreal laneHeight = plot.height() / std::max<qsizetype>(1, m_channels.size());
-    for (int i = 1; i < m_channels.size(); i += 2)
+    const int lanes = visibleLaneCount();
+    const int firstLane = m_channelScroll->value();
+    const qreal laneHeight = plot.height() / std::max(1, lanes);
+    for (int i = (firstLane + 1) % 2; i < lanes; i += 2)
         painter.fillRect(QRectF(plot.left(), plot.top() + i * laneHeight, plot.width(), laneHeight),
                          dark ? QColor(29, 29, 29) : QColor(241, 245, 250));
 
@@ -385,8 +437,9 @@ void DigitalTimingPlot::paintEvent(QPaintEvent *)
     QFont labelFont = font();
     labelFont.setPixelSize(std::clamp(int(laneHeight) - 2, 8, 13));
     painter.setFont(labelFont);
-    for (int i = 0; i < m_channels.size(); ++i) {
-        const auto &channel = m_channels.at(i);
+    const qreal valueRight = m_channelScroll->maximum() ? m_channelScroll->x() : width();
+    for (int i = 0; i < lanes; ++i) {
+        const auto &channel = m_channels.at(firstLane + i);
         const QRectF lane(plot.left(), plot.top() + i * laneHeight, plot.width(), laneHeight);
         painter.setPen(grid);
         painter.drawLine(lane.bottomLeft(), lane.bottomRight());
@@ -396,7 +449,7 @@ void DigitalTimingPlot::paintEvent(QPaintEvent *)
         painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
                          painter.fontMetrics().elidedText(channel.name, Qt::ElideRight, int(nameRect.width())));
         if (areValueTagsVisible())
-            painter.drawText(QRectF(plot.right(), lane.top(), width() - plot.right(), laneHeight), Qt::AlignCenter,
+            painter.drawText(QRectF(plot.right(), lane.top(), valueRight - plot.right(), laneHeight), Qt::AlignCenter,
                              levelText(selected.level(channel.mask)));
         painter.save();
         painter.setClipRect(lane);
@@ -512,7 +565,7 @@ void DigitalTimingChartWidget::apply()
         m_plot->resetHistory();
         if (!TimingSource::usesChannels(properties())) {
             if (const auto sample = word(prop("value").toVariant()))
-                m_plot->append({0, {*sample, quint16((1u << m_bitWidth) - 1)}});
+                m_plot->append({0, {*sample, (TimingMask{1} << m_bitWidth) - 1}});
         }
         m_plot->advance(m_windowSeconds);
     }
@@ -532,7 +585,7 @@ qreal DigitalTimingChartWidget::elapsed() const { return m_clock.isValid() ? m_c
 void DigitalTimingChartWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
     const auto sample = word(value);
-    appendSample({elapsed(), sample ? TimingLevels{*sample, quint16((1u << m_bitWidth) - 1)} : TimingLevels{}});
+    appendSample({elapsed(), sample ? TimingLevels{*sample, (TimingMask{1} << m_bitWidth) - 1} : TimingLevels{}});
 }
 
 void DigitalTimingChartWidget::bindingStatusChanged(BindingStatus status)
@@ -548,8 +601,15 @@ void DigitalTimingChartWidget::onAttached()
     setWindowSeconds(viewPreference(QStringLiteral("timingWindow"), m_windowSeconds).toInt());
     m_exportDirectory = viewPreference(QStringLiteral("timingExportDirectory"), QString()).toString();
     m_autoExport = viewPreference(QStringLiteral("timingAutoExport"), false).toBool() && !m_exportDirectory.isEmpty();
-    m_channelMask = quint16(viewPreference(channelPreference(), 0xffff).toUInt());
-    if (TimingSource::usesChannels(properties())) {
+    const bool perChannel = TimingSource::usesChannels(properties());
+    TimingMask defaultMask = AllTimingChannels;
+    if (perChannel) {
+        // Old view settings stored a 16-bit mask. Leave any newly available channels visible.
+        const auto legacy = viewPreference(QStringLiteral("timingBoundChannels"), 0xffffu).toUInt();
+        defaultMask = legacy | 0xffff0000u;
+    }
+    m_channelMask = viewPreference(channelPreference(), defaultMask).toUInt();
+    if (perChannel) {
         updateChannels();
         bindChannels();
     } else {
@@ -575,14 +635,14 @@ void DigitalTimingChartWidget::updateRuntimeState()
         if (m_plot->hasLiveSamples())
             appendSample({elapsed(), {}});
         for (auto &input : m_inputs)
-            input.stream = 0;
+            input.source = {};
     }
     updateRefreshTimer();
 }
 
 void DigitalTimingChartWidget::bindChannels()
 {
-    m_inputs.resize(chartCurveCount(properties()));
+    m_inputs.resize(chartCurveCount(typeName(), properties()));
     for (int i = 0; i < m_inputs.size(); ++i) {
         auto entry = BindingEntry::fromWidget({{QStringLiteral("type"), typeName()},
                                               {QStringLiteral("binding"), chartCurveBinding(properties(), i)}});
@@ -619,8 +679,12 @@ void DigitalTimingChartWidget::bindChannels()
             } else {
                 continue;
             }
-            input.stream = source.stream;
-            sample.levels.setLevel(i, digitalLevel(binding, raw));
+            const auto level = digitalLevel(binding, raw);
+            input.source.update({level ? QVariant(*level) : QVariant(), source, {},
+                                 level ? DataQuality::Current : DataQuality::Invalid, {}});
+            const auto selected = input.source.sample();
+            sample.levels.setLevel(i, selected.quality == DataQuality::Current
+                                          ? std::optional<bool>(selected.value.toBool()) : std::nullopt);
         }
         appendSample(sample);
     }));
@@ -629,10 +693,12 @@ void DigitalTimingChartWidget::bindChannels()
             return;
         TimingSample sample{elapsed(), m_plot->currentLevels()};
         for (int i = 0; i < m_inputs.size(); ++i) {
-            if (m_inputs[i].stream == source.stream) {
-                m_inputs[i].stream = 0;
-                sample.levels.setLevel(i, {});
-            }
+            auto &input = m_inputs[i].source;
+            if (!input.close(source.stream))
+                continue;
+            const auto selected = input.sample();
+            sample.levels.setLevel(i, selected.quality == DataQuality::Current
+                                          ? std::optional<bool>(selected.value.toBool()) : std::nullopt);
         }
         appendSample(sample);
     }));
@@ -717,7 +783,7 @@ void DigitalTimingChartWidget::updateReadout()
     if (recording) {
         status = tr("记录 · %1").arg(m_recordingName);
     } else if (channels && m_plot->hasLiveSamples()) {
-        status = tr("有效 %1/%2 路").arg(qPopulationCount(selected.valid)).arg(chartCurveCount(properties()));
+        status = tr("有效 %1/%2 路").arg(qPopulationCount(selected.valid)).arg(m_channelNames.size());
     } else if (selected.valid) {
         status = QStringLiteral("0x") +
                  QString::number(selected.high, 16).rightJustified(m_bitWidth / 4, QLatin1Char('0')).toUpper();
@@ -760,7 +826,8 @@ QJsonArray DigitalTimingChartWidget::channelDefinitions() const
     if (!TimingSource::usesChannels(properties()))
         return bitProfile().value(QStringLiteral("bits")).toArray();
     QStringList names;
-    for (int i = 0; i < chartCurveCount(properties()); ++i)
+    const int count = chartCurveCount(typeName(), properties());
+    for (int i = 0; i < count; ++i)
         names.append(chartCurveName(properties(), i));
     return namedChannels(names);
 }
@@ -774,7 +841,7 @@ QJsonArray DigitalTimingChartWidget::displayedChannels() const
 
 QString DigitalTimingChartWidget::channelPreference() const
 {
-    return TimingSource::usesChannels(properties()) ? QStringLiteral("timingBoundChannels")
+    return TimingSource::usesChannels(properties()) ? QStringLiteral("timingBoundChannels32")
                                                    : QStringLiteral("timingChannels");
 }
 
@@ -782,7 +849,9 @@ void DigitalTimingChartWidget::selectChannels()
 {
     auto *menu = new FluentQt::CheckableMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
-    const auto select = [this](quint16 mask) {
+    if (auto *scroll = menu->view()->findChild<FluentQt::SmoothScrollDelegate *>())
+        scroll->verticalScrollBar()->setForceHidden(false);
+    const auto select = [this](TimingMask mask) {
         if (m_plot->recording()) {
             m_recordingMask = mask;
         } else {
@@ -791,13 +860,13 @@ void DigitalTimingChartWidget::selectChannels()
         }
         updateChannels();
     };
-    connect(menu->addAction(tr("全部显示")), &QAction::triggered, this, [select] { select(0xffff); });
+    connect(menu->addAction(tr("全部显示")), &QAction::triggered, this, [select] { select(AllTimingChannels); });
     menu->addSeparator();
     const auto bits = displayedChannels();
     const bool channels = m_plot->recording() || TimingSource::usesChannels(properties());
-    const quint16 shown = m_plot->recording() ? m_recordingMask : m_channelMask;
+    const TimingMask shown = m_plot->recording() ? m_recordingMask : m_channelMask;
     for (int i = 0; i < bits.size(); ++i) {
-        const quint16 mask = quint16(1u << i);
+        const TimingMask mask = TimingMask{1} << i;
         const QString name = bits.at(i).toObject().value(QStringLiteral("name")).toString();
         const QString bit = QStringLiteral("B%1").arg(i);
         auto *action = menu->addCheckableAction(channels || name == bit ? name : bit + QStringLiteral(" · ") + name,
@@ -875,7 +944,7 @@ bool DigitalTimingChartWidget::loadHistory(const QString &path, QString *error)
     auto recording = readTimingRecording(file.readAll(), chartFileFormat(path), error);
     if (!recording)
         return false;
-    m_recordingMask = 0xffff;
+    m_recordingMask = AllTimingChannels;
     m_recordingName = QFileInfo(path).fileName();
     m_plot->setRecording(std::move(recording));
     m_export->setEnabled(false);

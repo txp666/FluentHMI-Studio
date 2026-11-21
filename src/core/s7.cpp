@@ -1,4 +1,6 @@
 #include "core/s7.h"
+#include "core/binding.h"
+#include "core/project_logic.h"
 
 #include "core/project.h"
 #include "core/widget_meta.h"
@@ -86,8 +88,8 @@ bool usesS7(const QJsonArray &widgets)
         const auto props = widget.value(QStringLiteral("properties")).toObject();
         if (type == QLatin1String("S7ConfigCard") || bindsS7(widget, meta) || sendsS7(props, meta))
             return false;
-        if (type == QLatin1String("RealtimeChart")) {
-            const int count = chartCurveCount(props);
+        if (usesChartSeries(type, props)) {
+            const int count = chartCurveCount(type, props);
             for (int i = 0; i < count; ++i) {
                 if (props.value(QStringLiteral("_curve_%1_parseMode").arg(i)).toString() == QLatin1String("S7"))
                     return false;
@@ -95,6 +97,24 @@ bool usesS7(const QJsonArray &widgets)
         }
         return true;
     });
+}
+
+QString writeValueProblem(const QJsonObject &properties, const DataType &type, QStringView widgetType)
+{
+    const auto command = properties.value(QStringLiteral("s7Command")).toObject();
+    QStringList fields;
+    if (widgetType == u"PushButton" && properties.value(QStringLiteral("s7InputId")).toString().isEmpty())
+        fields = {QStringLiteral("value")};
+    else if (widgetType == u"ToggleSwitch")
+        fields = {QStringLiteral("onValue"), QStringLiteral("offValue")};
+    for (const auto &field : fields) {
+        const auto value = command.value(field);
+        QByteArray bytes;
+        QString error;
+        if (!value.isUndefined() && !encodeValue(value.toVariant(), type, &bytes, &error))
+            return error;
+    }
+    return {};
 }
 
 bool validateWidgets(const QJsonArray &widgets, QString *error, bool allowExternalReferences)
@@ -126,25 +146,18 @@ bool validateWidgets(const QJsonArray &widgets, QString *error, bool allowExtern
         if (bindsS7(widget, meta) && !checkPoint(binding.value(QStringLiteral("sourceCardId")).toString(),
                                                 binding.value(QStringLiteral("s7")).toObject()))
             return false;
-        if (sendsS7(props, meta)) {
+        if (sendsS7(props, meta) && props.value(S7WritePoint).toString().isEmpty()) {
             const auto command = props.value(QStringLiteral("s7Command")).toObject();
             const auto p = checkPoint(props.value(QStringLiteral("commandTargetId")).toString(), command);
             if (!p)
                 return false;
             if (p->address.area == MemoryArea::Input)
                 return fail(error, tr("S7 输入区 I 只读，请选择 DB、M 或 Q 写入"));
-            const auto checkValue = [&](const char *key) {
-                const auto value = command.value(QLatin1String(key));
-                QByteArray bytes;
-                return value.isUndefined() || encodeValue(value.toVariant(), p->type, &bytes, error);
-            };
-            if (type == QLatin1String("PushButton") && !checkValue("value"))
-                return false;
-            if (type == QLatin1String("ToggleSwitch") && (!checkValue("onValue") || !checkValue("offValue")))
-                return false;
+            if (const auto problem = writeValueProblem(props, p->type, type); !problem.isEmpty())
+                return fail(error, problem);
         }
-        if (type == QLatin1String("RealtimeChart")) {
-            const int count = chartCurveCount(props);
+        if (usesChartSeries(type, props)) {
+            const int count = chartCurveCount(type, props);
             for (int i = 0; i < count; ++i) {
                 const QString prefix = QStringLiteral("_curve_%1_").arg(i);
                 if (props.value(prefix + QStringLiteral("parseMode")).toString() == QLatin1String("S7") &&

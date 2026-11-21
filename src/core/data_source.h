@@ -18,6 +18,10 @@ struct DataSource
     QString encoding = QStringLiteral("utf-8");
     bool canText = false;
     bool slaveData = false;
+    QString device = {}; // Stable transport peer, independent of a TCP client's temporary source port.
+    bool modbus = false;
+
+    QStringView deviceKey() const { return device.isEmpty() ? QStringView(endpoint) : QStringView(device); }
 };
 
 struct DataRoute
@@ -32,7 +36,8 @@ struct DataRoute
 
     bool accepts(const DataSource &source) const
     {
-        return acceptsConnection(source.connectionId) && (endpoint.isEmpty() || endpoint == source.endpoint);
+        return acceptsConnection(source.connectionId) &&
+               (endpoint.isEmpty() || endpoint == source.endpoint || (!source.endpoint.isEmpty() && endpoint == source.device));
     }
     bool operator==(const DataRoute &other) const
     {
@@ -40,7 +45,8 @@ struct DataRoute
     }
 };
 
-enum class RouteTransport { Any, Bytes, Can, S7, ModbusSlave };
+enum class RouteTransport { Any, Bytes, Can, S7, Modbus, ModbusSlave };
+enum class ModbusParserChoice { Project, OnConnect };
 
 struct ModbusDestination
 {
@@ -60,7 +66,7 @@ struct RouteFilter
     std::optional<ModbusDestination> modbus;
 
     RouteFilter(RouteTransport transport) : transport(transport) {}
-    RouteFilter(ModbusDestination modbus) : transport(RouteTransport::Bytes), modbus(modbus) {}
+    RouteFilter(ModbusDestination modbus) : transport(RouteTransport::Modbus), modbus(modbus) {}
     bool operator==(const RouteFilter &other) const { return transport == other.transport && modbus == other.modbus; }
 };
 
@@ -75,7 +81,7 @@ inline RouteTransport widgetReceiveTransport(QStringView widgetType)
 
 inline bool allowsRouteEndpoint(RouteTransport transport)
 {
-    return transport == RouteTransport::Any || transport == RouteTransport::Bytes;
+    return transport == RouteTransport::Any || transport == RouteTransport::Bytes || transport == RouteTransport::Modbus;
 }
 
 inline bool supportsRouteTransport(QStringView cardType, RouteTransport transport)
@@ -88,6 +94,7 @@ inline bool supportsRouteTransport(QStringView cardType, RouteTransport transpor
     switch (transport) {
     case RouteTransport::Any: return can || bytes;
     case RouteTransport::Bytes: return bytes;
+    case RouteTransport::Modbus: return bytes;
     case RouteTransport::Can: return can;
     case RouteTransport::S7: return cardType == QLatin1String("S7ConfigCard");
     case RouteTransport::ModbusSlave: return localSlave;

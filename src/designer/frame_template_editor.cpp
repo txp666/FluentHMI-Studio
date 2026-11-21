@@ -139,6 +139,164 @@ QList<FrameField> frameFields(const QString &text, bool useSignals)
     return fields;
 }
 
+class FrameSequenceEditor : public QWidget
+{
+  public:
+    FrameSequenceEditor(const QJsonObject &library, const QJsonArray &sequence, const InputValues &inputs,
+                        bool canCreate, QWidget *parent)
+        : QWidget(parent), m_library(library), m_inputs(inputs), m_canCreate(canCreate)
+    {
+        auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        auto *left = new QVBoxLayout;
+        layout->addLayout(left);
+        auto *add = new FluentQt::ComboBox(this);
+        add->setObjectName(QStringLiteral("addSequenceFrame"));
+        fillFrameTemplates(add, library, {}, fhmi::tr("添加 HEX 帧模板…"), QStringLiteral("hex"));
+        add->setEnabled(add->count() > 1);
+        left->addWidget(add);
+        m_order = new FluentQt::ListWidget(this);
+        m_order->setObjectName(QStringLiteral("sendFrameSequence"));
+        m_order->setAccessibleName(fhmi::tr("发送顺序"));
+        m_order->setFixedWidth(230);
+        m_order->setSelectionMode(QAbstractItemView::SingleSelection);
+        left->addWidget(m_order, 1);
+        auto *edit = new QHBoxLayout;
+        left->addLayout(edit);
+        const auto action = [&](FluentQt::FluentIcon icon, const QString &text) {
+            auto *control = new FluentQt::TransparentToolButton(FluentQt::icon(icon), this);
+            fluentToolTip(control, text);
+            control->setEnabled(false);
+            edit->addWidget(control);
+            return control;
+        };
+        auto *up = action(FluentQt::FluentIcon::Up, fhmi::tr("上移"));
+        auto *down = action(FluentQt::FluentIcon::Down, fhmi::tr("下移"));
+        auto *remove = action(FluentQt::FluentIcon::Delete, fhmi::tr("删除所选"));
+        edit->addStretch();
+        m_fields = new QStackedWidget(this);
+        auto *hint = new FluentQt::BodyLabel(fhmi::tr("按发送顺序添加模板，再为各帧设置字段值。"), m_fields);
+        hint->setWordWrap(true);
+        m_fields->addWidget(hint);
+        layout->addWidget(m_fields, 1);
+        connect(m_order, &QListWidget::currentRowChanged, this, [this, hint, up, down, remove](int row) {
+            const bool selected = row >= 0 && row < m_entries.size();
+            m_fields->setCurrentWidget(selected ? static_cast<QWidget *>(m_entries.at(row).fields) : hint);
+            up->setEnabled(selected && row > 0);
+            down->setEnabled(selected && row + 1 < m_entries.size());
+            remove->setEnabled(selected);
+            if (changed)
+                changed();
+        });
+        connect(add, &FluentQt::ComboBox::currentIndexChanged, this, [this, add](int index) {
+            if (index <= 0)
+                return;
+            append(selectedValue(add), {});
+            refreshOrder(m_entries.size() - 1);
+            const QSignalBlocker blocker(add);
+            add->setCurrentIndex(0);
+        });
+        const auto move = [this](int delta) {
+            const int row = m_order->currentRow();
+            m_entries.swapItemsAt(row, row + delta);
+            refreshOrder(row + delta);
+        };
+        connect(up, &QToolButton::clicked, this, [move] { move(-1); });
+        connect(down, &QToolButton::clicked, this, [move] { move(1); });
+        connect(remove, &QToolButton::clicked, this, [this] {
+            const int row = m_order->currentRow();
+            auto *fields = m_entries.takeAt(row).fields;
+            m_fields->removeWidget(fields);
+            fields->deleteLater();
+            refreshOrder(std::min(row, int(m_entries.size()) - 1));
+        });
+        for (const auto &value : sequence) {
+            const auto frame = value.toObject();
+            append(frame.value(FrameTemplates::SendId).toString(), frame.value(FrameTemplates::SendBindings).toArray());
+        }
+        refreshOrder(m_entries.isEmpty() ? -1 : 0);
+    }
+
+    std::function<void()> changed;
+    std::function<void(const QString &)> selectedField;
+
+    QJsonArray frames() const
+    {
+        QJsonArray frames;
+        for (const auto &entry : m_entries)
+            frames.append(config(entry));
+        return frames;
+    }
+    FrameFieldInputsEditor *activeFields() const
+    {
+        return qobject_cast<FrameFieldInputsEditor *>(m_fields->currentWidget());
+    }
+    QJsonObject activeFrame() const
+    {
+        const int row = m_order->currentRow();
+        return row < 0 ? QJsonObject{} : config(m_entries.at(row));
+    }
+    InputValues sampleValues() const
+    {
+        auto values = m_inputs;
+        for (const auto &entry : m_entries) {
+            const auto samples = entry.fields->sampleValues();
+            for (auto it = samples.cbegin(); it != samples.cend(); ++it)
+                if (!values.contains(it.key()) || values.value(it.key()).text().isEmpty())
+                    values.insert(it.key(), it.value());
+        }
+        return values;
+    }
+    QMap<QString, QString> pendingInputs() const
+    {
+        QMap<QString, QString> inputs;
+        for (const auto &entry : m_entries)
+            inputs.insert(entry.fields->pendingInputs());
+        return inputs;
+    }
+
+  private:
+    struct Entry { QString id; QString name; FrameFieldInputsEditor *fields; };
+
+    static QJsonObject config(const Entry &entry)
+    {
+        return {{FrameTemplates::SendId, entry.id}, {FrameTemplates::SendBindings, entry.fields->bindings()}};
+    }
+
+    void append(const QString &id, const QJsonArray &bindings)
+    {
+        const auto preset = FrameTemplates::find(m_library, id);
+        auto *fields = new FrameFieldInputsEditor(bindings, m_inputs, m_canCreate, m_fields);
+        const auto settings = preset ? preset->format.settings : QJsonObject();
+        fields->setFormat(preset ? hexFrameConfig(settings) : std::nullopt, settings);
+        m_entries.append({id, preset ? preset->name : id, fields});
+        m_fields->addWidget(fields);
+        connect(fields, &FrameFieldInputsEditor::changed, this, [this] {
+            if (changed)
+                changed();
+        });
+        connect(fields, &FrameFieldInputsEditor::fieldSelected, this, [this, fields](const QString &name) {
+            if (fields == activeFields() && selectedField)
+                selectedField(name);
+        });
+    }
+
+    void refreshOrder(int selected)
+    {
+        m_order->clear();
+        for (int index = 0; index < m_entries.size(); ++index)
+            m_order->addItem(QStringLiteral("%1. %2").arg(index + 1).arg(m_entries.at(index).name));
+        m_order->setCurrentRow(selected);
+    }
+
+    QJsonObject m_library;
+    InputValues m_inputs;
+    bool m_canCreate;
+    QList<Entry> m_entries;
+    FluentQt::ListWidget *m_order;
+    QStackedWidget *m_fields;
+};
+
 class FrameTemplateEditor : public AppDialog
 {
   public:
@@ -153,7 +311,7 @@ class FrameTemplateEditor : public AppDialog
         setObjectName(QStringLiteral("frameTemplateEditor"));
         setAttribute(Qt::WA_DeleteOnClose);
         const bool hasTemplate = CommandEncoder::usesTemplate(m_mode);
-        setPreferredSize(hasTemplate ? QSize(1070, m_byteFrame ? 710 : 680) :
+        setPreferredSize(hasTemplate ? QSize(1070, m_mode == InputListMode::Hex ? 765 : m_byteFrame ? 710 : 680) :
                          m_mode == InputListMode::Registers ? QSize(760, 740) : QSize(620, 510));
         viewLayout()->setSpacing(9);
 
@@ -240,9 +398,27 @@ class FrameTemplateEditor : public AppDialog
             m_payloadEditors->addWidget(split);
             if (m_byteFrame) {
                 m_namedFields = new FrameFieldInputsEditor(m_properties.value(FrameTemplates::SendBindings).toArray(),
-                                                            std::move(values), canCreate, m_payloadEditors);
+                                                            values, canCreate, m_payloadEditors);
                 m_payloadEditors->addWidget(m_namedFields);
                 connect(m_namedFields, &FrameFieldInputsEditor::changed, this, &FrameTemplateEditor::refreshPreview);
+            }
+            if (m_mode == InputListMode::Hex && !m_project.frameTemplates.isEmpty()) {
+                m_sequence = new FrameSequenceEditor(m_project.frameTemplates,
+                    m_properties.value(FrameTemplates::SendSequence).toArray(), values, canCreate, m_payloadEditors);
+                m_payloadEditors->addWidget(m_sequence);
+                auto *modes = new FluentQt::SegmentedWidget(this);
+                modes->setObjectName(QStringLiteral("sendTemplateSequenceMode"));
+                modes->addItem(QStringLiteral("single"), fhmi::tr("单帧"));
+                modes->addItem(QStringLiteral("sequence"), fhmi::tr("多模板混发"));
+                m_sequenceEnabled = CommandEncoder::usesFrameSequence(m_properties);
+                modes->setCurrentItem(m_sequenceEnabled ? QStringLiteral("sequence") : QStringLiteral("single"));
+                viewLayout()->addWidget(modes, 0, Qt::AlignLeft);
+                m_sequence->changed = [this] { refreshPreview(); };
+                connect(modes, &FluentQt::SegmentedWidget::currentItemChanged, this, [this](const QString &key) {
+                    m_sequenceEnabled = key == QLatin1String("sequence");
+                    refreshFieldChoices();
+                    refreshPreview();
+                });
             }
             addPayloadChoices();
             viewLayout()->addWidget(m_payloadEditors, 1);
@@ -276,9 +452,19 @@ class FrameTemplateEditor : public AppDialog
         problem->hide();
         viewLayout()->addWidget(problem);
         setValidator([this, problem] {
-            const auto props = draft();
-            QString error = usesMappedFields() ? m_namedFields->validate() : m_inputEditor->validate();
-            if (error.isEmpty() && usesMappedFields())
+            QString pointProblem;
+            const auto configured = draft();
+            const auto effective = resolvePointWrite(configured, m_project.logic, m_project.widgets, m_project.parserType(),
+                                                     &pointProblem, u"PushButton", ModbusParserChoice::OnConnect);
+            const auto props = effective.value_or(configured);
+            QString error = m_sequenceEnabled
+                ? (m_sequence->frames().isEmpty() ? fhmi::tr("请添加至少一个发送帧模板") : QString())
+                : usesMappedFields() ? m_namedFields->validate() : m_inputEditor->validate();
+            if (error.isEmpty())
+                error = pointProblem;
+            if (error.isEmpty() && editsFixedCan() && !templateText().trimmed().isEmpty())
+                parseAssignments(templateText(), &error);
+            if (error.isEmpty() && (usesMappedFields() || m_sequenceEnabled))
                 error = CommandEncoder::frameFieldConfigurationProblem(props, m_project.frameTemplates);
             const auto target = previewCommandTarget(props, QStringLiteral("PushButton"), m_project);
             if (error.isEmpty() && target.routeInvalid)
@@ -287,8 +473,10 @@ class FrameTemplateEditor : public AppDialog
                 const auto point = S7::point(props.value(QStringLiteral("s7Command")).toObject(), &error);
                 if (point && point->address.area == S7::MemoryArea::Input)
                     error = fhmi::tr("S7 输入区 I 只读，请选择 DB、M 或 Q 写入");
+                else if (point)
+                    error = S7::writeValueProblem(props, point->type, u"PushButton");
             }
-            if (error.isEmpty() && !usesMappedFields() && m_expression && !m_hasInputs &&
+            if (error.isEmpty() && !m_sequenceEnabled && !usesMappedFields() && m_expression && !m_hasInputs &&
                 !props.value(QStringLiteral("command")).toString().trimmed().isEmpty()) {
                 for (const auto &part : CommandEncoder::templateParts(templateText())) {
                     if (part.isInput && part.text != QLatin1String("value") && m_linkedVariables.contains(part.text)) {
@@ -304,17 +492,26 @@ class FrameTemplateEditor : public AppDialog
         connect(m_inputEditor, &CommandInputsEditor::changed, this, &FrameTemplateEditor::inputChanged);
         m_hasInputs = !m_inputEditor->rows().isEmpty();
         refreshSamples();
-        m_staticSettings->setVisible(!m_hasInputs);
+        m_staticSettings->setVisible(!m_hasInputs && !editsFixedCan());
         refreshFieldChoices();
         if (m_expression) {
             m_generated = generated();
             const QString current = item.propertyValue(QStringLiteral("commandTemplate")).toString();
+            if (editsFixedCan()) {
+                const auto result = CommandEncoder::buttonFromProperties(m_properties, {}, nullptr, m_project.frameTemplates);
+                if (result.command && result.command->kind == EncodedCommand::Kind::Can) {
+                    rebuildVariableMenu();
+                    setTemplate(result.command->can.assignments);
+                    return;
+                }
+            }
             const bool legacy = current.trimmed().isEmpty() || (current == QLatin1String("{value}") &&
                 std::none_of(m_inputEditor->rows().cbegin(), m_inputEditor->rows().cend(), [](const auto &input) {
                     return input.variable == QLatin1String("value");
                 }));
             rebuildVariableMenu();
-            setTemplate(legacy ? m_generated : current);
+            setTemplate(editsFixedCan() ? item.propertyValue(QStringLiteral("command")).toString()
+                                        : legacy ? m_generated : current);
         } else {
             refreshPreview();
         }
@@ -323,6 +520,12 @@ class FrameTemplateEditor : public AppDialog
     QJsonObject changes() const
     {
         QJsonObject changes = m_editedSettings;
+        if (m_sequenceEnabled) {
+            changes.insert(FrameTemplates::SendSequence, m_sequence->frames());
+            return changes;
+        }
+        if (m_mode == InputListMode::Hex && m_properties.contains(FrameTemplates::SendSequence))
+            changes.insert(FrameTemplates::SendSequence, QJsonArray{});
         if (usesMappedFields()) {
             changes.insert(FrameTemplates::SendFieldsEnabled, true);
             changes.insert(FrameTemplates::SendBindings, m_namedFields->bindings());
@@ -341,22 +544,31 @@ class FrameTemplateEditor : public AppDialog
         }
         if (m_mode == InputListMode::Json && (!rows.isEmpty() || m_properties.contains(QStringLiteral("jsonUseInputs"))))
             changes.insert(QStringLiteral("jsonUseInputs"), !rows.isEmpty());
-        if (m_expression)
+        if (editsFixedCan()) {
+            changes.insert(QStringLiteral("command"), templateText());
+            changes.insert(QStringLiteral("commandTemplate"), QStringLiteral("{value}"));
+        } else if (m_expression) {
             changes.insert(QStringLiteral("commandTemplate"), templateText());
+        }
         return changes;
     }
 
     QMap<QString, QString> pendingInputs() const
     {
+        if (m_sequenceEnabled)
+            return m_sequence->pendingInputs();
         return usesMappedFields() ? m_namedFields->pendingInputs() : m_inputEditor->pendingInputs();
     }
 
   private:
-    bool usesMappedFields() const { return m_payloadMode && m_payloadMode->currentItem() == FieldPayload; }
+    bool usesMappedFields() const { return !m_sequenceEnabled && m_payloadMode && m_payloadMode->currentItem() == FieldPayload; }
+    bool editsFixedCan() const { return !m_signalNames.isEmpty() && !m_hasInputs; }
 
     void addPayloadChoices()
     {
-        auto *row = new QHBoxLayout;
+        m_payloadChoices = new QWidget(this);
+        auto *row = new QHBoxLayout(m_payloadChoices);
+        row->setContentsMargins(0, 0, 0, 0);
         if (m_mode != InputListMode::Can || m_byteFrame) {
             auto *choice = new FluentQt::ComboBox(this);
             choice->setObjectName(QStringLiteral("sendConfigurationFrameTemplate"));
@@ -393,10 +605,8 @@ class FrameTemplateEditor : public AppDialog
                 refreshPreview();
             });
         }
-        if (row->count())
-            viewLayout()->addLayout(row);
-        else
-            delete row;
+        viewLayout()->addWidget(m_payloadChoices);
+        m_payloadChoices->setVisible(row->count() && !m_sequenceEnabled);
         if (m_payloadMode) {
             m_payloadHint = new FluentQt::CaptionLabel(fhmi::tr("发送模板负责帧头、长度、校验和帧尾。"), this);
             m_payloadHint->setWordWrap(true);
@@ -409,6 +619,13 @@ class FrameTemplateEditor : public AppDialog
     {
         if (!m_namedFields)
             return;
+        if (m_sequence) {
+            m_payloadChoices->setVisible(!m_sequenceEnabled);
+            if (m_sequenceEnabled) {
+                m_payloadEditors->setCurrentWidget(m_sequence);
+                return;
+            }
+        }
         auto properties = m_properties;
         if (m_editedSettings.contains(FrameTemplates::SendId))
             properties.insert(FrameTemplates::SendId, m_editedSettings.value(FrameTemplates::SendId));
@@ -448,21 +665,39 @@ class FrameTemplateEditor : public AppDialog
     void buildAddressSettings(QVBoxLayout *layout, const CanvasItem &item)
     {
         const bool isS7 = m_mode == InputListMode::S7Value;
-        auto *form = new QFormLayout;
-        layout->addLayout(form);
-        auto *target = new ConnectionSourceEdit(this, ConnectionSourceEdit::Purpose::Send);
+        const auto key = writePointKey(m_properties.value(QStringLiteral("commandMode")).toString());
+        auto *point = new FluentQt::ComboBox(this);
+        point->setObjectName(QStringLiteral("writeDevicePoint"));
+        fillWritePointChoices(point, m_project, m_project.widgets, m_properties, u"PushButton");
+        if (point->count() > 1) {
+            auto *source = new QFormLayout;
+            source->addRow(fhmi::tr("写入对象"), point);
+            layout->addLayout(source);
+            connect(point, &FluentQt::ComboBox::currentIndexChanged, this, [this, point, key] {
+                m_editedSettings.insert(key, selectedValue(point));
+                refreshPreview();
+            });
+        } else {
+            point->hide();
+        }
+
+        m_manualAddress = new QWidget(this);
+        auto *form = new QFormLayout(m_manualAddress);
+        form->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(m_manualAddress);
+        auto *target = new ConnectionSourceEdit(m_manualAddress, ConnectionSourceEdit::Purpose::Send);
         target->setObjectName(QStringLiteral("sendConfigurationConnection"));
-        target->setSources(&m_project, nullptr, isS7 ? RouteTransport::S7 : RouteTransport::Bytes,
+        target->setSources(&m_project, nullptr, CommandEncoder::sendRouteFilter(m_properties, QStringLiteral("PushButton")),
                            m_properties.value(QStringLiteral("commandTargetId")).toString());
         form->addRow(fhmi::tr("发送连接"), target);
         if (isS7) {
             const auto settings = m_properties.value(QStringLiteral("s7Command")).toObject();
-            auto *address = new FluentQt::LineEdit(this);
+            auto *address = new FluentQt::LineEdit(m_manualAddress);
             address->setObjectName(QStringLiteral("s7WriteAddress"));
             address->setText(settings.value(QStringLiteral("address")).toString());
             address->setPlaceholderText(QStringLiteral("DB1.DBD0"));
             form->addRow(fhmi::tr("S7 写入地址"), address);
-            auto *type = new FluentQt::ComboBox(this);
+            auto *type = new FluentQt::ComboBox(m_manualAddress);
             addValueItems(type, S7::dataTypes());
             selectValue(type, settings.value(QStringLiteral("dataType")).toString(QStringLiteral("REAL")));
             form->addRow(fhmi::tr("S7 数据类型"), type);
@@ -472,45 +707,12 @@ class FrameTemplateEditor : public AppDialog
             connect(type, &FluentQt::ComboBox::currentIndexChanged, this, [this, type] {
                 setS7Setting(QStringLiteral("dataType"), selectedValue(type));
             });
-            auto *readPoint = new FluentQt::ComboBox(this);
-            readPoint->addItem(fhmi::tr("选择读取点…"), {}, QString());
-            for (const auto &entry : m_project.logic.value(QStringLiteral("points")).toArray()) {
-                const auto point = entry.toObject();
-                const auto binding = point.value(QStringLiteral("binding")).toObject();
-                if (binding.value(QStringLiteral("parseMode")).toString() != ParseMode::S7)
-                    continue;
-                const auto route = resolveProjectRoute(m_project.widgets, m_project.parserType(), RouteTransport::S7,
-                    {binding.value(QStringLiteral("sourceCardId")).toString(), {}}, RoutePurpose::DataPoint);
-                if (route && !route->connectionId.isEmpty()) {
-                    const auto name = point.value(QStringLiteral("name")).toString();
-                    readPoint->addItem(name, {}, name);
-                }
-            }
-            if (readPoint->count() > 1) {
-                form->addRow(fhmi::tr("从读取点填充"), readPoint);
-                connect(readPoint, &FluentQt::ComboBox::currentIndexChanged, this, [this, readPoint, target, address, type] {
-                    const auto name = selectedValue(readPoint);
-                    if (name.isEmpty())
-                        return;
-                    const auto binding = findDataPoint(m_project.logic, name).value(QStringLiteral("binding")).toObject();
-                    const auto route = resolveProjectRoute(m_project.widgets, m_project.parserType(), RouteTransport::S7,
-                        {binding.value(QStringLiteral("sourceCardId")).toString(), {}}, RoutePurpose::DataPoint);
-                    if (route)
-                        selectValue(target, route->connectionId);
-                    const auto s7 = binding.value(QStringLiteral("s7")).toObject();
-                    address->setText(s7.value(QStringLiteral("address")).toString());
-                    selectValue(type, s7.value(QStringLiteral("dataType")).toString());
-                    const QSignalBlocker blocker(readPoint);
-                    readPoint->setCurrentIndex(0);
-                });
-            } else {
-                readPoint->deleteLater();
-            }
         } else {
-            auto *endpoint = new FluentQt::LineEdit(this);
+            auto *endpoint = new FluentQt::LineEdit(m_manualAddress);
             endpoint->setObjectName(QStringLiteral("sendConfigurationEndpoint"));
             endpoint->setText(m_properties.value(QStringLiteral("commandEndpoint")).toString());
-            auto *endpointLabel = new FluentQt::BodyLabel(fhmi::tr("发送子通道"), this);
+            target->bindEndpointEditor(endpoint);
+            auto *endpointLabel = new FluentQt::BodyLabel(fhmi::tr("发送子通道"), m_manualAddress);
             endpointLabel->setBuddy(endpoint);
             form->addRow(endpointLabel, endpoint);
             const auto update = [target, endpoint, form] {
@@ -527,24 +729,25 @@ class FrameTemplateEditor : public AppDialog
                 endpoint->clear();
                 update();
             });
-            auto *addresses = new QHBoxLayout;
             const auto number = [&](const char *field, const QString &label, int minimum, int maximum) {
-                auto *edit = new FluentQt::SpinBox(this);
-                const auto key = QLatin1String(field);
+                auto *edit = new FluentQt::SpinBox(m_manualAddress);
+                const auto name = QLatin1String(field);
                 edit->setRange(minimum, maximum);
-                edit->setValue(item.propertyValue(key).toInt());
-                addresses->addWidget(new FluentQt::BodyLabel(label, this));
-                addresses->addWidget(edit, 1);
-                connect(edit, qOverload<int>(&QSpinBox::valueChanged), this, [this, key](int value) {
-                    m_editedSettings.insert(key, value);
-                    if (key == QLatin1String("mbAddress"))
-                        m_inputEditor->setRegisterAddress(value);
+                edit->setValue(item.propertyValue(name).toInt());
+                form->addRow(label, edit);
+                connect(edit, qOverload<int>(&QSpinBox::valueChanged), this, [this, name, target, update](int value) {
+                    m_editedSettings.insert(name, value);
+                    if (name == QLatin1String("mbSlave")) {
+                        const auto props = draft();
+                        target->setSources(&m_project, nullptr, CommandEncoder::sendRouteFilter(props, QStringLiteral("PushButton")),
+                                           props.value(QStringLiteral("commandTargetId")).toString());
+                        update();
+                    }
                     refreshPreview();
                 });
             };
             number("mbSlave", fhmi::tr("从站地址"), 0, 247);
             number("mbAddress", fhmi::tr("起始地址"), 0, 65535);
-            layout->addLayout(addresses);
         }
         connect(target, &FluentQt::ComboBox::currentIndexChanged, this, [this, target] {
             m_editedSettings.insert(QStringLiteral("commandTargetId"), selectedValue(target));
@@ -657,7 +860,12 @@ class FrameTemplateEditor : public AppDialog
         m_copyBytes->setAccessibleName(fhmi::tr("复制 HEX"));
         m_copyBytes->setToolTip(m_copyBytes->accessibleName());
         heading->addWidget(m_copyBytes);
-        m_frameDiagram = new FrameDiagram(this);
+        m_diagramControls = new QWidget(this);
+        auto *modes = new QHBoxLayout(m_diagramControls);
+        modes->setContentsMargins(0, 0, 0, 0);
+        heading->insertWidget(1, m_diagramControls);
+        m_frameDiagram = new FrameDiagram(this, modes);
+        m_frameDiagram->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
         m_byteView = m_frameDiagram->byteView();
         layout->addWidget(m_frameDiagram);
         m_frameCoverage = new FrameCoveragePreview(this);
@@ -672,6 +880,8 @@ class FrameTemplateEditor : public AppDialog
         connect(m_namedFields, &FrameFieldInputsEditor::fieldSelected, this, [this](const QString &name) {
             m_byteView->selectPart(QStringLiteral("mapped:") + name);
         });
+        if (m_sequence)
+            m_sequence->selectedField = [this](const QString &name) { m_byteView->selectPart(QStringLiteral("mapped:") + name); };
         connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *focused) {
             if (!focused || !isAncestorOf(focused))
                 return;
@@ -684,9 +894,10 @@ class FrameTemplateEditor : public AppDialog
             }
         });
         connect(m_byteView, &FrameBytesView::partClicked, this, [this](const QString &key) {
-            if (usesMappedFields()) {
-                if (key.startsWith(QLatin1String("mapped:")))
-                    m_namedFields->selectField(key.mid(7));
+            if (usesMappedFields() || m_sequenceEnabled) {
+                auto *fields = m_sequenceEnabled ? m_sequence->activeFields() : m_namedFields;
+                if (fields && key.startsWith(QLatin1String("mapped:")))
+                    fields->selectField(key.mid(7));
             } else if (auto *editor = m_frameControls.value(key)) {
                 if (m_frameTabs->isHidden())
                     return;
@@ -783,7 +994,7 @@ class FrameTemplateEditor : public AppDialog
         const bool firstLink = !m_hasInputs && !m_inputEditor->rows().isEmpty();
         m_hasInputs = !m_inputEditor->rows().isEmpty();
         refreshSamples();
-        m_staticSettings->setVisible(!m_hasInputs);
+        m_staticSettings->setVisible(!m_hasInputs && !editsFixedCan());
         if (!m_expression) {
             refreshPreview();
             return;
@@ -1111,10 +1322,17 @@ class FrameTemplateEditor : public AppDialog
 
     void refreshPreview()
     {
-        const auto props = draft();
+        const auto configured = draft();
+        QString pointProblem;
+        const auto effective = resolvePointWrite(configured, m_project.logic, m_project.widgets, m_project.parserType(),
+                                                 &pointProblem, u"PushButton", ModbusParserChoice::OnConnect);
+        const auto props = effective.value_or(configured);
+        const auto pointName = configured.value(writePointKey(configured.value(QStringLiteral("commandMode")).toString())).toString();
+        if (m_manualAddress)
+            m_manualAddress->setVisible(pointName.isEmpty());
         const bool shared = FrameTemplates::sendSettings(m_project.frameTemplates, props).has_value();
         if (m_payloadHint)
-            m_payloadHint->setVisible(shared && !usesMappedFields());
+            m_payloadHint->setVisible(!m_sequenceEnabled && shared && !usesMappedFields());
         if (m_manualFraming)
             m_manualFraming->setVisible(!shared);
         if (m_byteOrderSetting) {
@@ -1131,29 +1349,54 @@ class FrameTemplateEditor : public AppDialog
                 m_frameTabs->setCurrentItem(QStringLiteral("fields"));
             m_frameTabs->setVisible(!shared);
         }
-        const auto target = previewCommandTarget(props, QStringLiteral("PushButton"), m_project);
-        m_target->setText(target.error.isEmpty() ? target.label : target.error);
+        const auto target = effective ? previewCommandTarget(props, QStringLiteral("PushButton"), m_project)
+                                      : CommandTargetPreview{{}, {}, pointProblem, true};
+        m_target->setText(!target.error.isEmpty() ? target.error
+            : pointName.isEmpty() ? target.label
+            : pointName + QStringLiteral(" · ") + writePointTargetText(m_project, m_project.widgets, props, pointName));
         if (target.error.isEmpty())
             m_target->setTextColor(QColor(0x404040), QColor(0xD0D0D0));
         else
             m_target->setTextColor(QColor(0xC42B1C), QColor(0xFF99A4));
         if (m_registerOrder) {
+            m_inputEditor->setRegisterAddress(props.value(QStringLiteral("mbAddress")).toInt());
             const auto &rows = m_inputEditor->rows();
-            m_registerOrder->setVisible(rows.isEmpty()
+            m_registerOrder->setVisible(pointName.isEmpty() && (rows.isEmpty()
                 ? CommandEncoder::usesRegisterOrder(props.value(QStringLiteral("mbDataType")).toString())
                 : std::any_of(rows.cbegin(), rows.cend(), [](const auto &row) {
                     return CommandEncoder::usesRegisterOrder(row.dataType);
-                }));
+                })));
         }
         BinaryFrameExample example;
-        m_preview->setPlainText(target.routeInvalid ? QString() :
-            previewInputCommand(props, m_sources, usesMappedFields() ? m_namedFields->sampleValues() : m_samples,
-                                false, m_byteView ? &example : nullptr,
-                                m_project.frameTemplates));
+        QString preview;
+        if (!target.routeInvalid) {
+            if (m_sequenceEnabled) {
+                if (!m_sequence->frames().isEmpty())
+                    preview = previewInputCommand(props, m_sources, m_sequence->sampleValues(), false, nullptr,
+                                                  m_project.frameTemplates);
+                if (const auto *fields = m_sequence->activeFields()) {
+                    auto frame = m_sequence->activeFrame();
+                    frame.insert(QStringLiteral("commandMode"), QStringLiteral("HEX"));
+                    frame.insert(FrameTemplates::SendFieldsEnabled, true);
+                    previewInputCommand(frame, {}, fields->sampleValues(), false, &example, m_project.frameTemplates);
+                    if (const auto entry = FrameTemplates::find(m_project.frameTemplates, frame.value(FrameTemplates::SendId).toString()))
+                        example.caption = entry->name;
+                }
+            } else {
+                preview = previewInputCommand(props, m_sources, usesMappedFields() ? m_namedFields->sampleValues() : m_samples,
+                                              false, m_byteView ? &example : nullptr, m_project.frameTemplates);
+            }
+        }
+        m_preview->setPlainText(preview);
+        if (m_sequence) {
+            const int rows = int(std::clamp<qsizetype>(props.value(FrameTemplates::SendSequence).toArray().size(), 1, 4));
+            m_preview->setFixedHeight(m_sequenceEnabled ? rows * m_preview->fontMetrics().lineSpacing() + 22 : 52);
+        }
         if (!m_byteView)
             return;
         const bool hasBytes = !example.bytes.isEmpty();
-        m_preview->setVisible(!hasBytes);
+        m_preview->setVisible(m_sequenceEnabled ? !preview.isEmpty() : !hasBytes);
+        m_diagramControls->setVisible(hasBytes);
         m_frameDiagram->setVisible(hasBytes);
         m_byteInfo->setVisible(hasBytes);
         m_copyBytes->setVisible(hasBytes);
@@ -1173,10 +1416,11 @@ class FrameTemplateEditor : public AppDialog
         if (example.bytes.size() > example.applicationSize)
             spans.append({{}, fhmi::tr("补齐"), example.applicationSize, example.bytes.size() - example.applicationSize,
                           FrameByteKind::Padding});
-        if (usesMappedFields()) {
+        if (usesMappedFields() || m_sequenceEnabled) {
+            const auto *fields = m_sequenceEnabled ? m_sequence->activeFields() : m_namedFields;
             for (const auto &field : example.layout.fields)
                 spans.append({QStringLiteral("mapped:") + field.name, field.name, field.offset, field.size,
-                              FrameByteKind::Field, m_namedFields->fieldRow(field.name)});
+                              FrameByteKind::Field, fields->fieldRow(field.name)});
             return spans;
         }
 
@@ -1239,6 +1483,10 @@ class FrameTemplateEditor : public AppDialog
     InputValues m_samples;
     CommandInputsEditor *m_inputEditor = nullptr;
     FrameFieldInputsEditor *m_namedFields = nullptr;
+    FrameSequenceEditor *m_sequence = nullptr;
+    bool m_sequenceEnabled = false;
+    QWidget *m_payloadChoices = nullptr;
+    QWidget *m_manualAddress = nullptr;
     QStackedWidget *m_payloadEditors = nullptr;
     FluentQt::SegmentedWidget *m_payloadMode = nullptr;
     FluentQt::BodyLabel *m_payloadModeLabel = nullptr;
@@ -1262,6 +1510,7 @@ class FrameTemplateEditor : public AppDialog
     FluentQt::CaptionLabel *m_target = nullptr;
     FrameBytesView *m_byteView = nullptr;
     FrameDiagram *m_frameDiagram = nullptr;
+    QWidget *m_diagramControls = nullptr;
     FrameCoveragePreview *m_frameCoverage = nullptr;
     FluentQt::CaptionLabel *m_byteInfo = nullptr;
     FluentQt::TransparentToolButton *m_copyBytes = nullptr;

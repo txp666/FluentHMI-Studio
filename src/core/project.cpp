@@ -5,6 +5,7 @@
 #include "core/value_text.h"
 
 #include "core/binding.h"
+#include "core/chart_limits.h"
 #include "core/command_encoder.h"
 #include "core/data_source.h"
 #include "core/frame_templates.h"
@@ -20,6 +21,7 @@
 #include <QtCore/QSaveFile>
 #include <QtCore/QSet>
 
+#include <algorithm>
 #include <cmath>
 
 namespace fhmi {
@@ -95,9 +97,10 @@ bool validateModbus(const QJsonObject &item, QString *error)
         if (badPeriod(binding.value(QStringLiteral("mbPeriod"))))
             return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbPeriod 必须是 0–60000 的整数").arg(id));
     }
-    if (item.value(QStringLiteral("type")).toString() == QLatin1String("RealtimeChart")) {
-        const QJsonObject props = item.value(QStringLiteral("properties")).toObject();
-        const int count = chartCurveCount(props);
+    const QString type = item.value(QStringLiteral("type")).toString();
+    const QJsonObject props = item.value(QStringLiteral("properties")).toObject();
+    if (usesChartSeries(type, props)) {
+        const int count = chartCurveCount(type, props);
         for (int curve = 0; curve < count; ++curve) {
             const QString prefix = QStringLiteral("_curve_%1_").arg(curve);
             const QString area = prefix + QStringLiteral("mbArea");
@@ -153,9 +156,23 @@ bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, con
             if(!ppr.isUndefined()&&(!isStrictInt(ppr)||ppr.toDouble()<1||ppr.toDouble()>9007199254740991.0))
                 return fail(error,QCoreApplication::translate("fhmi","每圈脉冲必须是正的安全整数"));
         }
+        const auto properties = props.toObject();
         for (const auto &key : {FrameTemplates::ReceiveId, FrameTemplates::SendId})
-            if (!validateTemplateReference(props.toObject().value(key), project.frameTemplates, id.toString(), error))
+            if (!validateTemplateReference(properties.value(key), project.frameTemplates, id.toString(), error))
                 return false;
+        const auto sequence = properties.value(FrameTemplates::SendSequence);
+        if (!sequence.isUndefined()) {
+            if (type != QLatin1String("PushButton") || !sequence.isArray())
+                return fail(error, QCoreApplication::translate("fhmi", "多模板混发只能配置在按钮上"));
+            for (const auto &value : sequence.toArray()) {
+                const auto frame = value.toObject();
+                const auto entry = FrameTemplates::find(project.frameTemplates, frame.value(FrameTemplates::SendId).toString());
+                if (!entry || entry->format.type != QLatin1String("hex"))
+                    return fail(error, QCoreApplication::translate("fhmi", "%1 的混发序列引用了无效的 HEX 模板").arg(id.toString()));
+                if (frame.contains(FrameTemplates::SendBindings) && !frame.value(FrameTemplates::SendBindings).isArray())
+                    return fail(error, QCoreApplication::translate("fhmi", "混发模板的字段配置必须是数组"));
+            }
+        }
         if (!validateCardParser(item, project, error)) {
             return false;
         }
@@ -204,7 +221,7 @@ bool usesV13Features(const QJsonArray &widgets)
     visitWidgets(widgets, [&](const QJsonObject &widget) {
         const auto props = widget.value(QStringLiteral("properties")).toObject();
         if (!FrameTemplates::receiveIds(props).isEmpty() ||
-            !props.value(FrameTemplates::SendId).toString().isEmpty() ||
+            !FrameTemplates::sendIds(props).isEmpty() ||
             props.value(FrameTemplates::SendFieldsEnabled).toBool() ||
             !props.value(FrameTemplates::SendBindings).toArray().isEmpty() ||
             !props.value(FrameTemplates::SendValueField).toString().isEmpty()) {
@@ -234,7 +251,8 @@ bool usesV13Features(const QJsonArray &widgets)
                 (props.value(QStringLiteral("autoSave")).toBool() && props.contains(QStringLiteral("autoSaveRows"))) ||
                 props.value(QStringLiteral("confirmBeforeSend")).toBool() ||
                 props.value(QStringLiteral("autoRecover")).toBool();
-        for (int i = 0; i < 8; ++i)
+        const int limit = isTimingChart(type) ? MaxTimingChannels : type == QLatin1String("RealtimeChart") ? MaxRealtimeCurves : 0;
+        for (int i = 0; i < limit; ++i)
             used |= versionedBinding(props.value(QStringLiteral("_curve_%1_parseMode").arg(i)).toString());
         return true;
     });
@@ -285,8 +303,9 @@ QJsonArray migrateOldS7Fields(const QJsonArray &widgets, const QSet<QString> &ot
             widget.insert(QStringLiteral("binding"), binding);
         }
         removeUnusedS7(props, QStringLiteral("commandMode"), QStringLiteral("commandTargetId"));
-        if (type == QLatin1String("RealtimeChart")) {
-            for (int curve = 0; curve < 8; ++curve) {
+        if (type == QLatin1String("RealtimeChart") || isTimingChart(type)) {
+            const int limit = isTimingChart(type) ? MaxTimingChannels : MaxRealtimeCurves;
+            for (int curve = 0; curve < limit; ++curve) {
                 const QString prefix = QStringLiteral("_curve_%1_").arg(curve);
                 removeUnusedS7(props, prefix + QStringLiteral("parseMode"), prefix + QStringLiteral("sourceCardId"));
             }
@@ -318,7 +337,9 @@ bool usesRouting(const QJsonArray &widgets)
             props.value(QStringLiteral("autoSave")).toBool() ||
             routed(props, QStringLiteral("commandMode"), QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint")))
             return false;
-        for (int i = 0; i < 8; ++i) {
+        const auto type = widget.value(QStringLiteral("type")).toString();
+        const int limit = isTimingChart(type) ? MaxTimingChannels : type == QLatin1String("RealtimeChart") ? MaxRealtimeCurves : 0;
+        for (int i = 0; i < limit; ++i) {
             const QString prefix = QStringLiteral("_curve_%1_").arg(i);
             if (routed(props, prefix + QStringLiteral("parseMode"), prefix + QStringLiteral("sourceCardId"),
                        prefix + QStringLiteral("sourceEndpoint")))
@@ -335,17 +356,19 @@ bool routeCardSupports(const QJsonObject &widget, const RouteFilter &filter, boo
     const auto transport = filter.transport;
     if (!supportsRouteTransport(type, transport) || (needsEndpoint && !supportsRouteEndpoint(type)))
         return false;
-    if (transport != RouteTransport::ModbusSlave && !filter.modbus)
+    if (transport != RouteTransport::ModbusSlave && transport != RouteTransport::Modbus)
         return true;
     const auto props = widget.value(QStringLiteral("properties")).toObject();
     const QString parser = LinkParser::effectiveType(props.value(QStringLiteral("defaultParser")).toString(), projectParser);
+    if (!FrameTemplates::receiveIds(props).isEmpty() || !isModbusParser(parser))
+        return false;
     const bool local = supportsRouteTransport(type, RouteTransport::ModbusSlave) &&
-        FrameTemplates::receiveIds(props).isEmpty() && LinkParser::supportsModbusSlave(parser) &&
+        LinkParser::supportsModbusSlave(parser) &&
         props.value(QStringLiteral("modbusRole")).toString() == QStringLiteral("从站"); // i18n: value
     if (transport == RouteTransport::ModbusSlave)
         return local;
     const int slave = std::clamp(props.value(QStringLiteral("modbusSlave")).toInt(1), 1, 247);
-    return !local || (!needsEndpoint && filter.modbus->acceptsLocalSlave(slave));
+    return !local || (!needsEndpoint && (!filter.modbus || filter.modbus->acceptsLocalSlave(slave)));
 }
 
 bool validateRoutes(const QJsonArray &widgets, const QString &projectParser, const QJsonObject &logic,
@@ -381,9 +404,23 @@ bool validateRoutes(const QJsonArray &widgets, const QString &projectParser, con
         const auto card = cards.constFind(id);
         if (card == cards.constEnd())
             return fail(error, QCoreApplication::translate("fhmi", "连接引用不存在：%1").arg(id));
-        if (!routeCardSupports(*card, transport, hasEndpoint, projectParser))
+        const auto allowed = transport == RouteTransport::Modbus ? RouteTransport::Bytes : transport;
+        if (!routeCardSupports(*card, allowed, hasEndpoint, projectParser)) {
+            if (transport == RouteTransport::Modbus)
+                return fail(error, QCoreApplication::translate("fhmi", "连接 %1 未启用 Modbus 解析").arg(id));
             return fail(error, QCoreApplication::translate("fhmi", "连接 %1 与收发模式不匹配").arg(id));
+        }
         return true;
+    };
+    const auto checkBinding = [&](const QJsonObject &object, QStringView mode) {
+        const auto transport = bindingRouteTransport(mode);
+        const auto id = object.value(QStringLiteral("sourceCardId")).toString();
+        const auto endpoint = object.value(QStringLiteral("sourceEndpoint")).toString();
+        if (!check(object, QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"), transport))
+            return false;
+        return transport != RouteTransport::Modbus || allowExternal || !checkSendTargets ||
+               resolveProjectRoute(widgets, projectParser, transport, {id, endpoint}, RoutePurpose::Binding, error,
+                                   ModbusParserChoice::OnConnect).has_value();
     };
     return visitWidgets(widgets, [&](const QJsonObject &widget) {
         const auto binding = widget.value(QStringLiteral("binding")).toObject();
@@ -392,23 +429,40 @@ bool validateRoutes(const QJsonArray &widgets, const QString &projectParser, con
         const QString receiveMode = binding.value(QStringLiteral("parseMode")).toString();
         if (!(isTimingChart(type) && TimingSource::usesChannels(props)) &&
             receiveMode != ParseMode::DataPoint && BindingEntry::fromWidget(widget) &&
-            !check(binding, QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"),
-                   bindingRouteTransport(receiveMode)))
+            !checkBinding(binding, receiveMode))
             return false;
         if (!check(props, QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"), widgetReceiveTransport(type)))
             return false;
         const QString sendMode = props.value(QStringLiteral("commandMode")).toString();
         if (widgetSendsCommands(type, props)) {
-            const auto filter = CommandEncoder::sendRouteFilter(props, type);
+            auto command = props;
+            const auto point = props.value(writePointKey(sendMode)).toString();
+            const bool referenced = !point.isEmpty();
+            if (referenced && checkSendTargets && !allowExternal) {
+                QString problem;
+                const auto resolved = resolvePointWrite(props, logic, widgets, projectParser, &problem, type,
+                                                        ModbusParserChoice::OnConnect);
+                if (resolved && sendMode == ParseMode::S7) {
+                    const auto s7 = S7::point(resolved->value(QStringLiteral("s7Command")).toObject(), &problem);
+                    if (s7)
+                        problem = S7::writeValueProblem(*resolved, s7->type, type);
+                }
+                if (!resolved || !problem.isEmpty())
+                    return fail(error, QCoreApplication::translate("fhmi", "%1 · %2").arg(
+                        widget.value(QStringLiteral("id")).toString(), problem));
+                command = *resolved;
+            }
+            const auto filter = CommandEncoder::sendRouteFilter(command, type);
             // Older manual send cards accepted a CAN destination before the data format was a property.
             const bool oldManualCard = !checkSendTargets && type == QLatin1String("DataSendCard") &&
                 !props.contains(QStringLiteral("commandMode"));
-            if (!check(props, QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"),
+            if ((!referenced || (checkSendTargets && !allowExternal)) &&
+                !check(command, QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"),
                        oldManualCard ? RouteTransport::Any : filter.transport))
                 return false;
-            const QString target = props.value(QStringLiteral("commandTargetId")).toString();
-            if (checkSendTargets && !allowExternal && (target.isEmpty() || filter.modbus) && type == QLatin1String("PushButton")) {
-                const auto authored = CommandEncoder::usesFrameFields(props) ||
+            const QString target = command.value(QStringLiteral("commandTargetId")).toString();
+            if (checkSendTargets && !allowExternal && (filter.modbus || (target.isEmpty() && type == u"PushButton"))) {
+                const auto authored = referenced || CommandEncoder::usesFrameFields(props) || CommandEncoder::usesFrameSequence(props) ||
                     !CommandEncoder::commandInputIds(props).isEmpty() || sendMode == QLatin1String("Modbus") ||
                     (sendMode == QLatin1String("S7") &&
                      !props.value(QStringLiteral("s7Command")).toObject().value(QStringLiteral("address")).toString().isEmpty()) ||
@@ -416,8 +470,8 @@ bool validateRoutes(const QJsonArray &widgets, const QString &projectParser, con
                 if (authored) {
                     QString problem;
                     if (!resolveProjectRoute(widgets, projectParser, filter,
-                                             {target, props.value(QStringLiteral("commandEndpoint")).toString()},
-                                             RoutePurpose::Send, &problem))
+                                             {target, command.value(QStringLiteral("commandEndpoint")).toString()},
+                                             RoutePurpose::Send, &problem, ModbusParserChoice::OnConnect))
                         return fail(error, QCoreApplication::translate("fhmi", "%1 · %2").arg(
                             widget.value(QStringLiteral("id")).toString(), problem));
                 }
@@ -453,15 +507,14 @@ bool validateRoutes(const QJsonArray &widgets, const QString &projectParser, con
                     return fail(error, QCoreApplication::translate("fhmi", "记录数据点不存在：%1").arg(field));
             }
         }
-        if (type == QLatin1String("RealtimeChart")) {
-            const int count = chartCurveCount(props);
+        if (usesChartSeries(type, props) && (checkSendTargets || !isTimingChart(type))) {
+            const int count = chartCurveCount(type, props);
             for (int i = 0; i < count; ++i) {
                 const auto curve = chartCurveBinding(props, i);
                 const QString mode = curve.value(QStringLiteral("parseMode")).toString();
                 const QJsonObject source{{QStringLiteral("type"), type}, {QStringLiteral("binding"), curve}};
                 if (mode != ParseMode::DataPoint && BindingEntry::fromWidget(source) &&
-                    !check(curve, QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"),
-                           bindingRouteTransport(mode)))
+                    !checkBinding(curve, mode))
                     return false;
             }
         }
@@ -470,6 +523,12 @@ bool validateRoutes(const QJsonArray &widgets, const QString &projectParser, con
 }
 
 } // namespace
+
+int chartCurveCount(QStringView type, const QJsonObject &properties)
+{
+    const int limit = isTimingChart(type) ? MaxTimingChannels : MaxRealtimeCurves;
+    return std::clamp(properties.value(QStringLiteral("curveCount")).toInt(1), 1, limit);
+}
 
 QList<QPair<QString, QString>> routeConnections(const QJsonArray &widgets, const RouteFilter &filter, bool needsEndpoint,
                                               const QString &projectParser)
@@ -486,7 +545,7 @@ QList<QPair<QString, QString>> routeConnections(const QJsonArray &widgets, const
 
 std::optional<DataRoute> resolveProjectRoute(const QJsonArray &widgets, const QString &projectParser,
                                              const RouteFilter &filter, DataRoute route, RoutePurpose purpose,
-                                             QString *error)
+                                             QString *error, ModbusParserChoice parserChoice)
 {
     const auto tr = [](const char *message) { return QCoreApplication::translate("fhmi", message); };
     const auto reject = [&](const QString &message) -> std::optional<DataRoute> {
@@ -498,6 +557,25 @@ std::optional<DataRoute> resolveProjectRoute(const QJsonArray &widgets, const QS
         return reject(tr("当前模式不支持子通道"));
     if (transport == RouteTransport::S7 && route.connectionId.isEmpty())
         return reject(tr("请选择 S7 连接"));
+    auto matches = routeConnections(widgets, filter, !route.endpoint.isEmpty(), projectParser);
+    const bool explicitCard = !route.connectionId.isEmpty() && !route.isBroadcast();
+    if (transport == RouteTransport::Modbus && parserChoice == ModbusParserChoice::OnConnect &&
+        (explicitCard || matches.isEmpty())) {
+        // Existing projects can choose Modbus on the connection card when they connect.
+        // Prefer the configured Modbus candidates for automatic routing.
+        visitWidgets(widgets, [&](const QJsonObject &card) {
+            const auto id = card.value(QStringLiteral("id")).toString();
+            if (id.isEmpty() || (explicitCard && id != route.connectionId))
+                return true;
+            if (routeCardSupports(card, RouteTransport::Bytes, !route.endpoint.isEmpty(), projectParser) &&
+                !routeCardSupports(card, RouteTransport::Modbus, false, projectParser))
+                matches.append({id, card.value(QStringLiteral("type")).toString()});
+            return true;
+        });
+    }
+    if (transport == RouteTransport::Modbus && (route.connectionId.isEmpty() || route.isBroadcast()) &&
+        matches.isEmpty() && !widgets.isEmpty())
+        return reject(tr("请选择启用 Modbus RTU、ASCII 或 TCP 的连接"));
     if (route.isBroadcast()) {
         if (purpose == RoutePurpose::DataPoint)
             return reject(tr("工程数据点需要唯一来源，可用计算点汇总多路数据"));
@@ -505,11 +583,12 @@ std::optional<DataRoute> resolveProjectRoute(const QJsonArray &widgets, const QS
             return reject(tr("连接 %1 与收发模式不匹配").arg(route.connectionId));
         return route;
     }
-    const auto matches = routeConnections(widgets, filter, !route.endpoint.isEmpty(), projectParser);
     if (route.connectionId.isEmpty()) {
+        if (purpose == RoutePurpose::Binding && matches.isEmpty() && !widgets.isEmpty())
+            return reject(tr("没有与绑定模式匹配的连接"));
         if (matches.size() > 1)
-            return reject(purpose == RoutePurpose::DataPoint ? tr("有多个匹配的来源连接，请为数据点指定连接")
-                : tr("有多个匹配的发送连接，请选择目标连接或明确启用广播"));
+            return reject(purpose == RoutePurpose::Send ? tr("有多个匹配的发送连接，请选择目标连接或明确启用广播")
+                                                       : tr("有多个匹配的来源连接，请明确选择"));
         if (matches.size() == 1)
             route.connectionId = matches.first().first;
     } else if (!std::any_of(matches.cbegin(), matches.cend(), [&](const auto &card) { return card.first == route.connectionId; })) {
@@ -520,6 +599,8 @@ std::optional<DataRoute> resolveProjectRoute(const QJsonArray &widgets, const QS
             if (std::any_of(local.cbegin(), local.cend(), [&](const auto &card) { return card.first == route.connectionId; }))
                 return reject(tr("本机 Modbus 从站 %1 不匹配此功能码、从站地址或子通道").arg(route.connectionId));
         }
+        if (transport == RouteTransport::Modbus)
+            return reject(tr("连接 %1 未启用 Modbus 解析").arg(route.connectionId));
         return reject(tr("连接 %1 与收发模式不匹配").arg(route.connectionId));
     }
     return route;
@@ -530,6 +611,8 @@ QString modbusRouteDescription(const QJsonObject &card, const Project &project)
     const auto tr = [](const char *message) { return QCoreApplication::translate("fhmi", message); };
     const auto props = card.value(QStringLiteral("properties")).toObject();
     const QString parser = project.linkReceiveFormat(props).type;
+    if (!isModbusParser(parser))
+        return tr("连接时选择 Modbus 解析");
     if (routeCardSupports(card, RouteTransport::ModbusSlave, false, project.parserType()))
         return tr("本机 Modbus 从站表");
     if (parser == QLatin1String("modbus_tcp"))
@@ -560,6 +643,62 @@ QString Project::formatVersion(const QJsonArray &widgets, const QJsonObject &log
     return usesRouting(widgets) ? QStringLiteral("1.2") : S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0");
 }
 
+namespace {
+
+const auto SendConfiguration = QStringLiteral("sendConfiguration");
+const auto CommandMode = QStringLiteral("commandMode");
+const auto RequiresNewSender = QStringLiteral("requiresSendConfiguration");
+
+// UIDP 1.3 readers ignore new properties. Keep the legacy sender inactive when
+// the real action depends on a sequence or an inherited address it cannot read.
+QJsonArray projectSendConfiguration(QJsonArray widgets, bool saving)
+{
+    const auto target = QStringLiteral("commandTargetId");
+    const auto endpoint = QStringLiteral("commandEndpoint");
+    const auto on = QStringLiteral("onCommand");
+    const auto off = QStringLiteral("offCommand");
+    for (qsizetype index = 0; index < widgets.size(); ++index) {
+        auto widget = widgets.at(index).toObject();
+        auto props = widget.value(QStringLiteral("properties")).toObject();
+        const auto mode = props.value(CommandMode).toString();
+        const auto type = widget.value(QStringLiteral("type")).toString();
+        const auto pointKey = writePointKey(mode);
+        if (saving && widgetSendsCommands(type, props) &&
+            (CommandEncoder::usesFrameSequence(props) || (!pointKey.isEmpty() && !props.value(pointKey).toString().isEmpty()))) {
+            QJsonObject configuration;
+            for (const auto &key : {CommandMode, target, endpoint, on, off}) {
+                if (props.contains(key))
+                    configuration.insert(key, props.take(key));
+            }
+            props.insert(CommandMode, RequiresNewSender);
+            if (type == u"ToggleSwitch") {
+                // A legacy switch with no command can write through its local slave binding.
+                props.insert(on, RequiresNewSender);
+                props.insert(off, RequiresNewSender);
+            }
+            props.insert(SendConfiguration, configuration);
+            widget.insert(QStringLiteral("properties"), props);
+        } else if (!saving && mode == RequiresNewSender && props.value(SendConfiguration).isObject()) {
+            const auto configuration = props.take(SendConfiguration).toObject();
+            for (const auto &key : {CommandMode, target, endpoint, on, off}) {
+                if (configuration.contains(key))
+                    props.insert(key, configuration.value(key));
+                else if (key != CommandMode)
+                    props.remove(key);
+            }
+            widget.insert(QStringLiteral("properties"), props);
+        }
+        const auto children = widget.value(QStringLiteral("children")).toArray();
+        if (!children.isEmpty())
+            widget.insert(QStringLiteral("children"), projectSendConfiguration(children, saving));
+        if (widget != widgets.at(index).toObject())
+            widgets[index] = widget;
+    }
+    return widgets;
+}
+
+} // namespace
+
 QJsonObject Project::toJson() const
 {
     QJsonObject document{
@@ -569,7 +708,7 @@ QJsonObject Project::toJson() const
         {QStringLiteral("canvas"), QJsonObject{{QStringLiteral("width"), canvasWidth},
                                                {QStringLiteral("height"), canvasHeight},
                                                {QStringLiteral("gridSize"), gridSize}}},
-        {QStringLiteral("widgets"), widgets},
+        {QStringLiteral("widgets"), projectSendConfiguration(widgets, true)},
         {QStringLiteral("serial"), serial},
     };
     if (!logic.isEmpty())
@@ -673,7 +812,9 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
         return fail(error, parserError);
     }
     QSet<QString> ids;
-    const QJsonValue widgetList = data.value(QStringLiteral("widgets"));
+    QJsonValue widgetList = data.value(QStringLiteral("widgets"));
+    if (widgetList.isArray())
+        widgetList = projectSendConfiguration(widgetList.toArray(), false);
     if (!widgetList.isUndefined() && !validateWidgets(widgetList, 0, ids, protocol, error))
         return false;
     const bool legacy = version == QLatin1String("1.0") || version == QLatin1String("1.1");
@@ -719,7 +860,7 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
         if (!isProjectParameter(point) && point.value(QStringLiteral("expression")).toString().trimmed().isEmpty()) {
             const auto binding = point.value(QStringLiteral("binding")).toObject();
             if (checkUniqueRoutes && !allowExternalReferences) {
-                const auto problem = dataPointSourceProblem(binding, widgets, parser);
+                const auto problem = dataPointSourceProblem(binding, widgets, parser, ModbusParserChoice::OnConnect);
                 if (!problem.isEmpty())
                     return fail(error, QCoreApplication::translate("fhmi", "数据点 %1 · %2").arg(
                         point.value(QStringLiteral("name")).toString(), problem));
@@ -757,8 +898,8 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
             if (!(isTimingChart(type) && TimingSource::usesChannels(props)) &&
                 !checkPoint(widget.value(QStringLiteral("binding")).toObject()))
                 return false;
-            if (type == QLatin1String("RealtimeChart")) {
-                const int count = chartCurveCount(props);
+            if (usesChartSeries(type, props) && (checkUniqueRoutes || !isTimingChart(type))) {
+                const int count = chartCurveCount(type, props);
                 for (int i = 0; i < count; ++i)
                     if (!checkPoint(chartCurveBinding(props, i), i))
                         return false;
@@ -769,7 +910,7 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
     if (!validateRoutes(withPoints, parser, logic.toObject(), error, allowExternalReferences, checkUniqueRoutes) ||
         !S7::validateWidgets(withPoints, error, allowExternalReferences))
         return false;
-    if (widgets != widgetList.toArray())
+    if (widgets != data.value(QStringLiteral("widgets")).toArray())
         data.insert(QStringLiteral("widgets"), widgets);
     return true;
 }
@@ -799,7 +940,7 @@ Project Project::fromTrustedJson(const QJsonObject &data)
     project.canvasWidth = canvas.value(QStringLiteral("width")).toInt(1200);
     project.canvasHeight = canvas.value(QStringLiteral("height")).toInt(800);
     project.gridSize = canvas.value(QStringLiteral("gridSize")).toInt(10);
-    project.widgets = data.value(QStringLiteral("widgets")).toArray();
+    project.widgets = projectSendConfiguration(data.value(QStringLiteral("widgets")).toArray(), false);
     project.logic = data.value(QStringLiteral("logic")).toObject();
     project.bitProfiles = data.value(QStringLiteral("bitProfiles")).toObject();
     project.frameTemplates = data.value(QStringLiteral("frameTemplates")).toObject();

@@ -38,5 +38,12 @@ std::optional<QJsonObject> editCanBitBinding(const Project *project, const QJson
 std::optional<CanSignalSelection> chooseCanSignal(const Project *project, const QJsonArray &widgets,
                                                   const QString &connection, const QString &key, QWidget *parent,
                                                   bool onlyCurrentConnection = false);
+std::optional<CanSignalSelection> chooseCanMessage(const Project *project, const QJsonArray &widgets,
+                                                  const QString &connection, const QString &key, QWidget *parent,
+                                                  bool onlyCurrentConnection = false);
+std::optional<QString> editCanInitialMapping(const Project *project, const QJsonObject &card, QWidget *parent);
+std::optional<QString> editCanReceiveFilter(const Project *project, const QJsonObject &card, QWidget *parent);
+QList<CanSignalSelection> chooseCanSignals(const Project *project, const QJsonArray &widgets,
+                                           const QString &connection, int capacity, QWidget *parent);
 
 } // namespace fhmi

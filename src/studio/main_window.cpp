@@ -54,6 +54,10 @@ MainWindow::MainWindow(QWidget *parent) : FluentQt::FluentWindow(parent)
         showInfoBar(this, title, content, NotifyType::Warning, 3000);
     });
     connect(m_preview, &PreviewPage::exportRequested, this, &MainWindow::exportApplication);
+    connect(m_preview, &PreviewPage::endpointObserved, m_designer, &DesignerPage::rememberEndpoint);
+    connect(m_preview, &PreviewPage::textSampleObserved, m_designer, &DesignerPage::rememberTextSample);
+    connect(m_preview, &PreviewPage::receivePointRequested, m_designer, &DesignerPage::addPointFromPreview,
+            Qt::QueuedConnection);
 
     m_updates = new UpdateController(this);
     connect(m_settings, &SettingsPage::checkUpdateRequested, m_updates, &UpdateController::checkNow);

@@ -297,7 +297,9 @@ class TestIndustrial : public QObject
         QCOMPARE(modbus->evaluate(modbus->extractFromParsed({{"hr100", 1LL}})).toDouble(), 1.0);
         context.addBinding(*modbus);
         QCOMPARE(context.modbusNeeds().size(), 1);
-        emit context.hub()->unitReceived({}, Message{{"hr100", 1LL}});
+        DataSource slave;
+        slave.slaveData = true;
+        emit context.hub()->unitReceived({}, Message{{"hr100", 1LL}}, slave);
         QCOMPARE(widget->reading(), std::optional<double>(1));
         const auto addBinding = [&](const QJsonObject &fields) {
             QJsonObject data = serialized;

@@ -7,6 +7,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QSet>
 #include <QtCore/QTimer>
+#include <optional>
 
 namespace fhmi {
 
@@ -20,6 +21,24 @@ struct DataPointSample
     QDateTime timestamp;
     DataQuality quality = DataQuality::Waiting;
     QString detail;
+};
+
+// Scalar consumers keep the first matching address for the run. A new session at that
+// address can resume it. A different address can report a conflict but cannot take over.
+class RoutedSample
+{
+  public:
+    void update(DataPointSample sample);
+    bool close(quint64 stream);
+    bool markOld(quint64 stream);
+    bool expire(const QDateTime &now, int ageMs);
+    DataPointSample sample() const;
+
+  private:
+    std::optional<DataPointSample> m_primary;
+    QHash<quint64, DataSource> m_otherSources;
+    quint64 m_closedEpoch = 0;
+    bool m_present = false;
 };
 
 struct AlarmState
@@ -47,7 +66,6 @@ class ProjectData : public QObject
     void evaluate(); // commit one incoming message/frame atomically before evaluating dependencies
     Message values() const { return m_values; }
     DataPointSample sample(const QString &name) const;
-    QList<quint64> sampleStreams(const QString &name) const;
     QList<AlarmState> alarms() const { return m_states; }
     QJsonArray history() const { return m_history; }
     bool audible() const;
@@ -75,7 +93,7 @@ class ProjectData : public QObject
     struct Point
     {
         DataPointSample sample;
-        QHash<quint64, DataPointSample> sources;
+        RoutedSample source;
         QVariant initial;
         int staleAfterMs = 0;
     };
@@ -85,7 +103,6 @@ class ProjectData : public QObject
     void updateHistory(const QString &file, const QJsonArray &records);
     void reportHistoryError(const QString &file, const QString &message);
     void publish(const QString &name, Point &point, DataPointSample sample);
-    void selectSample(const QString &name, Point &point);
     void expireSamples();
     QList<DerivedPoint> m_derived;
     QList<Condition> m_alarmConditions;

@@ -25,6 +25,9 @@ class DesignerPage : public QWidget
 
     // The project with the canvas contents written into it.
     Project snapshot() const;
+    void rememberEndpoint(const QString &connectionId, const QString &endpoint);
+    void rememberTextSample(const QString &connectionId, const Message &message);
+    void addPointFromPreview(const QJsonObject &binding, const QString &name);
     bool isModified() const { return m_modified; }
     QString displayName() const;
 

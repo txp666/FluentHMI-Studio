@@ -19,7 +19,8 @@ Link::Link(QObject *parent)
             for (auto *timer : std::as_const(m_idleTimers))
                 timer->stop();
             const auto streams = std::exchange(m_streams, {});
-            for (const auto &stream : streams) emit streamClosed({m_connectionId, stream.id, stream.endpoint, textEncoding(), isCan(), false});
+            for (const auto &stream : streams)
+                emit streamClosed(dataSource(stream));
             m_endpointRequests.clear();
             for (auto master : std::as_const(m_endpointMasters)) if (master) master->deleteLater();
             m_endpointMasters.clear();
@@ -50,12 +51,26 @@ ModbusMaster *Link::modbusMaster(const QString &endpoint)
 
 DataSource Link::dataSource(Parser *parser)
 {
-    const Stream &stream = m_streams[parser ? parser : m_parser.get()];
-    return {m_connectionId, stream.id, stream.endpoint, textEncoding(), isCan(), false};
+    auto *key = parser ? parser : m_parser.get();
+    auto stream = m_streams.constFind(key);
+    if (stream == m_streams.cend())
+        return dataSource(*m_streams.insert(key, {nextDataStream(), {}, deviceIdentity()}));
+    return dataSource(*stream);
+}
+
+DataSource Link::dataSource(const Stream &stream) const
+{
+    return {m_connectionId, stream.id, stream.endpoint, textEncoding(), isCan(), false, stream.device, parsesModbus()};
 }
 
 DataSource Link::eventSource(const QString &endpoint) const
 {
+    if (!endpoint.isEmpty()) {
+        for (const auto &stream : m_streams) {
+            if (stream.endpoint == endpoint)
+                return {m_connectionId, 0, endpoint, textEncoding(), isCan(), false, stream.device, parsesModbus()};
+        }
+    }
     return {m_connectionId, 0, endpoint, textEncoding(), isCan(), false};
 }
 
@@ -105,10 +120,10 @@ SendStatus Link::sendPeriodic(const QByteArray &bytes, const QString &endpoint)
     return send(bytes, endpoint) ? SendStatus::Submitted : SendStatus::Failed;
 }
 
-void Link::registerStream(Parser *parser, const QString &endpoint)
+void Link::registerStream(Parser *parser, const QString &endpoint, const QString &device)
 {
     dropStream(parser);
-    m_streams.insert(parser, Stream{nextDataStream(), endpoint});
+    m_streams.insert(parser, Stream{nextDataStream(), endpoint, device});
 }
 
 qint64 Link::writeTo(const QByteArray &bytes, const QString &endpoint)
@@ -144,7 +159,10 @@ bool Link::send(const QByteArray &bytes, const QString &endpoint)
         auto source = dataSource();
         source.endpoint = target;
         for (auto it = m_streams.cbegin(); it != m_streams.cend(); ++it) {
-            if (it->endpoint == target) { source.stream = it->id; break; }
+            if (it->endpoint == target) {
+                source = dataSource(*it);
+                break;
+            }
         }
         emit bytesSent(bytes, source);
     }
@@ -289,9 +307,14 @@ void Link::deliverUnits(Parser *parser, const QList<QByteArray> &units, Boundary
 
 void Link::publishUnit(const QByteArray &bytes, const QList<DecodedRecord> &records, const DataSource &source)
 {
-    emit rawReceived(bytes, source);
+    if (!source.modbus)
+        emit rawReceived(bytes, source);
     qsizetype offset = 0;
     for (const auto &record : records) {
+        if (!ownsStream(source.stream))
+            return;
+        if (source.modbus)
+            emit rawReceived(record.frame, source);
         if (!ownsStream(source.stream))
             return;
         emit messageReceived(record.values, source);
@@ -299,10 +322,10 @@ void Link::publishUnit(const QByteArray &bytes, const QList<DecodedRecord> &reco
             return;
         // A message transport can supply a synthetic line terminator to the decoder.
         const auto end = std::min(record.end, bytes.size());
-        emit unitReceived(bytes.mid(offset, end - offset), record.values, source);
+        emit unitReceived(record.frame.isEmpty() ? bytes.mid(offset, end - offset) : record.frame, record.values, source);
         offset = end;
     }
-    if (offset < bytes.size() && ownsStream(source.stream))
+    if (!source.modbus && offset < bytes.size() && ownsStream(source.stream))
         emit unitReceived(bytes.mid(offset), {}, source);
 }
 

@@ -3,7 +3,7 @@
   "appName": "17.10 同连接多接收模板",
   "canvas": {
     "width": 1120,
-    "height": 798,
+    "height": 833,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "先连右侧，再连左侧。转速可回车单发，也可在周期混发时直接修改。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。先连接右侧模拟设备，再连接左侧上位机。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 改右侧任意发送值，点「发送三种帧」，左侧查看读数。试启动周期后直接改值。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -65,7 +79,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -86,7 +100,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 24,
-        "y": 302,
+        "y": 358,
         "w": 258,
         "h": 70
       },
@@ -107,7 +121,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 294,
-        "y": 302,
+        "y": 358,
         "w": 258,
         "h": 70
       },
@@ -128,7 +142,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 24,
-        "y": 386,
+        "y": 437,
         "w": 258,
         "h": 70
       },
@@ -149,7 +163,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 294,
-        "y": 386,
+        "y": 437,
         "w": 258,
         "h": 70
       },
@@ -161,12 +175,11 @@
         "fontSize": 20,
         "displayStyle": "状态徽标",
         "displayFormat": "枚举",
-        "textList": "1=运行|#107c10\n2=故障|#d13438"
+        "textList": "0=停止|#64748b\n1=运行|#107c10\n2=故障|#d13438"
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "hmi",
-        "key": "status.state"
+        "parseMode": "工程数据点",
+        "key": "收到的状态码"
       }
     },
     {
@@ -174,8 +187,8 @@
       "type": "LineEdit",
       "geometry": {
         "x": 568,
-        "y": 302,
-        "w": 528,
+        "y": 358,
+        "w": 258,
         "h": 36
       },
       "properties": {
@@ -196,28 +209,33 @@
       "type": "PushButton",
       "geometry": {
         "x": 568,
-        "y": 350,
-        "w": 258,
+        "y": 448,
+        "w": 170,
         "h": 36
       },
       "properties": {
-        "text": "发转速 · 固定长度",
+        "text": "发转速 · 定长",
         "commandMode": "HEX",
         "commandTargetId": "device",
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
         "sendFrameTemplateId": "speed",
-        "command": "10 DC 05",
-        "dataType": "HEX字符串"
+        "sendUseTemplateFields": true,
+        "sendFrameFieldBindings": [
+          {
+            "field": "value",
+            "inputId": "rpmInput"
+          }
+        ]
       }
     },
     {
       "id": "sendB",
       "type": "PushButton",
       "geometry": {
-        "x": 838,
-        "y": 350,
-        "w": 258,
+        "x": 747,
+        "y": 448,
+        "w": 170,
         "h": 36
       },
       "properties": {
@@ -227,17 +245,22 @@
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
         "sendFrameTemplateId": "temperature",
-        "command": "20 FF 83",
-        "dataType": "HEX字符串"
+        "sendUseTemplateFields": true,
+        "sendFrameFieldBindings": [
+          {
+            "field": "value",
+            "inputId": "temperatureInput"
+          }
+        ]
       }
     },
     {
       "id": "sendC",
       "type": "PushButton",
       "geometry": {
-        "x": 568,
-        "y": 398,
-        "w": 258,
+        "x": 926,
+        "y": 448,
+        "w": 170,
         "h": 36
       },
       "properties": {
@@ -247,27 +270,71 @@
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
         "sendFrameTemplateId": "status",
-        "command": "02 00 FA",
-        "dataType": "HEX字符串"
+        "sendUseTemplateFields": true,
+        "sendFrameFieldBindings": [
+          {
+            "field": "state",
+            "inputId": "stateInput"
+          },
+          {
+            "field": "value",
+            "inputId": "pressureInput"
+          }
+        ]
       }
     },
     {
       "id": "sendBatch",
       "type": "PushButton",
       "geometry": {
-        "x": 838,
-        "y": 398,
+        "x": 568,
+        "y": 492,
         "w": 258,
         "h": 36
       },
       "properties": {
-        "text": "一次写入三种帧",
-        "commandMode": "HEX",
-        "commandTargetId": "device",
+        "text": "发送三种帧",
+        "commandMode": "requiresSendConfiguration",
+        "sendConfiguration": {
+          "commandMode": "HEX",
+          "commandTargetId": "device"
+        },
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
-        "command": "7E 7F 01 01 77 77 0D 0A A5 5A 20 02 00 C3 EA 75 0D A5 5A 10 FC 08 72",
-        "dataType": "HEX字符串"
+        "sendFrameSequence": [
+          {
+            "sendFrameTemplateId": "status",
+            "sendFrameFieldBindings": [
+              {
+                "field": "state",
+                "inputId": "stateInput"
+              },
+              {
+                "field": "value",
+                "inputId": "pressureInput"
+              }
+            ]
+          },
+          {
+            "sendFrameTemplateId": "temperature",
+            "sendFrameFieldBindings": [
+              {
+                "field": "value",
+                "inputId": "temperatureInput"
+              }
+            ]
+          },
+          {
+            "sendFrameTemplateId": "speed",
+            "sendFrameFieldBindings": [
+              {
+                "field": "value",
+                "inputId": "rpmInput"
+              }
+            ]
+          }
+        ],
+        "buttonStyle": "强调"
       }
     },
     {
@@ -275,12 +342,12 @@
       "type": "PushButton",
       "geometry": {
         "x": 568,
-        "y": 446,
+        "y": 570,
         "w": 258,
         "h": 36
       },
       "properties": {
-        "text": "先发坏 CRC 温度帧，再发转速",
+        "text": "坏 CRC 后接正确帧",
         "commandMode": "HEX",
         "commandTargetId": "device",
         "confirmBeforeSend": true,
@@ -293,31 +360,54 @@
       "id": "sendCycle",
       "type": "PushButton",
       "geometry": {
-        "x": 568,
-        "y": 494,
+        "x": 838,
+        "y": 492,
         "w": 258,
         "h": 36
       },
       "properties": {
         "text": "开始周期混发 · 1000 ms",
-        "commandMode": "HEX",
-        "commandTargetId": "device",
+        "commandMode": "requiresSendConfiguration",
+        "sendConfiguration": {
+          "commandMode": "HEX",
+          "commandTargetId": "device"
+        },
         "sendIntervalMs": 1000,
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
-        "commandInputs": [
+        "sendFrameSequence": [
           {
-            "inputId": "rpmInput",
-            "variable": "rpm",
-            "dataType": "uint16"
+            "sendFrameTemplateId": "status",
+            "sendFrameFieldBindings": [
+              {
+                "field": "state",
+                "inputId": "stateInput"
+              },
+              {
+                "field": "value",
+                "inputId": "pressureInput"
+              }
+            ]
+          },
+          {
+            "sendFrameTemplateId": "temperature",
+            "sendFrameFieldBindings": [
+              {
+                "field": "value",
+                "inputId": "temperatureInput"
+              }
+            ]
+          },
+          {
+            "sendFrameTemplateId": "speed",
+            "sendFrameFieldBindings": [
+              {
+                "field": "value",
+                "inputId": "rpmInput"
+              }
+            ]
           }
-        ],
-        "commandTemplate": "7E 7F 01 01 77 77 0D 0A A5 5A 20 02 00 C3 EA 75 0D A5 5A 10 {rpm}",
-        "byteOrder": "小端(LE)",
-        "txFrame": {
-          "checksum": "CRC8",
-          "checksumStart": 19
-        }
+        ]
       }
     },
     {
@@ -325,12 +415,12 @@
       "type": "Label",
       "geometry": {
         "x": 24,
-        "y": 500,
-        "w": 510,
+        "y": 584,
+        "w": 528,
         "h": 24
       },
       "properties": {
-        "text": "周期混发每轮交付 3 帧。修改转速后，下一轮自动取值。",
+        "text": "周期每轮读取当前输入，到「周期任务」可查看和停止。",
         "fontSize": 13
       }
     },
@@ -339,12 +429,12 @@
       "type": "PushButton",
       "geometry": {
         "x": 838,
-        "y": 446,
+        "y": 570,
         "w": 258,
         "h": 36
       },
       "properties": {
-        "text": "先发错长度，再发转速",
+        "text": "错长度后接正确帧",
         "commandMode": "HEX",
         "commandTargetId": "device",
         "command": "A5 5A 20 F0 FF 83 AA 75 0D A5 5A 10 FC 08 72",
@@ -356,9 +446,9 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 544,
+        "y": 621,
         "w": 528,
-        "h": 230
+        "h": 188
       },
       "properties": {
         "title": "上位机收发报文",
@@ -370,13 +460,131 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 544,
+        "y": 621,
         "w": 528,
-        "h": 230
+        "h": 188
       },
       "properties": {
         "title": "模拟设备收发报文",
         "sourceCardId": "device"
+      }
+    },
+    {
+      "id": "receivedValues",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 329,
+        "w": 528,
+        "h": 24
+      },
+      "properties": {
+        "text": "接收结果 · 工程数据点",
+        "fontSize": 13,
+        "bold": true
+      }
+    },
+    {
+      "id": "sendValues",
+      "type": "Label",
+      "geometry": {
+        "x": 568,
+        "y": 329,
+        "w": 528,
+        "h": 24
+      },
+      "properties": {
+        "text": "发送值 · 模拟设备",
+        "fontSize": 13,
+        "bold": true
+      }
+    },
+    {
+      "id": "diagnosticSamples",
+      "type": "Label",
+      "geometry": {
+        "x": 568,
+        "y": 541,
+        "w": 528,
+        "h": 24
+      },
+      "properties": {
+        "text": "坏帧恢复 · 固定样例",
+        "fontSize": 13,
+        "bold": true
+      }
+    },
+    {
+      "id": "valueScales",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 530,
+        "w": 528,
+        "h": 24
+      },
+      "properties": {
+        "text": "温度原码 × 0.1 得到 °C，压力原码 × 0.01 得到 bar。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "monitorTip",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 557,
+        "w": 528,
+        "h": 24
+      },
+      "properties": {
+        "text": "工具栏「工程数据监视」可查看数值、来源和状态。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "temperatureInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 838,
+        "y": 358,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "title": "温度原码",
+        "text": "-125",
+        "inputOnly": true
+      }
+    },
+    {
+      "id": "pressureInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 568,
+        "y": 401,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "title": "压力原码",
+        "text": "250",
+        "inputOnly": true
+      }
+    },
+    {
+      "id": "stateInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 838,
+        "y": 401,
+        "w": 258,
+        "h": 36
+      },
+      "properties": {
+        "title": "状态（0停 / 1运行 / 2故障）",
+        "text": "2",
+        "inputOnly": true
       }
     }
   ],
@@ -431,6 +639,9 @@
             "int16",
             "大端(BE)"
           ]
+        ],
+        "sendRequiredFields": [
+          "value"
         ]
       },
       "sample": "A5 5A 20 02 FF 83 AA 75 0D"
@@ -457,6 +668,10 @@
             "uint16",
             "大端(BE)"
           ]
+        ],
+        "sendRequiredFields": [
+          "state",
+          "value"
         ]
       },
       "sample": "7E 7F 02 00 FA F8 0D 0A"
@@ -470,7 +685,8 @@
           "parseMode": "键值匹配",
           "sourceCardId": "hmi",
           "key": "speed.value"
-        }
+        },
+        "unit": "rpm"
       },
       {
         "name": "收到的温度",
@@ -479,7 +695,8 @@
           "sourceCardId": "hmi",
           "key": "temperature.value",
           "expression": "value * 0.1"
-        }
+        },
+        "unit": "°C"
       },
       {
         "name": "收到的压力",
@@ -488,6 +705,15 @@
           "sourceCardId": "hmi",
           "key": "status.value",
           "expression": "value * 0.01"
+        },
+        "unit": "bar"
+      },
+      {
+        "name": "收到的状态码",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "status.state"
         }
       }
     ]

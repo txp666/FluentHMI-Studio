@@ -418,6 +418,35 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     return entry;
 }
 
+namespace {
+
+void appendTextFields(QList<TextFieldValue> &fields, const QString &path, const QVariant &value, bool nested)
+{
+    fields.append({path, value, nested});
+    if (!fields.back().supportsJsonPath())
+        return;
+    if (value.typeId() == QMetaType::QVariantMap) {
+        const auto map = value.toMap();
+        for (auto entry = map.cbegin(); entry != map.cend(); ++entry)
+            if (!entry.key().isEmpty() && !entry.key().contains(u'.'))
+                appendTextFields(fields, path + u'.' + entry.key(), entry.value(), true);
+    } else if (value.typeId() == QMetaType::QVariantList) {
+        const auto list = value.toList();
+        for (qsizetype index = 0; index < list.size(); ++index)
+            appendTextFields(fields, path + u'.' + QString::number(index), list.at(index), true);
+    }
+}
+
+} // namespace
+
+QList<TextFieldValue> textFieldValues(const Message &message)
+{
+    QList<TextFieldValue> fields;
+    for (auto entry = message.constBegin(); entry != message.constEnd(); ++entry)
+        appendTextFields(fields, entry.key(), entry.value(), false);
+    return fields;
+}
+
 QVariant BindingEntry::extractFromParsed(const Message &data) const
 {
     if (parseMode == ParseMode::KeyValue || parseMode == ParseMode::DataPoint || parseMode == ParseMode::CanField) {

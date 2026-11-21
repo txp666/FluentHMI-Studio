@@ -82,7 +82,7 @@ void ModbusPoller::reset()
 void ModbusPoller::replan(Channel &channel, const QList<ModbusNeed> &needs)
 {
     QList<ModbusNeed> active;
-    const DataSource source{channel.link->connectionId(), 0, channel.endpoint};
+    const auto source = channel.link->eventSource(channel.endpoint);
     for (ModbusNeed need : needs) {
         auto route = need.route;
         if (!channel.link->addressedModbusReplies()) route.endpoint.clear();

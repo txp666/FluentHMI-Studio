@@ -29,6 +29,7 @@ class TcpClientLink : public Link
 
   protected:
     qint64 writeBytes(const QByteArray &bytes) override;
+    QString deviceIdentity() const override;
 
   private:
     QTcpSocket m_socket;
@@ -53,6 +54,7 @@ class TcpServerLink : public Link
     QString description() const override;
     bool isConnected() const override; // listening
     bool canSend() const override { return !m_clients.isEmpty(); }
+    bool hasPeerStreams() const override { return true; }
     QStringList sendEndpoints() const override;
     quint64 sendSession(const QString &endpoint) const override;
     bool hasPendingWrite(const QString &endpoint) const override;

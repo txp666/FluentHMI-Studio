@@ -21,7 +21,7 @@ Modbus 回读线圈或离散输入时直接使用位值。读取寄存器时可�
 | `"S7"` | `s7` 对象含 `address`、`dataType`、`period`，并选择 S7 来源卡 | 在 `_curve_0_s7` 填同一对象 |
 | `"JSON路径"` | `jsonPath` 用点分隔，如 `"data.sensors.0.temp"`。数组负下标从末尾数 | 同名加前缀 |
 | `"HEX字节提取"` | `byteOffset` 从 0 起，`dataType` 选 `uint8/int8/uint16/int16/uint32/int32/float32`，`byteOrder` 选 `"大端(BE)"` 或 `"小端(LE)"`。可用 `frameHeader` / `frameTail` 剥去包头包尾，再从剩余数据算偏移 | 同名加前缀。普通绑定默认类型为 `uint16`，曲线为 `float32`，建议明确写设备的类型 |
-| `"Modbus"` | `mbArea` 选 `"保持寄存器"`（默认）、`"输入寄存器"`、`"线圈"` 或 `"离散输入"`。`mbRegIndex` 是表内地址。`mbDataType` 选 `uint16/int16/uint32/int32/float32`，`mbRegOrder` 选 `"大端(AB CD)"` 或 `"小端(CD AB)"`。`mbSlaveFilter` 和 `mbFcFilter` 默认 −1，接受所有从站和功能码 | 地址字段写 `_curve_0_regIndex`。其余字段同名加前缀。普通绑定与各条曲线都可用 `mbPeriod` 设采集周期（0–60000 ms，0 用连接卡默认） |
+| `"Modbus"` | `mbArea` 选 `"保持寄存器"`（默认）、`"输入寄存器"`、`"线圈"` 或 `"离散输入"`。`mbRegIndex` 是表内地址。`mbDataType` 选 `uint16/int16/uint32/int32/float32`，`mbRegOrder` 选 `"大端(AB CD)"` 或 `"小端(CD AB)"`。`mbSlaveFilter` 为 −1 时跟随连接卡的默认从站，`mbFcFilter` 为 −1 时按表区及地址匹配 | 地址字段写 `_curve_0_regIndex`。其余字段同名加前缀。普通绑定与各条曲线都可用 `mbPeriod` 设采集周期（0–60000 ms，0 用连接卡默认） |
 | `"CAN信号"`（FluentHMI Studio） | 报文 ID、位位置、符号、缩放参数见 [CAN 信号](can.md#按位取值) | 同名加前缀 |
 
 `Label` 把结果写入 `text`，`NumericDisplay`、`GaugeMeter`、`ProgressBar` 和 `ProgressRingDisplay` 写入 `value`。`LEDIndicator` 按 `onValue` / `offValue` 判亮灭，默认分别为 `"1"` / `"0"`。`ToggleSwitch` 写入 `checked`，`Slider` 和 `SpinBox` 写入 `value`。设备反馈可以更新这三种输入控件，只有用户操作才触发它们的发送命令。
@@ -83,13 +83,13 @@ Modbus 回读线圈或离散输入时直接使用位值。读取寄存器时可�
 
 [在设计器配置收发方向](../guide.zh.md#配置连接与收发方向)
 
-直接从设备取值的绑定在 `binding.sourceCardId` 指定来源连接卡的控件 ID，曲线使用 `_curve_N_sourceCardId`。`sourceEndpoint`（曲线为 `_curve_N_sourceEndpoint`）可进一步匹配 TCP 服务端客户端、UDP 发送方的 `IP:端口` 或 MQTT 的完整 Topic。IPv6 使用 `[地址]:端口`。各来源独立拼帧，断开一个连接不会清空其他来源。
+直接从设备取值的绑定在 `binding.sourceCardId` 指定来源连接卡的控件 ID，曲线使用 `_curve_N_sourceCardId`。`sourceEndpoint`（曲线为 `_curve_N_sourceEndpoint`）可进一步匹配 TCP 服务端客户端、UDP 发送方的 `IP:端口` 或 MQTT 的完整 Topic。IPv6 使用 `[地址]:端口`。TCP 服务端的接收也可按对端 IP 匹配，让独占该 IP 的设备换临时端口重连后继续取值。同一 IP 下多台设备仍需可区分的子通道。各来源独立拼帧。设备数据点失去原来源时标记为旧值，等待原设备恢复。
 
 命令用 `properties.commandTargetId` 指定发送连接，`commandEndpoint` 指定 TCP 服务端客户端、UDP 目的地址或 MQTT 发布 Topic。接收绑定和发送操作的连接留空时，会尝试自动匹配唯一连接。有多个匹配连接时请指定目标。用 `"@all"` 表示明确匹配所有兼容连接，发送时表示广播。指定连接按名称精确匹配，`*` 也是普通名称。S7 继续使用指定的 S7 卡片。单个 TCP 服务端有多个在线客户端时，发送前请选择子通道。
 
 接收卡片、日志、数据表和 CAN 监视器通过自身的 `sourceCardId` 筛选来源，默认显示所有匹配流量。接收卡片、日志和数据表还可以设置 `sourceEndpoint`，按对端或 Topic 筛选。绑定选 `"未绑定"` 时可保留填写内容，运行时从已填完整并且启用的绑定取数。
 
-Modbus 轮询按连接及 TCP/UDP 对端独立排队，各自使用连接卡的周期、超时和默认从站地址。TCP 服务端只轮询当前在线的客户端，UDP 可以向明确设置的对端主动发请求。某个块超时或应答异常时，只把由该块提供的工程数据点标为未知。MQTT 的请求 Topic 与应答 Topic 可以不同，Modbus 请求在同一 MQTT 连接内串行，轮询使用连接卡的发布 Topic。`sourceEndpoint` 筛选应答 Topic。多台 MQTT Modbus 设备应分别配置连接卡及发布 Topic。
+Modbus 轮询按连接及 TCP/UDP 对端独立排队，各自使用连接卡的周期、超时和默认从站地址。TCP 服务端只轮询当前在线的客户端，UDP 可以向明确设置的对端主动发请求。某个块超时或应答异常时，只把由该块提供的绑定标为未知。MQTT 的请求 Topic 与应答 Topic 可以不同，Modbus 请求在同一 MQTT 连接内串行，轮询使用连接卡的发布 Topic。`sourceEndpoint` 筛选应答 Topic。多台 MQTT Modbus 设备应分别配置连接卡及发布 Topic。
 
 设计器按所选连接展示子通道。更换连接后，原地址或 Topic 会退出当前配置。切换模式后若已有定向设置不适用，属性栏提示清空子通道或重新选择连接。
 

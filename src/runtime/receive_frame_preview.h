@@ -7,6 +7,7 @@
 #include <QtWidgets/QWidget>
 
 #include <functional>
+#include <memory>
 
 class QJsonObject;
 class QHBoxLayout;
@@ -23,6 +24,8 @@ namespace fhmi {
 class FrameBytesView;
 class FrameDiagram;
 class FrameCoveragePreview;
+class CanSignalSet;
+struct CanFrame;
 
 struct ReceivedField
 {
@@ -84,11 +87,16 @@ class ReceivePreview : public QWidget
 };
 
 using SaveReceivedField = std::function<void(const QString &field, bool jsonPath)>;
+using SaveReceivedBinding = std::function<void(const QJsonObject &binding, const QString &name)>;
 void openReceiveFramePreview(const QJsonObject &settings, QWidget *parent, const QByteArray &sample = {},
                              SaveReceivedField saveField = {}, const QString &templateName = {});
 void openReceiveGroupPreview(const QJsonObject &settings, QWidget *parent, SaveReceivedField saveField = {},
                              const QByteArray &sample = {});
 void openReceiveTextPreview(const QJsonObject &settings, QWidget *parent, const QString &sample = {},
                             SaveReceivedField saveField = {});
+void openCanPacketPreview(const CanFrame &frame, std::shared_ptr<const CanSignalSet> definitions,
+                          const DataSource &source, QWidget *parent, SaveReceivedBinding save = {});
+void openModbusPacketPreview(const QByteArray &packet, const QString &parser, bool request, const Message &decoded,
+                             const DataSource &source, QWidget *parent, SaveReceivedBinding save = {});
 
 } // namespace fhmi

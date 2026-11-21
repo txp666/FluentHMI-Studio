@@ -3,7 +3,7 @@
   "appName": "17.12 MQTT 发布订阅与主题取值",
   "canvas": {
     "width": 1120,
-    "height": 829,
+    "height": 857,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "两张卡已配置 EMQX 公共 Broker。连接后左侧回车发布，右侧回送 A 或 B，按主题分别查看读数。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。分别连接两张 MQTT 卡。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 改左侧目标转速并回车，等右侧收到后点「回送 A 的反馈」，核对左侧 A 的读数。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "MqttConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 320
       },
@@ -62,7 +76,7 @@
       "type": "MqttConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 320
       },
@@ -80,7 +94,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 24,
-        "y": 426,
+        "y": 454,
         "w": 528,
         "h": 36
       },
@@ -101,7 +115,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 568,
-        "y": 426,
+        "y": 454,
         "w": 258,
         "h": 36
       },
@@ -118,7 +132,8 @@
           }
         ],
         "confirmBeforeSend": true,
-        "showSendConfirmationDetails": true
+        "showSendConfirmationDetails": true,
+        "buttonStyle": "强调"
       }
     },
     {
@@ -126,7 +141,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 838,
-        "y": 426,
+        "y": 454,
         "w": 258,
         "h": 36
       },
@@ -152,7 +167,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 24,
-        "y": 477,
+        "y": 505,
         "w": 258,
         "h": 64
       },
@@ -164,10 +179,8 @@
         "unit": "rpm"
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "hmi",
-        "key": "rpm",
-        "sourceEndpoint": "fluenthmi/17/{session}/a/state"
+        "parseMode": "工程数据点",
+        "key": "主题 A 的转速反馈"
       }
     },
     {
@@ -175,7 +188,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 294,
-        "y": 477,
+        "y": 505,
         "w": 258,
         "h": 64
       },
@@ -187,10 +200,8 @@
         "unit": "rpm"
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "hmi",
-        "key": "rpm",
-        "sourceEndpoint": "fluenthmi/17/{session}/b/state"
+        "parseMode": "工程数据点",
+        "key": "主题 B 的转速反馈"
       }
     },
     {
@@ -198,7 +209,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 477,
+        "y": 505,
         "w": 258,
         "h": 64
       },
@@ -219,12 +230,12 @@
       "type": "PushButton",
       "geometry": {
         "x": 838,
-        "y": 491,
+        "y": 519,
         "w": 258,
         "h": 36
       },
       "properties": {
-        "text": "回送 B 的固定反馈",
+        "text": "回送 B · 固定对照",
         "commandMode": "文本",
         "commandTargetId": "device",
         "commandEndpoint": "fluenthmi/17/{session}/b/state",
@@ -239,7 +250,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 555,
+        "y": 583,
         "w": 528,
         "h": 250
       },
@@ -253,7 +264,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 555,
+        "y": 583,
         "w": 528,
         "h": 250
       },
@@ -272,6 +283,26 @@
           "sourceCardId": "device",
           "sourceEndpoint": "fluenthmi/17/{session}/a/target",
           "key": "rpm"
+        }
+      },
+      {
+        "name": "主题 A 的转速反馈",
+        "unit": "rpm",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "rpm",
+          "sourceEndpoint": "fluenthmi/17/{session}/a/state"
+        }
+      },
+      {
+        "name": "主题 B 的转速反馈",
+        "unit": "rpm",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "hmi",
+          "key": "rpm",
+          "sourceEndpoint": "fluenthmi/17/{session}/b/state"
         }
       }
     ]

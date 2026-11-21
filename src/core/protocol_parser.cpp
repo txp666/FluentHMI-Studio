@@ -112,6 +112,8 @@ RawFrameBuffer::RawFrameBuffer(QByteArray header, QByteArray footer, int maxBuff
 QList<QByteArray> RawFrameBuffer::feed(const QByteArray &data)
 {
     if (m_header.isEmpty() || m_footer.isEmpty()) {
+        if (!m_header.isEmpty() && !data.contains(m_header))
+            return {};
         return {data};
     }
     m_buf += data;
@@ -1496,7 +1498,7 @@ QList<DecodedRecord> ModbusRtuParser::decodeRecords(const QByteArray &data)
         const int slave = quint8(frame.at(0));
         const int fc = quint8(frame.at(1));
         results.append({modbusResponse(slave, fc, frame.mid(2, length - 4), m_fields,
-                                       m_requests->take(slave, fc, -1, &m_answered)), data.size() - m_buf.size()});
+                                       m_requests->take(slave, fc, -1, &m_answered)), data.size() - m_buf.size(), frame});
     }
     return results;
 }
@@ -1546,7 +1548,7 @@ QList<DecodedRecord> ModbusTcpParser::decodeRecords(const QByteArray &data)
         const int slave = quint8(frame.at(6));
         const int fc = quint8(frame.at(7));
         results.append({modbusResponse(slave, fc, frame.mid(8), m_fields, m_requests->take(slave, fc, transaction)),
-                        data.size() - m_buf.size()});
+                        data.size() - m_buf.size(), frame});
     }
     return results;
 }
@@ -1580,7 +1582,8 @@ QList<DecodedRecord> ModbusAsciiParser::decodeRecords(const QByteArray &data)
         }
         // A colon always starts a new frame: a segment that is not one is dropped up to the next
         // colon, which may be inside it when a frame was cut short.
-        const std::optional<QByteArray> body = modbusAsciiBody(m_buf.left(end + 2));
+        const auto frame = m_buf.left(end + 2);
+        const std::optional<QByteArray> body = modbusAsciiBody(frame);
         if (!body || ModbusRtuParser::frameLength(*body + QByteArray(2, '\0')) != body->size() + 2) {
             m_buf.remove(0, 1);
             continue;
@@ -1589,7 +1592,7 @@ QList<DecodedRecord> ModbusAsciiParser::decodeRecords(const QByteArray &data)
         const int slave = quint8(body->at(0));
         const int fc = quint8(body->at(1));
         results.append({modbusResponse(slave, fc, body->mid(2), m_fields, m_requests->take(slave, fc, -1, &m_answered)),
-                        data.size() - m_buf.size()});
+                        data.size() - m_buf.size(), frame});
     }
     return results;
 }

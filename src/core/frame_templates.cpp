@@ -195,6 +195,34 @@ std::optional<QJsonObject> sendSettings(const QJsonObject &library, const QJsonO
     return std::nullopt;
 }
 
+QStringList sendIds(const QJsonObject &properties)
+{
+    QStringList ids;
+    const auto addId = [&ids](const QJsonObject &frame) {
+        const auto id = frame.value(SendId).toString();
+        if (!id.isEmpty() && !ids.contains(id))
+            ids.append(id);
+    };
+    addId(properties);
+    for (const auto &frame : properties.value(SendSequence).toArray())
+        addId(frame.toObject());
+    return ids;
+}
+
+void mapSendFrames(QJsonObject &properties, const std::function<void(QJsonObject &)> &edit)
+{
+    edit(properties);
+    const auto original = properties.value(SendSequence).toArray();
+    auto sequence = original;
+    for (qsizetype i = 0; i < sequence.size(); ++i) {
+        auto frame = sequence.at(i).toObject();
+        edit(frame);
+        sequence[i] = frame;
+    }
+    if (sequence != original)
+        properties.insert(SendSequence, sequence);
+}
+
 QStringList receiveIds(const QJsonObject &properties)
 {
     QStringList ids;

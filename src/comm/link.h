@@ -73,6 +73,11 @@ class Link : public QObject
     virtual bool hasPendingWrite(const QString &) const { return false; }
     // MQTT request/reply topics may differ; their Modbus transactions belong to the connection.
     virtual bool addressedModbusReplies() const { return true; }
+    // These links can receive from several devices on the same card. A write linked
+    // to a data point needs the point's peer, even if sendEndpoints() currently has one entry.
+    virtual bool hasPeerStreams() const { return false; }
+    // Stable remote identity for a single-peer connection that can be repointed at runtime.
+    virtual QString deviceIdentity() const { return {}; }
 
   signals:
     void connectedChanged(bool connected);
@@ -95,7 +100,7 @@ class Link : public QObject
     static constexpr qint64 WriteFailureReported = -2;
     virtual qint64 writeBytes(const QByteArray &bytes) = 0;
     virtual qint64 writeTo(const QByteArray &bytes, const QString &endpoint);
-    void registerStream(Parser *parser, const QString &endpoint);
+    void registerStream(Parser *parser, const QString &endpoint, const QString &device = {});
     quint64 streamIdForEndpoint(const QString &endpoint) const;
     // A fresh parser for one incoming stream (a TCP server keeps one per client).
     std::unique_ptr<Parser> createStreamParser(const QString &endpoint = {});
@@ -141,7 +146,8 @@ class Link : public QObject
     QPointer<ModbusSlave> m_slave;
     QList<PendingReply> m_replies; // oldest first; the first goes out when m_replyTimer fires
     QTimer *m_replyTimer = nullptr;
-    struct Stream { quint64 id = nextDataStream(); QString endpoint; };
+    struct Stream { quint64 id; QString endpoint; QString device; };
+    DataSource dataSource(const Stream &stream) const;
     QString m_connectionId;
     quint64 m_sendSession = nextDataStream();
     QHash<Parser *, Stream> m_streams;

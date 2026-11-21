@@ -54,6 +54,7 @@
 #include <FluentQtWidgets/Widgets/InfoBadge.h>
 #include <FluentQtWidgets/Widgets/Menu.h>
 #include <FluentQtWidgets/Widgets/RealtimePlotWidget.h>
+#include <FluentQtWidgets/Widgets/ScrollArea.h>
 #include <FluentQtWidgets/Widgets/Selection.h>
 #include <FluentQtWidgets/Widgets/Slider.h>
 #include <FluentQtWidgets/Widgets/SwitchButton.h>
@@ -1090,8 +1091,12 @@ class TestRuntime : public QObject
             {"recordSource", "points"}, {"recordTriggerPoint", "rpm"},
             {"recordColumns", QJsonArray{QJsonObject{{"field", "temp"}}, QJsonObject{{"field", "Kp"}}}}}));
         table->attach(&context);
-        const DataSource first{"A", 41, "192.0.2.1:1000"};
-        const DataSource second{"A", 42, "192.0.2.2:1000"};
+        DataSource first{"A", nextDataStream(), "192.0.2.1:1000"};
+        first.device = "192.0.2.1";
+        DataSource second{"A", nextDataStream(), "192.0.2.2:1000"};
+        second.device = "192.0.2.2";
+        DataSource survivor{"A", nextDataStream(), "192.0.2.1:1001"};
+        survivor.device = first.device;
         const QString pointId = QStringLiteral("@data:temp");
         auto *display = table->findChild<QTableWidget *>();
         QVERIFY(display);
@@ -1115,9 +1120,21 @@ class TestRuntime : public QObject
         QCOMPARE(display->rowCount(), 2);
         emit context.hub()->streamClosed(second);
         QCOMPARE(data->values().value("rpm").toInt(), 1400);
+        emit context.hub()->unitReceived({}, Message{{"rpm", 900}}, second);
         emit context.hub()->streamClosed(first);
         QCOMPARE(data->sample("rpm").quality, DataQuality::Old);
+        QCOMPARE(data->sample("rpm").value.toInt(), 1400);
+        emit context.hub()->unitReceived({}, Message{{"rpm", 2100}}, second);
         QVERIFY(!context.inputValue(QStringLiteral("@data:rpm")));
+        emit context.hub()->streamClosed(second);
+        emit context.hub()->unitReceived({}, Message{{"rpm", 2200}}, survivor);
+        QCOMPARE(data->sample("rpm").quality, DataQuality::Old);
+        emit context.hub()->streamClosed(survivor);
+        DataSource firstReconnected{"A", nextDataStream(), "192.0.2.1:2000"};
+        firstReconnected.device = first.device;
+        emit context.hub()->unitReceived({}, Message{{"rpm", 1300}}, firstReconnected);
+        QCOMPARE(data->sample("rpm").quality, DataQuality::Current);
+        QCOMPARE(data->sample("rpm").value.toInt(), 1300);
         auto input = std::unique_ptr<HmiWidget>(createHmiWidget("LineEdit", {{"text", "2.5"}, {"inputOnly", true}}));
         context.registerWidget("@data:Kp", input.get());
         QVERIFY(!context.inputValue(QStringLiteral("@data:Kp")));
@@ -1392,6 +1409,7 @@ class TestRuntime : public QObject
         ModbusSlave local({1, 0, true}, ModbusSlaveStore::fromProperties({{"slaveHrCount", 10}}));
         context.hub()->addModbusSlave(&local, "local");
         FakeLink remote;
+        QVERIFY(remote.setParser(QStringLiteral("modbus"), {}));
         context.hub()->addLink(&remote, "remote");
         const QJsonObject props{{"commandMode", "Modbus"}, {"sendOnChange", true},
                                 {"commandTargetId", "remote"}, {"mbAddress", 2}};
@@ -1424,7 +1442,8 @@ class TestRuntime : public QObject
 
         Project project;
         const QJsonObject readProps{{"commandMode", "Modbus"}, {"mbFunc", "03 读保持寄存器"}, {"mbValue", "1"}};
-        project.widgets = {tcpCard("remote", 60, {}), tcpCard("local", 280, {{"defaultParser", "modbus_tcp"}, {"modbusRole", "从站"}}),
+        project.widgets = {tcpCard("remote", 60, {{"defaultParser", "modbus"}}),
+            tcpCard("local", 280, {{"defaultParser", "modbus_tcp"}, {"modbusRole", "从站"}}),
             QJsonObject{{"id", "read"}, {"type", "PushButton"}, {"properties", readProps}}};
         project.logic = {{"points", QJsonArray{QJsonObject{{"name", "gain"},
             {"binding", QJsonObject{{"parseMode", "Modbus"}, {"sourceCardId", "local"}, {"mbRegIndex", 0}}}}}}};
@@ -1446,12 +1465,15 @@ class TestRuntime : public QObject
         QCOMPARE(changes.size(), 1);
 
         auto propsForRoute = readProps;
+        QVERIFY(remote.setParser(QStringLiteral("modbus"), {}));
         for (const auto &route : {QString(), DataRoute::Broadcast}) {
             propsForRoute.insert("commandTargetId", route);
             const auto read = CommandEncoder::modbusFromProperties(propsForRoute);
             QVERIFY(read.command);
             QVERIFY(context.send(read));
             QCOMPARE(remote.sent.last(), CommandEncoder::rtuFrame(read.command->modbus));
+            const auto response = QByteArray::fromHex("0103020000");
+            remote.inject(response + modbusCrc(response));
         }
         QCOMPARE(remote.sent.size(), 3);
     }
@@ -2177,23 +2199,28 @@ class TestRuntime : public QObject
                         {"binding", QJsonObject{{"parseMode", "S7"}, {"sourceCardId", "plc"}, {"s7", bit}}},
                         {"properties", QJsonObject{{"commandMode", "S7"}, {"commandTargetId", "plc"}, {"s7Command", bit}}}},
             QJsonObject{{"type", "RealtimeChart"}, {"id", "trend"},
-                        {"properties", QJsonObject{{"_curve_0_parseMode", "S7"}, {"_curve_0_sourceCardId", "plc"}, {"_curve_0_s7", bit}}}}};
+                        {"properties", QJsonObject{{"_curve_0_parseMode", "S7"}, {"_curve_0_sourceCardId", "plc"}, {"_curve_0_s7", bit}}}},
+            QJsonObject{{"type", "DigitalTimingChart"}, {"id", "timing"},
+                        {"properties", QJsonObject{{"timingSource", "逐路绑定"}, {"curveCount", 32},
+                                                  {"_curve_31_parseMode", "S7"}, {"_curve_31_sourceCardId", "plc"}, {"_curve_31_s7", bit}}}}};
         DesignScene scene;
         QString error;
         QVERIFY2(scene.loadWidgets(group, &error), qPrintable(error));
         const auto copied = scene.paste(group, nullptr, 1);
-        QCOMPARE(copied.size(), 3);
+        QCOMPARE(copied.size(), 4);
         const QString newPlc = copied.at(0)->widgetId();
         QVERIFY(newPlc != QLatin1String("plc"));
         QCOMPARE(copied.at(1)->binding().value("sourceCardId").toString(), newPlc);
         QCOMPARE(copied.at(1)->propertyValue("commandTargetId").toString(), newPlc);
         QCOMPARE(copied.at(2)->propertyValue("_curve_0_sourceCardId").toString(), newPlc);
+        QCOMPARE(copied.at(3)->propertyValue("_curve_31_sourceCardId").toString(), newPlc);
         const auto controlOnly = scene.paste({group.at(1)}, nullptr, 1);
         QCOMPARE(controlOnly.size(), 1);
         QCOMPARE(controlOnly.first()->propertyValue("commandTargetId").toString(), QStringLiteral("plc"));
         QVERIFY(scene.renameItem(scene.findItem("plc"), "renamed", &error));
         QCOMPARE(scene.findItem("switch")->binding().value("sourceCardId").toString(), QStringLiteral("renamed"));
         QCOMPARE(controlOnly.first()->propertyValue("commandTargetId").toString(), QStringLiteral("renamed"));
+        QCOMPARE(scene.findItem("timing")->propertyValue("_curve_31_sourceCardId").toString(), QStringLiteral("renamed"));
         QCOMPARE(copied.at(1)->propertyValue("commandTargetId").toString(), newPlc);
     }
 
@@ -2483,21 +2510,49 @@ class TestRuntime : public QObject
         QTRY_COMPARE(readout->text(), QStringLiteral("数据异常"));
     }
 
+    void timingChannelsKeepIndependentLevelsAndExportGaps_data()
+    {
+        QTest::addColumn<int>("channelCount");
+        QTest::newRow("three-channels") << 3;
+        QTest::newRow("thirty-two-channels") << 32;
+    }
+
     void timingChannelsKeepIndependentLevelsAndExportGaps()
     {
+        QFETCH(int, channelCount);
         Project project;
         const auto card = [](const char *id) {
             return QJsonObject{{"id", id}, {"type", "CanConfigCard"}};
         };
-        project.widgets = {
-            card("a"), card("b"),
-            QJsonObject{{"id", "timing"}, {"type", "DigitalTimingChart"},
-                {"properties", QJsonObject{{TimingSource::Property, TimingSource::Channels}, {"curveCount", 3},
+        const QString lastChannel = QStringLiteral("_curve_%1_").arg(channelCount - 1);
+        CanvasItem item("DigitalTimingChart", {{TimingSource::Property, TimingSource::Channels}, {"curveCount", 1},
                     {"_curve_0_name", "Ready"}, {"_curve_0_parseMode", ParseMode::CanField},
                     {"_curve_0_key", "0x201.status"}, {"_curve_0_sourceCardId", "a"},
                     {"_curve_1_name", "Raw"}, {"_curve_1_parseMode", ParseMode::CanSignal},
                     {"_curve_1_canId", "201"}, {"_curve_1_canBitLength", 1}, {"_curve_1_sourceCardId", "a"},
-                    {"_curve_2_parseMode", ParseMode::DataPoint}, {"_curve_2_key", "Point"}}},
+                    {lastChannel + "parseMode", ParseMode::DataPoint}, {lastChannel + "key", "Point"}}, "timing");
+        {
+            PropertyEditor editor;
+            editor.showItem(&item);
+            auto *count = qobject_cast<QSpinBox *>(fieldFor(&editor, QStringLiteral("通道数量")));
+            QVERIFY(count);
+            QCOMPARE(count->maximum(), 32);
+            count->setValue(channelCount);
+            QApplication::processEvents();
+            auto *picker = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("当前编辑通道")));
+            QVERIFY(picker);
+            QCOMPARE(picker->count(), channelCount);
+            picker->setCurrentIndex(channelCount - 1);
+            QApplication::processEvents();
+            auto *name = qobject_cast<QLineEdit *>(fieldFor(&editor, QStringLiteral("通道名称")));
+            QVERIFY(name);
+            name->setText(QStringLiteral("Point"));
+            QCOMPARE(item.propertyValue(lastChannel + "name").toString(), QStringLiteral("Point"));
+        }
+        project.widgets = {
+            card("a"), card("b"),
+            QJsonObject{{"id", "timing"}, {"type", "DigitalTimingChart"},
+                {"properties", item.properties()},
                 {"binding", QJsonObject{{"key", "legacy"}}}}
         };
         project.logic = {{"points", QJsonArray{QJsonObject{{"name", "Point"},
@@ -2509,6 +2564,20 @@ class TestRuntime : public QObject
         QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.3"));
         QVERIFY2(project.save(path, &error), qPrintable(error));
         QVERIFY2(Project::load(path, &project, &error), qPrintable(error));
+
+        QStringList names{"Ready", "Raw"};
+        QStringList missing;
+        for (int i = 2; i < channelCount - 1; ++i) {
+            names.append(QStringLiteral("通道 %1").arg(i + 1));
+            missing.append(names.last() + QStringLiteral(" — · "));
+        }
+        names.append(QStringLiteral("Point"));
+        const auto expectedReadout = [&](const QString &ready, const QString &raw) {
+            return QStringLiteral("Ready %1 · Raw %2 · %3Point 1").arg(ready, raw, missing.join(QString()));
+        };
+        const QByteArray csvHeader = "\xef\xbb\xbftime_s," + names.join(',').toUtf8() + "\r\n";
+        const QByteArray emptyColumns(channelCount - 3, ',');
+        const QByteArray missingReadyRow = ",,1," + emptyColumns + "1\r\n";
 
         RuntimeSurface surface;
         surface.build(project);
@@ -2532,6 +2601,12 @@ class TestRuntime : public QObject
         auto *window = timing->findChild<FluentQt::ComboBox *>("timingWindow");
         auto *plot = timing->findChild<FluentQt::RealtimePlotWidget *>("digitalTimingPlot");
         QVERIFY(window && plot);
+        if (channelCount == 32) {
+            auto *scroll = plot->findChild<FluentQt::ScrollBar *>();
+            QVERIFY(scroll && scroll->isVisible());
+            QCOMPARE(scroll->maximum() + scroll->pageStep(), channelCount);
+            scroll->setValue(scroll->maximum());
+        }
         QCOMPARE(window->currentData().toInt(), 37);
         window->setCurrentIndex(window->findData(0));
         QTimer::singleShot(0, &surface, [&] {
@@ -2558,29 +2633,29 @@ class TestRuntime : public QObject
         };
         QVERIFY2(send(a, 0x201, "0001"), qPrintable(error));
         QVERIFY2(send(b, 0x202, "01"), qPrintable(error));
-        QTRY_VERIFY(timing->accessibleDescription().endsWith(QStringLiteral("Ready 1 · Raw 0 · Point 1")));
+        QTRY_VERIFY(timing->accessibleDescription().endsWith(expectedReadout("1", "0")));
         QVERIFY2(send(a, 0x201, "01"), qPrintable(error));
         QVERIFY2(send(b, 0x201, "0001"), qPrintable(error)); // Same ID on a different connection.
-        QTRY_VERIFY(timing->accessibleDescription().endsWith(QStringLiteral("Ready — · Raw 1 · Point 1")));
+        QTRY_VERIFY(timing->accessibleDescription().endsWith(expectedReadout("—", "1")));
 
         const QString csvPath = dir.filePath("timing.csv");
         QVERIFY2(timing->saveHistory(csvPath, &error), qPrintable(error));
         QFile csv(csvPath);
         QVERIFY(csv.open(QIODevice::ReadOnly));
         const auto content = csv.readAll();
-        QVERIFY(content.startsWith("\xef\xbb\xbftime_s,Ready,Raw,Point\r\n"));
-        QVERIFY(content.contains(",,1,1\r\n"));
+        QVERIFY(content.startsWith(csvHeader));
+        QVERIFY(content.contains(missingReadyRow));
 
         QVERIFY2(timing->loadHistory(csvPath, &error), qPrintable(error));
         auto *follow = timing->findChild<QPushButton *>("timingFollow");
         QVERIFY(follow);
         QCOMPARE(follow->text(), QStringLiteral("回到实时"));
         QVERIFY(timing->accessibleDescription().contains(QStringLiteral("timing.csv")));
-        QVERIFY(timing->accessibleDescription().endsWith(QStringLiteral("Ready — · Raw 1 · Point 1")));
+        QVERIFY(timing->accessibleDescription().endsWith(expectedReadout("—", "1")));
         a->close();
-        QVERIFY(timing->accessibleDescription().endsWith(QStringLiteral("Ready — · Raw 1 · Point 1")));
+        QVERIFY(timing->accessibleDescription().endsWith(expectedReadout("—", "1")));
         follow->click();
-        QTRY_VERIFY(timing->accessibleDescription().endsWith(QStringLiteral("Ready — · Raw — · Point 1")));
+        QTRY_VERIFY(timing->accessibleDescription().endsWith(expectedReadout("—", "—")));
         const QString jsonPath = dir.filePath("timing.json");
         QVERIFY2(timing->saveHistory(jsonPath, &error), qPrintable(error));
         QFile json(jsonPath);
@@ -2590,10 +2665,11 @@ class TestRuntime : public QObject
         const auto last = rows.last().toArray();
         QVERIFY(last.at(0).toDouble() > rows.first().toArray().first().toDouble());
         QVERIFY(last.at(1).isNull() && last.at(2).isNull());
-        QCOMPARE(last.at(3).toInt(), 1);
+        QCOMPARE(last.size(), channelCount + 1);
+        QCOMPARE(last.last().toInt(), 1);
         QVERIFY2(timing->loadHistory(jsonPath, &error), qPrintable(error));
         QVERIFY(timing->accessibleDescription().contains(QStringLiteral("timing.json")));
-        QVERIFY(timing->accessibleDescription().endsWith(QStringLiteral("Ready — · Raw — · Point 1")));
+        QVERIFY(timing->accessibleDescription().endsWith(expectedReadout("—", "—")));
         follow->click();
         surface.context()->setActive(false);
         const QDir records(dir.path());
@@ -2602,14 +2678,14 @@ class TestRuntime : public QObject
         QFile recorded(records.filePath(automatic.first()));
         QVERIFY(recorded.open(QIODevice::ReadOnly));
         const auto autoCsv = recorded.readAll();
-        QVERIFY(autoCsv.startsWith("\xef\xbb\xbftime_s,Ready,Raw,Point\r\n"));
-        QVERIFY(autoCsv.contains(",,1,1\r\n"));
-        QVERIFY(autoCsv.endsWith(",,,1\r\n"));
+        QVERIFY(autoCsv.startsWith(csvHeader));
+        QVERIFY(autoCsv.contains(missingReadyRow));
+        QVERIFY(autoCsv.endsWith(",,," + emptyColumns + "1\r\n"));
         const auto replay = readTimingRecording(autoCsv, ChartFileFormat::Csv, &error);
         QVERIFY2(replay, qPrintable(error));
-        QCOMPARE(replay->names, QStringList({"Ready", "Raw", "Point"}));
+        QCOMPARE(replay->names, names);
         QVERIFY(replay->samples.back().seconds > replay->samples.front().seconds);
-        QCOMPARE(replay->samples.back().levels.valid, quint16(4));
+        QCOMPARE(replay->samples.back().levels.valid, TimingMask{1} << (channelCount - 1));
         QVERIFY(!readTimingRecording("time_s,A\n2,1\n1,0\n", ChartFileFormat::Csv, &error));
     }
 
@@ -2938,6 +3014,7 @@ class TestRuntime : public QObject
 
         FakeLink link;
         link.setConnectionId(QStringLiteral("serial"));
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
         RuntimeSurface runtime;
         runtime.build(project);
         runtime.context()->hub()->addLink(&link);
@@ -3872,6 +3949,7 @@ class TestRuntime : public QObject
     void buttonWritesSingleCoil()
     {
         FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
         RuntimeContext context;
         context.hub()->addLink(&link);
         std::unique_ptr<HmiWidget> widget(createHmiWidget("PushButton", {}));
@@ -3884,6 +3962,11 @@ class TestRuntime : public QObject
             widget->setProperties(props);
             link.sent.clear();
             button->click();
+            if (!link.sent.isEmpty()) {
+                const auto request = link.sent.first();
+                const auto coils = QByteArray::fromHex("01010101");
+                link.inject(request.at(1) == '\x01' ? coils + modbusCrc(coils) : request);
+            }
             return link.sent;
         };
         const QString coil = QStringLiteral("05 写单线圈");
@@ -3918,6 +4001,7 @@ class TestRuntime : public QObject
         QFETCH(QByteArray, on);
         QFETCH(QByteArray, off);
         FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
         RuntimeContext context;
         context.hub()->addLink(&link);
         QJsonObject props{{"commandMode", "Modbus"}, {"mbSlave", 7}, {"mbAddress", 42}};
@@ -3930,6 +4014,7 @@ class TestRuntime : public QObject
         QVERIFY(toggle);
         toggle->setChecked(true);
         QCOMPARE(link.sent, QList<QByteArray>{on});
+        link.inject(on);
         toggle->setChecked(false);
         QCOMPARE(link.sent, (QList<QByteArray>{on, off}));
     }
@@ -3965,13 +4050,16 @@ class TestRuntime : public QObject
 
         DesignScene scene;
         QString error;
-        QVERIFY2(scene.loadWidgets(QJsonArray{QJsonObject{
-                                       {"id", "switch"},
-                                       {"type", "ToggleSwitch"},
-                                       {"properties", QJsonObject{{"onCondition", "等于指定值"}, {"onValue", "5"}}}}},
-                                   &error),
+        Project project;
+        project.widgets = {
+            QJsonObject{{"id", "switch"}, {"type", "ToggleSwitch"},
+                        {"properties", QJsonObject{{"onCondition", "等于指定值"}, {"onValue", "5"}}}},
+            QJsonObject{{"id", "serial"}, {"type", "SerialConfigCard"},
+                        {"properties", QJsonObject{{"defaultParser", "modbus"}}}}};
+        QVERIFY2(scene.loadWidgets(project.widgets, &error),
                  qPrintable(error));
         PropertyEditor editor;
+        editor.setProject(&project);
         editor.setScene(&scene);
         editor.showItem(scene.findItem(QStringLiteral("switch")));
         editor.show();
@@ -4965,9 +5053,7 @@ class TestRuntime : public QObject
         QVERIFY(previewText().contains(QStringLiteral("超出")));
     }
 
-    // A link reports each whole frame of a hex parser as one raw unit, followed by its
-    // messages, and a frame ended by silence the same way; line and Modbus parsers buffer by
-    // themselves, so their units are the chunks as they came.
+    // HEX and Modbus publish complete frames. Line parsing retains the incoming raw units.
     void linkReportsWholeFrames()
     {
         FakeLink link;
@@ -5000,12 +5086,21 @@ class TestRuntime : public QObject
         QTRY_COMPARE(rawOf(raw), QList<QByteArray>{QByteArray::fromHex("7E0102")});
         QCOMPARE(messageValue(messages, 0, "a"), 1);
 
-        for (const char *type : {"line", "modbus"}) {
-            raw.clear();
-            QVERIFY(link.setParser(QLatin1String(type), {}));
-            link.inject("a=1\nb=");
-            QCOMPARE(rawOf(raw), QList<QByteArray>{QByteArray("a=1\nb=")});
-        }
+        raw.clear();
+        QVERIFY(link.setParser(QStringLiteral("line"), {}));
+        link.inject("a=1\nb=");
+        QCOMPARE(rawOf(raw), QList<QByteArray>{QByteArray("a=1\nb=")});
+
+        raw.clear();
+        wire.clear();
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
+        const auto pdu = QByteArray::fromHex("010304000A0014");
+        const auto response = pdu + modbusCrc(pdu);
+        link.inject(response.left(4));
+        QVERIFY(raw.isEmpty());
+        link.inject(response.mid(4));
+        QCOMPARE(rawOf(raw), QList<QByteArray>{response});
+        QCOMPARE(rawOf(wire), (QList<QByteArray>{response.left(4), response.mid(4)}));
     }
 
     // Over TCP: a client reports whole frames; a server keeps a parser and an idle timer per
@@ -5510,6 +5605,7 @@ class TestRuntime : public QObject
 
         const auto *setpoint = scene.findItem(QStringLiteral("setpoint"));
         FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
         RuntimeContext runtime;
         runtime.hub()->addLink(&link);
         auto input = std::unique_ptr<HmiWidget>(createHmiWidget(QStringLiteral("LineEdit"), setpoint->properties()));

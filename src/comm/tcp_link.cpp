@@ -59,6 +59,11 @@ QString TcpClientLink::description() const
     return QStringLiteral("TCP %1:%2").arg(m_host).arg(m_port);
 }
 
+QString TcpClientLink::deviceIdentity() const
+{
+    return networkEndpoint(m_socket.peerAddress().toString(), m_socket.peerPort());
+}
+
 bool TcpClientLink::isConnected() const
 {
     return m_socket.state() == QAbstractSocket::ConnectedState;
@@ -189,10 +194,11 @@ qint64 TcpServerLink::writeReply(Parser *parser, const QByteArray &bytes)
 void TcpServerLink::onNewConnection()
 {
     while (QTcpSocket *socket = m_server.nextPendingConnection()) {
-        const QString peer = networkEndpoint(socket->peerAddress().toString(), socket->peerPort());
+        const QString address = socket->peerAddress().toString();
+        const QString peer = networkEndpoint(address, socket->peerPort());
         auto parser = std::shared_ptr<Parser>(createStreamParser(peer));
         m_clients.insert(socket, parser);
-        registerStream(parser.get(), peer);
+        registerStream(parser.get(), peer, address);
         connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
             const auto it = m_clients.constFind(socket);
             if (it != m_clients.constEnd()) {

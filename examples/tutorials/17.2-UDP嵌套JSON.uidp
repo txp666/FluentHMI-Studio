@@ -3,7 +3,7 @@
   "appName": "17.2 UDP嵌套JSON",
   "canvas": {
     "width": 1120,
-    "height": 740,
+    "height": 768,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "连接两张 UDP 卡。就绪回车只发一个布尔值，按钮发完整 JSON。可周期采样，再从设备回送读数。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。分别连接两张 UDP 卡。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 改左侧转速或温度，点「发送采样」。右侧出现读数后可回送给上位机。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "UdpConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 190
       },
@@ -61,7 +75,7 @@
       "type": "UdpConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 190
       },
@@ -78,7 +92,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 24,
-        "y": 298,
+        "y": 326,
         "w": 165,
         "h": 36
       },
@@ -93,7 +107,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 204,
-        "y": 298,
+        "y": 326,
         "w": 165,
         "h": 36
       },
@@ -108,7 +122,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 384,
-        "y": 298,
+        "y": 326,
         "w": 168,
         "h": 36
       },
@@ -129,7 +143,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 24,
-        "y": 346,
+        "y": 374,
         "w": 176,
         "h": 36
       },
@@ -155,7 +169,8 @@
             "variable": "ready",
             "inputId": "readyInput"
           }
-        ]
+        ],
+        "buttonStyle": "强调"
       }
     },
     {
@@ -163,7 +178,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 212,
-        "y": 346,
+        "y": 374,
         "w": 205,
         "h": 36
       },
@@ -199,7 +214,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 824,
-        "y": 298,
+        "y": 326,
         "w": 272,
         "h": 36
       },
@@ -229,7 +244,7 @@
       "type": "Label",
       "geometry": {
         "x": 568,
-        "y": 349,
+        "y": 377,
         "w": 220,
         "h": 24
       },
@@ -244,7 +259,7 @@
       "type": "Label",
       "geometry": {
         "x": 568,
-        "y": 375,
+        "y": 403,
         "w": 220,
         "h": 32
       },
@@ -263,7 +278,7 @@
       "type": "Label",
       "geometry": {
         "x": 836,
-        "y": 349,
+        "y": 377,
         "w": 220,
         "h": 24
       },
@@ -278,7 +293,7 @@
       "type": "Label",
       "geometry": {
         "x": 836,
-        "y": 375,
+        "y": 403,
         "w": 220,
         "h": 32
       },
@@ -297,7 +312,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 414,
+        "y": 442,
         "w": 254,
         "h": 56
       },
@@ -318,7 +333,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 414,
+        "y": 442,
         "w": 260,
         "h": 56
       },
@@ -339,7 +354,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 24,
-        "y": 414,
+        "y": 442,
         "w": 254,
         "h": 56
       },
@@ -361,7 +376,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 290,
-        "y": 414,
+        "y": 442,
         "w": 262,
         "h": 56
       },
@@ -383,7 +398,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
@@ -397,7 +412,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
