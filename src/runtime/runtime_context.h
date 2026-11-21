@@ -50,13 +50,18 @@ class RuntimeContext : public QObject
     void registerWidget(const QString &id, HmiWidget *widget);
     QString widgetPreferencesGroup(const HmiWidget &widget) const;
     std::optional<CommandEncoder::InputValue> inputValue(const QString &id) const;
+    std::optional<QJsonObject> pointWriteProperties(const QJsonObject &properties, QString *error) const;
+    std::optional<QJsonObject> pointWriteProperties(const QJsonObject &properties, QStringView widgetType,
+                                                   QString *error) const;
     void addBinding(BindingEntry binding);
     void clear();
     void configureData(const Project &project);
     ProjectData *projectData() const { return m_data; }
     const QJsonObject &frameTemplates() const { return m_frameTemplates; }
+    std::function<void(const QJsonObject &, const QString &)> receivePointAction();
     // Resolves an automatic binding against the configured topology. Explicit scopes stay as chosen.
-    bool resolveBindingSource(BindingEntry &binding) const;
+    bool resolveBindingSource(BindingEntry &binding, QString *error = nullptr) const;
+    bool acceptsMessage(const BindingEntry &binding, const Message &message, const DataSource &source) const;
 
     void setActive(bool active);
     void setBitProfiles(const QJsonObject &profiles) { m_bitProfiles = profiles; emit bitProfilesChanged(); }
@@ -79,6 +84,8 @@ class RuntimeContext : public QObject
     // tab page in the background), then the curves charts registered.
     QList<ModbusNeed> modbusNeeds() const;
     void modbusReadFailed(const Link &link, const QString &endpoint, const ModbusBlock &block, int fallbackSlave);
+    static bool matchesModbusRead(const BindingEntry &binding, const DataSource &source, const Link &link,
+                                  const QString &endpoint, const ModbusBlock &block, int fallbackSlave);
     // A chart's Modbus curves; an empty list removes them.
     void setCurveNeeds(const QObject *chart, const QList<ModbusNeed> &needs);
 
@@ -91,7 +98,10 @@ class RuntimeContext : public QObject
   signals:
     void activeChanged(bool active);
     void s7Sample(const fhmi::S7::Sample &sample);
+    void modbusReadUnavailable(const fhmi::Link &link, const QString &endpoint, const fhmi::ModbusBlock &block,
+                               int fallbackSlave);
     void bitProfilesChanged();
+    void receivePointRequested(const QJsonObject &binding, const QString &name);
     void notificationRequested(const QString &title, const QString &content, const QString &type, int durationMs);
 
   private:
@@ -105,6 +115,7 @@ class RuntimeContext : public QObject
         bool operator==(const CommandTargets &other) const;
     };
     CommandTargets commandTargets(const EncodedCommand &command) const;
+    QJsonArray activeModbusCards() const;
     QStringList commandTargetLabels(const EncodedCommand &command, const CommandTargets &targets) const;
     bool sendResolved(const EncodedCommand &command, const CommandTargets &targets, QList<QByteArray> *sent = nullptr);
     void onUnit(const QByteArray &bytes, const Message &message, const DataSource &source);
@@ -112,6 +123,7 @@ class RuntimeContext : public QObject
     void applyRaw(const QByteArray &bytes, const DataSource &source, bool evaluateSamples);
     void onCanFrame(const CanFrame &frame, const Message &message, const DataSource &source);
     void push(const BindingEntry &binding, const QVariant &raw, const DataSource &source = {});
+    void applyWidgetSample(const BindingEntry &binding, const DataPointSample &sample);
 
     ProjectData *m_data = nullptr;
     QTimer *m_alarmSound = nullptr;
@@ -125,8 +137,9 @@ class RuntimeContext : public QObject
     QHash<QString, QPointer<HmiWidget>> m_widgets;
     QString m_projectPreferencesGroup;
     QJsonArray m_connectionCards;
+    QJsonObject m_projectLogic;
     QString m_projectParser = QStringLiteral("line");
-    QHash<QString, quint64> m_widgetStreams;
+    QHash<QString, RoutedSample> m_widgetSamples;
     std::vector<BindingEntry> m_bindings;
     QHash<quint64, QList<size_t>> m_canBindings; // CanId::key() -> the CAN信号 bindings' indices in m_bindings
     QList<size_t> m_parsedProjectBindings;

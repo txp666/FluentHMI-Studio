@@ -37,6 +37,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     void setScene(DesignScene *scene) { m_scene = scene; }
     void setProject(Project *project);
     void editProjectLogic();
+    void addDataPoint(QJsonObject binding, const QString &suggestedName, CanvasItem *boundItem = nullptr);
     void showItem(CanvasItem *item);
     void showBinding(CanvasItem *item)
     {
@@ -62,6 +63,7 @@ class PropertyEditor : public FluentQt::ScrollArea
     using ConfigWrite = std::function<void(const QJsonObject &, const QString &key)>;
 
     void rebuild();
+    void editModbusConnection(const QString &preferred);
     void clearContent();
     QFormLayout *addSection(const QString &title);
     void addRow(QFormLayout *form, const QString &key, const QString &label, QWidget *editor,
@@ -105,7 +107,6 @@ class PropertyEditor : public FluentQt::ScrollArea
     void bindReceiveField(ReceiveTarget target, const ReceivedField &field, const QString &sourceId);
     void openReceiveEditor(ReceiveTarget target, QWidget *anchor);
     void applyProjectDraft(const Project &draft);
-    void addDataPoint(QJsonObject binding, const QString &suggestedName, CanvasItem *boundItem = nullptr);
     void setFrameRowsVisible(const QString &prefix, const QString &mode);
     // The frame format a link card's rows show: its own, or the project's while its own is
     // empty and the modes match, as the card frames at run time.

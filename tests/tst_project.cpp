@@ -377,7 +377,7 @@ class TestProject : public QObject
         auto framed = inherited;
         framed.insert("properties", QJsonObject{{"defaultParser", "modbus_tcp"}, {FrameTemplates::ReceiveId, "hex"}});
         project.frameTemplates.insert("hex", FrameTemplates::Entry{"Frame", {"hex", {}}, {}}.toJson());
-        QCOMPARE(modbusRouteDescription(framed, project), QStringLiteral("Modbus RTU over TCP"));
+        QCOMPARE(modbusRouteDescription(framed, project), QStringLiteral("连接时选择 Modbus 解析"));
         QString error;
         QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
         const auto sources = routeConnections(project.widgets, RouteTransport::ModbusSlave, false, project.parserType());
@@ -394,6 +394,61 @@ class TestProject : public QObject
         QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
         project.widgets.replace(2, table(QStringLiteral("ascii")));
         QVERIFY(!Project::validate(project.toJson(), &error));
+    }
+
+    void newWriteTargetKeepsLegacySenderInactive()
+    {
+        Project project;
+        project.logic = {{"points", QJsonArray{QJsonObject{{"name", "setpoint"}, {"binding", QJsonObject{
+            {"parseMode", "Modbus"}, {"sourceCardId", "device"}, {"mbRegIndex", 100}}}}}}};
+        const QJsonObject properties{{"commandMode", "Modbus"}, {"mbWritePoint", "setpoint"},
+                                     {"commandTargetId", "previous"}, {"mbAddress", 1}, {"mbValue", "1500"},
+                                     {"mbFunc", "06 写单寄存器"}};
+        project.widgets = {QJsonObject{{"id", "device"}, {"type", "TcpConfigCard"},
+                                      {"properties", QJsonObject{{"defaultParser", "modbus_tcp"}}}},
+                           QJsonObject{{"id", "write"}, {"type", "PushButton"}, {"properties", properties}}};
+        const auto serialized = project.toJson();
+        QCOMPARE(serialized.value("version").toString(), QStringLiteral("1.3"));
+        const auto raw = serialized.value("widgets").toArray().last().toObject().value("properties").toObject();
+        QCOMPARE(raw.value("commandMode").toString(), QStringLiteral("requiresSendConfiguration"));
+        QVERIFY(!raw.contains("commandTargetId"));
+        QVERIFY(!CommandEncoder::buttonFromProperties(raw, {}).command);
+        Project restored;
+        QString error;
+        QVERIFY2(Project::fromJson(serialized, &restored, &error), qPrintable(error));
+        const auto loaded = restored.widgets.last().toObject().value("properties").toObject();
+        QCOMPARE(loaded, properties);
+        const auto target = resolvePointWrite(loaded, restored.logic, restored.widgets, restored.parserType(), &error);
+        QVERIFY2(target, qPrintable(error));
+        QCOMPARE(target->value("commandTargetId").toString(), QStringLiteral("device"));
+        QCOMPARE(target->value("mbAddress").toInt(), 100);
+
+        restored.widgets.replace(0, QJsonObject{{"id", "device"}, {"type", "MqttConfigCard"},
+            {"properties", QJsonObject{{"defaultParser", "modbus_tcp"}, {"defaultPublish", "device/request"}}}});
+        auto points = restored.logic.value("points").toArray();
+        auto point = points.at(0).toObject();
+        auto binding = point.value("binding").toObject();
+        binding.insert("sourceEndpoint", "device/reply");
+        point.insert("binding", binding);
+        points[0] = point;
+        restored.logic.insert("points", points);
+        const auto mqtt = resolvePointWrite(loaded, restored.logic, restored.widgets, restored.parserType(), &error);
+        QVERIFY2(mqtt, qPrintable(error));
+        QCOMPARE(mqtt->value("commandTargetId").toString(), QStringLiteral("device"));
+        QVERIFY(mqtt->value("commandEndpoint").toString().isEmpty()); // Uses the card's publish topic.
+
+        binding.insert("mbSlaveFilter", 0);
+        point.insert("binding", binding);
+        points[0] = point;
+        restored.logic.insert("points", points);
+        QVERIFY(!resolvePointWrite(loaded, restored.logic, restored.widgets, restored.parserType()));
+
+        binding.insert("mbSlaveFilter", 1);
+        point.insert("binding", binding);
+        point.insert("expression", "1 + 2");
+        points[0] = point;
+        restored.logic.insert("points", points);
+        QVERIFY(!resolvePointWrite(loaded, restored.logic, restored.widgets, restored.parserType()));
     }
 
     void legacyInputSourcesResolveWithoutGuessing()

@@ -288,6 +288,20 @@ ModbusSlaveStore ModbusSlaveStore::fromProperties(const QJsonObject &props)
     return ModbusSlaveStore(areas, props.value(QStringLiteral("slaveInit")).toString());
 }
 
+QString ModbusSlaveStore::initialValues() const
+{
+    QStringList values;
+    for (int index = 0; index < tables().size(); ++index) {
+        const auto &table = m_tables[index];
+        for (int row = 0; row < table.area.count; ++row) {
+            const auto value = table.values.at(row);
+            if (value)
+                values.append(QStringLiteral("%1%2=%3").arg(tables().at(index)).arg(table.area.start + row).arg(value));
+        }
+    }
+    return values.join(u'\n');
+}
+
 ModbusSlaveStore::Area ModbusSlaveStore::area(const QString &table) const
 {
     const int index = indexOf(table);

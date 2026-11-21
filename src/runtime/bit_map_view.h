@@ -7,6 +7,8 @@
 
 namespace fhmi {
 
+struct CanSignalDef;
+
 struct BitRange
 {
     int first;
@@ -22,9 +24,13 @@ class BitMapView : public FluentQt::TableView
   public:
     explicit BitMapView(QWidget *parent = nullptr);
     void setBits(int byteCount, const QByteArray *sample, QList<BitRange> marked = {}, int locateBit = -1);
+    void setCanSignal(int byteCount, const QByteArray *sample, const CanSignalDef *signal, int locateBit = -1);
 
   signals:
     void bitClicked(int bit);
+
+  protected:
+    void keyPressEvent(QKeyEvent *event) override;
 
   private:
     class Model;

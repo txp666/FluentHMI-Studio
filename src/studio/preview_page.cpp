@@ -75,6 +75,24 @@ PreviewPage::PreviewPage(QWidget *parent) : QWidget(parent)
         openProjectDataMonitor(m_project.logic, m_surface->context()->projectData(), window());
     });
     connect(m_surface, &RuntimeSurface::notificationRequested, this, &PreviewPage::showNotification);
+    connect(m_surface->context(), &RuntimeContext::receivePointRequested, this, &PreviewPage::receivePointRequested);
+    auto *hub = m_surface->context()->hub();
+    connect(hub, &CommHub::wireReceived, this, [this](const QByteArray &, const DataSource &source) {
+        if (!source.endpoint.isEmpty())
+            emit endpointObserved(source.connectionId, source.endpoint);
+    });
+    connect(hub, &CommHub::messageReceived, this, [this, hub](const Message &message, const DataSource &source) {
+        if (source.canText || source.slaveData || source.modbus || source.connectionId.isEmpty())
+            return;
+        if (const auto *link = hub->sourceLink(source); link && link->parserType() == u"line")
+            emit textSampleObserved(source.connectionId, message);
+    });
+    connect(hub, &CommHub::linksChanged, this, [this, hub] {
+        for (const auto *link : hub->connectedLinks())
+            for (const auto &endpoint : link->sendEndpoints())
+                if (!endpoint.isEmpty())
+                    emit endpointObserved(link->connectionId(), endpoint);
+    });
 }
 
 void PreviewPage::setProject(const Project &project)

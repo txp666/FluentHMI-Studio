@@ -37,6 +37,7 @@ QStringList dataTypes();
 std::optional<Config> config(const QJsonObject &properties, QString *error = nullptr);
 std::optional<Point> point(const QJsonObject &object, QString *error = nullptr);
 QJsonObject pointJson(const Point &point);
+QString writeValueProblem(const QJsonObject &properties, const DataType &type, QStringView widgetType);
 bool usesS7(const QJsonArray &widgets);
 bool validateWidgets(const QJsonArray &widgets, QString *error = nullptr, bool allowExternalReferences = false);
 

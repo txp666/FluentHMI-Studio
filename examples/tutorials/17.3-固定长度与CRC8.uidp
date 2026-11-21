@@ -3,7 +3,7 @@
   "appName": "17.3 固定长度与CRC8",
   "canvas": {
     "width": 1120,
-    "height": 740,
+    "height": 768,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "先连右侧，再连左侧。填写三项后点「组帧并发送」或启动周期，右侧核对定长载荷和 CRC8 的解析。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。先连接右侧模拟设备，再连接左侧上位机。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 改左侧温度原码、增益或计数，点「组帧并发送」。右侧查看换算值，报文卡可试解析 CRC8。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -61,7 +75,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -78,7 +92,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 24,
-        "y": 298,
+        "y": 326,
         "w": 170,
         "h": 36
       },
@@ -93,7 +107,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 204,
-        "y": 298,
+        "y": 326,
         "w": 168,
         "h": 36
       },
@@ -108,7 +122,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 382,
-        "y": 298,
+        "y": 326,
         "w": 170,
         "h": 36
       },
@@ -123,7 +137,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 24,
-        "y": 346,
+        "y": 374,
         "w": 180,
         "h": 36
       },
@@ -148,7 +162,8 @@
             "field": "total",
             "inputId": "totalInput"
           }
-        ]
+        ],
+        "buttonStyle": "强调"
       }
     },
     {
@@ -156,7 +171,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 216,
-        "y": 346,
+        "y": 374,
         "w": 232,
         "h": 36
       },
@@ -191,7 +206,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 298,
+        "y": 326,
         "w": 254,
         "h": 76
       },
@@ -203,10 +218,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "temp10",
-        "expression": "value * 0.1"
+        "parseMode": "工程数据点",
+        "key": "设备温度"
       }
     },
     {
@@ -214,7 +227,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 298,
+        "y": 326,
         "w": 260,
         "h": 76
       },
@@ -226,9 +239,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "gain"
+        "parseMode": "工程数据点",
+        "key": "设备增益"
       }
     },
     {
@@ -236,7 +248,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 388,
+        "y": 416,
         "w": 254,
         "h": 76
       },
@@ -248,9 +260,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "total"
+        "parseMode": "工程数据点",
+        "key": "设备计数"
       }
     },
     {
@@ -258,7 +269,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 388,
+        "y": 416,
         "w": 260,
         "h": 76
       },
@@ -270,9 +281,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "cmd"
+        "parseMode": "工程数据点",
+        "key": "命令字"
       }
     },
     {
@@ -280,7 +290,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
@@ -294,7 +304,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
@@ -354,5 +364,43 @@
       },
       "sample": "5A A5 21 FF 83 00 00 C0 3F 00 01 11 70 E6"
     }
+  },
+  "logic": {
+    "points": [
+      {
+        "name": "设备温度",
+        "unit": "°C",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "temp10",
+          "expression": "value * 0.1"
+        }
+      },
+      {
+        "name": "设备增益",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "gain"
+        }
+      },
+      {
+        "name": "设备计数",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "total"
+        }
+      },
+      {
+        "name": "命令字",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "cmd"
+        }
+      }
+    ]
   }
 }

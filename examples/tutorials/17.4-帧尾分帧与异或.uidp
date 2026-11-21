@@ -3,7 +3,7 @@
   "appName": "17.4 帧尾分帧与异或",
   "canvas": {
     "width": 1120,
-    "height": 740,
+    "height": 768,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "先连右侧，再连左侧。HEX 载荷可回车单发。再发送长帧，对比相同帧尾下的两种长度。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。先连接右侧模拟设备，再连接左侧上位机。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 用左侧 HEX 载荷发短帧。改「扩展值」后发长帧，右侧会多出这个读数。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -61,7 +75,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -78,7 +92,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 24,
-        "y": 298,
+        "y": 326,
         "w": 528,
         "h": 36
       },
@@ -99,7 +113,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 24,
-        "y": 346,
+        "y": 464,
         "w": 170,
         "h": 36
       },
@@ -117,7 +131,23 @@
             "variable": "payload",
             "dataType": "HEX字符串"
           }
-        ]
+        ],
+        "buttonStyle": "强调"
+      }
+    },
+    {
+      "id": "extraInput",
+      "type": "LineEdit",
+      "geometry": {
+        "x": 24,
+        "y": 420,
+        "w": 528,
+        "h": 36
+      },
+      "properties": {
+        "title": "扩展值（长帧）",
+        "text": "1000",
+        "inputOnly": true
       }
     },
     {
@@ -125,7 +155,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 204,
-        "y": 346,
+        "y": 464,
         "w": 214,
         "h": 36
       },
@@ -136,8 +166,19 @@
         "confirmBeforeSend": true,
         "showSendConfirmationDetails": true,
         "sendFrameTemplateId": "sample-frame",
-        "command": "22 58 59 5A 12 34 03 E8",
-        "dataType": "HEX字符串"
+        "commandTemplate": "{payload} {extra}",
+        "commandInputs": [
+          {
+            "variable": "payload",
+            "inputId": "rawInput",
+            "dataType": "HEX字符串"
+          },
+          {
+            "variable": "extra",
+            "inputId": "extraInput",
+            "dataType": "uint16"
+          }
+        ]
       }
     },
     {
@@ -145,7 +186,7 @@
       "type": "Label",
       "geometry": {
         "x": 568,
-        "y": 302,
+        "y": 330,
         "w": 220,
         "h": 24
       },
@@ -160,7 +201,7 @@
       "type": "Label",
       "geometry": {
         "x": 568,
-        "y": 328,
+        "y": 356,
         "w": 220,
         "h": 32
       },
@@ -169,9 +210,8 @@
         "fontSize": 17
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "tag"
+        "parseMode": "工程数据点",
+        "key": "设备标签"
       }
     },
     {
@@ -179,7 +219,7 @@
       "type": "Label",
       "geometry": {
         "x": 836,
-        "y": 302,
+        "y": 330,
         "w": 220,
         "h": 24
       },
@@ -194,7 +234,7 @@
       "type": "Label",
       "geometry": {
         "x": 836,
-        "y": 328,
+        "y": 356,
         "w": 220,
         "h": 32
       },
@@ -203,9 +243,8 @@
         "fontSize": 17
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "raw"
+        "parseMode": "工程数据点",
+        "key": "设备 HEX 字段"
       }
     },
     {
@@ -213,7 +252,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 388,
+        "y": 416,
         "w": 254,
         "h": 76
       },
@@ -225,9 +264,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "cmd"
+        "parseMode": "工程数据点",
+        "key": "命令字"
       }
     },
     {
@@ -235,7 +273,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 388,
+        "y": 416,
         "w": 260,
         "h": 76
       },
@@ -247,9 +285,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "extra"
+        "parseMode": "工程数据点",
+        "key": "最近长帧扩展值"
       }
     },
     {
@@ -257,7 +294,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
@@ -271,7 +308,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
@@ -320,5 +357,41 @@
       },
       "sample": "7E 21 41 42 43 DE AD 12 0D 0A"
     }
+  },
+  "logic": {
+    "points": [
+      {
+        "name": "设备标签",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "tag"
+        }
+      },
+      {
+        "name": "设备 HEX 字段",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "raw"
+        }
+      },
+      {
+        "name": "命令字",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "cmd"
+        }
+      },
+      {
+        "name": "最近长帧扩展值",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "extra"
+        }
+      }
+    ]
   }
 }

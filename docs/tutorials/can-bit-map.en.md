@@ -22,7 +22,9 @@ Select an inline signal and click **Edit signal** to set its start bit on the gr
 
 ## Bind a project point to one bit
 
-1. In 17.7, open **Data and alarms → Data points** and add a point named `ReadyFeedback`. Select **Device data**, then click **Configure binding…**.
+Open **Data and alarms → Data points** to inspect the built-in loopback ready point, which reads `can → 0x321 → ready`. The following steps create a separate point manually in a project copy.
+
+1. In **Data points**, add a point named `ReadyFeedback`. Select **Device data**, then click **Configure binding…**.
 2. Select **CAN bit field** as the parser mode and `can` as the source. Open the visual editor. Set the message ID to `321`, the bit length to `1`, and the byte order to **Intel**. Use an unsigned value, scale `1`, and offset `0`.
 3. Click **B0** in the **Byte 4** row. The start bit becomes `32`. Paste `321#DC05A0FE01000000`. The highlighted bit and the decoded value both read `1`.
 4. Change the sample to `321#DC05A0FE00000000` and check the decoded value `0`. Changing the sample ID to `322` triggers a mismatch message. Sample text is used for preview. Confirm all three dialogs and save the project.
@@ -34,7 +36,7 @@ Use **Create data point from CAN signal…** in the card's properties to start w
 
 ## Inspect a 12-byte CAN FD sample
 
-1. Select the Motorola pressure display in 17.7 and open the visual editor under its receive binding. It uses ID `0x18FF0055`, **Motorola MSB**, start bit `7`, length `16`, and scale `0.01`.
+1. In 17.7, open **Data and alarms → Data points**, configure the loopback pressure point, and open the visual editor. It uses ID `0x18FF0055`, **Motorola MSB**, start bit `7`, length `16`, and scale `0.01`. The pressure display reads this project point.
 2. Set **Bit map size (bytes)** to `12` to reach bytes 8–11 before pasting a sample. When a DBC defines the message, the editor reads its byte count from the DBC.
 3. Paste `18FF0055##100FA0102030405060708090A`. The grid highlights `00 FA` and shows `2.5`. The `##` marks an FD frame. The following `1` enables BRS. The payload starts at `00`. You can also paste a complete frame line from the log.
 

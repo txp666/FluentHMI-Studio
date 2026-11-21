@@ -1,12 +1,14 @@
 #pragma once
 
 #include "core/data_source.h"
+#include "core/message.h"
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QHash>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 
-#include <algorithm>
 #include <optional>
 
 namespace fhmi {
@@ -45,6 +47,8 @@ class Project
     QJsonObject logic;
     QJsonObject frameTemplates;
     QString filePath; // empty until saved or loaded
+    QHash<QString, QStringList> recentEndpoints; // Runtime preview suggestions for this open project.
+    QHash<QString, Message> recentTextSamples;
 
     static QString formatVersion(const QJsonArray &widgets, const QJsonObject &logic = {});
     QJsonObject toJson() const;
@@ -79,18 +83,16 @@ QList<QPair<QString, QString>> routeConnections(const QJsonArray &widgets, const
                                               bool needsEndpoint = false,
                                               const QString &projectParser = QStringLiteral("line"));
 
-enum class RoutePurpose { Send, DataPoint };
+enum class RoutePurpose { Send, Binding, DataPoint };
 
 // Resolves a configured route. An empty automatic route can remain unresolved while drafting.
 std::optional<DataRoute> resolveProjectRoute(const QJsonArray &widgets, const QString &projectParser,
                                              const RouteFilter &filter, DataRoute route, RoutePurpose purpose,
-                                             QString *error = nullptr);
+                                             QString *error = nullptr,
+                                             ModbusParserChoice parserChoice = ModbusParserChoice::Project);
 QString modbusRouteDescription(const QJsonObject &card, const Project &project);
 
-inline int chartCurveCount(const QJsonObject &properties)
-{
-    return std::clamp(properties.value(QStringLiteral("curveCount")).toInt(1), 1, 8);
-}
+int chartCurveCount(QStringView type, const QJsonObject &properties);
 
 // Walk a widget tree (depth first); return false from the visitor to stop.
 template <typename Visitor> bool visitWidgets(const QJsonArray &widgets, Visitor &&visit)

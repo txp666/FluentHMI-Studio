@@ -110,6 +110,15 @@ QString describe(const EncodedCommand &command, const QString &mode)
     case EncodedCommand::Kind::CanFrame:
         return Can::frameLine(command.frame);
     case EncodedCommand::Kind::Bytes:
+        if (!command.frames.isEmpty()) {
+            QStringList frames;
+            qsizetype offset = 0;
+            for (const auto &part : command.frames) {
+                frames.append(QStringLiteral("%1 · %2").arg(part.name, toHexString(command.bytes.mid(offset, part.size))));
+                offset += part.size;
+            }
+            return frames.join(u'\n');
+        }
         if (mode == QLatin1String("HEX"))
             return QString::fromLatin1(command.bytes.toHex(' ').toUpper());
         return LineParser::decode(command.bytes, command.textEncoding).replace(u'\\', QStringLiteral("\\\\"))
@@ -903,7 +912,7 @@ RouteFilter sendRouteFilter(const QJsonObject &props, QStringView widgetType)
     case Mode::Modbus:
         return ModbusDestination{int(integerProp(props, "mbSlave", 1).value_or(1)),
             widgetType == QLatin1String("ToggleSwitch") ? modbusSwitchFunction(props)
-                                                       : functionCode(prop(props, "mbFunc", {}))};
+                : functionCode(prop(props, "mbFunc", widgetType == u"PushButton" ? QStringLiteral("03") : QStringLiteral("06")))};
     default: return RouteTransport::Bytes;
     }
 }
@@ -1029,15 +1038,27 @@ bool usesFrameFields(const QJsonObject &props)
            props.value(FrameTemplates::SendFieldsEnabled).toBool();
 }
 
+bool usesFrameSequence(const QJsonObject &props)
+{
+    return props.value(QStringLiteral("commandMode")).toString() == QLatin1String("HEX") &&
+           !props.value(FrameTemplates::SendSequence).toArray().isEmpty();
+}
+
 QStringList commandInputIds(const QJsonObject &props)
 {
     QStringList ids;
-    if (usesFrameFields(props)) {
-        for (const auto &entry : props.value(FrameTemplates::SendBindings).toArray()) {
+    const auto addBindings = [&ids](const QJsonObject &frame) {
+        for (const auto &entry : frame.value(FrameTemplates::SendBindings).toArray()) {
             const QString id = entry.toObject().value(QStringLiteral("inputId")).toString();
-            if (!id.isEmpty())
+            if (!id.isEmpty() && !ids.contains(id))
                 ids.append(id);
         }
+    };
+    if (usesFrameSequence(props)) {
+        for (const auto &frame : props.value(FrameTemplates::SendSequence).toArray())
+            addBindings(frame.toObject());
+    } else if (usesFrameFields(props)) {
+        addBindings(props);
     } else {
         for (const auto &input : commandInputs(props))
             ids.append(input.inputId);
@@ -1057,8 +1078,8 @@ void mapInputIds(QJsonObject &properties, const std::function<QString(const QStr
     };
     for (const auto &key : {QStringLiteral("s7InputId"), QStringLiteral("mbInputId")})
         update(properties, key);
-    for (const auto &key : {QStringLiteral("commandInputs"), QStringLiteral("mbWriteInputs"), FrameTemplates::SendBindings}) {
-        const auto original = properties.value(key).toArray();
+    const auto mapRows = [&update](QJsonObject &object, const QString &key) {
+        const auto original = object.value(key).toArray();
         auto rows = original;
         for (qsizetype row = 0; row < rows.size(); ++row) {
             const auto before = rows.at(row).toObject();
@@ -1068,8 +1089,13 @@ void mapInputIds(QJsonObject &properties, const std::function<QString(const QStr
                 rows[row] = input;
         }
         if (rows != original)
-            properties.insert(key, rows);
-    }
+            object.insert(key, rows);
+    };
+    for (const auto &key : {QStringLiteral("commandInputs"), QStringLiteral("mbWriteInputs")})
+        mapRows(properties, key);
+    FrameTemplates::mapSendFrames(properties, [&mapRows](QJsonObject &frame) {
+        mapRows(frame, FrameTemplates::SendBindings);
+    });
 }
 
 QString InputValue::text() const
@@ -1532,10 +1558,51 @@ CommandResult templateFromInputs(const QJsonObject &props, InputListMode mode, c
     return result;
 }
 
+CommandResult frameSequence(const QJsonObject &props, const QJsonObject &library, const InputValueReader &read,
+                            FieldEncoding encoding)
+{
+    const auto entries = props.value(FrameTemplates::SendSequence).toArray();
+    QHash<QString, std::optional<InputValue>> values;
+    const InputValueReader snapshot = [&values, &read](const QString &id) {
+        const auto found = values.constFind(id);
+        return found == values.cend() ? *values.insert(id, read ? read(id) : std::nullopt) : *found;
+    };
+    const auto tr = [](const char *source) { return QCoreApplication::translate("fhmi", source); };
+    EncodedCommand batch;
+    batch.route = {props.value(QStringLiteral("commandTargetId")).toString(),
+                   props.value(QStringLiteral("commandEndpoint")).toString()};
+    for (qsizetype index = 0; index < entries.size(); ++index) {
+        const auto row = entries.at(index).toObject();
+        const auto entry = FrameTemplates::find(library, row.value(FrameTemplates::SendId).toString());
+        if (!entry || entry->format.type != QLatin1String("hex"))
+            return CommandResult::failure(tr("第 %1 帧缺少有效的 HEX 模板").arg(index + 1));
+        const QJsonObject format{{QStringLiteral("commandMode"), QStringLiteral("HEX")}};
+        auto result = mappedFrame(format, row.value(FrameTemplates::SendBindings), snapshot, nullptr,
+                                  entry->format.settings, true, encoding);
+        if (!result.command)
+            return CommandResult::failure(tr("第 %1 帧 · %2：%3").arg(index + 1).arg(entry->name, result.error));
+        const auto label = QStringLiteral("%1. %2").arg(index + 1).arg(entry->name);
+        batch.frames.append({label, result.command->bytes.size()});
+        batch.bytes += result.command->bytes;
+        if (!result.command->framingNotice.isEmpty()) {
+            if (!batch.framingNotice.isEmpty())
+                batch.framingNotice += u'\n';
+            batch.framingNotice += QStringLiteral("%1 · %2").arg(label, result.command->framingNotice);
+        }
+        for (auto &value : result.command->inputValues) {
+            value.name.prepend(label + QStringLiteral(" · "));
+            batch.inputValues.append(std::move(value));
+        }
+    }
+    return CommandResult::ok(std::move(batch));
+}
+
 } // namespace
 
 QString frameFieldConfigurationProblem(const QJsonObject &props, const QJsonObject &frameTemplates)
 {
+    if (usesFrameSequence(props))
+        return frameSequence(props, frameTemplates, {}, FieldEncoding::CheckBindings).error;
     return usesFrameFields(props) ? mappedFrame(props, props.value(FrameTemplates::SendBindings), {}, nullptr,
         FrameTemplates::sendSettings(frameTemplates, props), true, FieldEncoding::CheckBindings).error : QString();
 }
@@ -1544,6 +1611,15 @@ CommandResult frameFromTemplateDefaults(const QJsonObject &settings)
 {
     const QJsonObject properties{{QStringLiteral("commandMode"), QStringLiteral("HEX")}};
     return mappedFrame(properties, QJsonArray{}, {}, nullptr, settings, true, FieldEncoding::DefaultsSample);
+}
+
+CommandResult frameFromFieldValues(const QJsonObject &props, const QJsonObject &values,
+                                   const QJsonObject &frameTemplates, BinaryFrameLayout *layout)
+{
+    QJsonArray fields;
+    for (auto value = values.cbegin(); value != values.cend(); ++value)
+        fields.append(QJsonObject{{QStringLiteral("field"), value.key()}, {QStringLiteral("value"), value.value()}});
+    return mappedFrame(props, fields, {}, layout, FrameTemplates::sendSettings(frameTemplates, props), false);
 }
 
 CommandResult encode(const QJsonObject &props, const QString &value, BinaryFrameLayout *layout,
@@ -1589,6 +1665,8 @@ CommandResult buttonFromProperties(const QJsonObject &props, const InputValueRea
 {
     if (layout)
         *layout = {};
+    if (usesFrameSequence(props))
+        return frameSequence(props, frameTemplates, inputValue, FieldEncoding::Send);
     if (usesFrameFields(props))
         return mappedFrame(props, props.value(FrameTemplates::SendBindings), inputValue, layout,
                            FrameTemplates::sendSettings(frameTemplates, props), true);

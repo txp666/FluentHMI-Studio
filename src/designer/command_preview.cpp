@@ -1,4 +1,5 @@
 #include "designer/command_preview.h"
+#include "runtime/send_frame_fields.h"
 #include "comm/can/can_initial_state.h"
 
 #include "core/can_frame.h"
@@ -119,18 +120,25 @@ CommandTargetPreview previewCommandTarget(const QJsonObject &properties, const Q
                           properties.value(QStringLiteral("commandEndpoint")).toString()};
     const auto filter = CommandEncoder::sendRouteFilter(properties, type);
     CommandTargetPreview result;
-    const auto resolved = resolveProjectRoute(widgets, projectParser, filter, route, RoutePurpose::Send, &result.error);
+    const auto resolved = resolveProjectRoute(widgets, projectParser, filter, route, RoutePurpose::Send, &result.error,
+                                             ModbusParserChoice::OnConnect);
     if (!resolved) {
         result.routeInvalid = true;
         return result;
     }
     result.route = *resolved;
     QStringList names;
-    const auto targets = routeConnections(widgets, filter, !route.endpoint.isEmpty(), projectParser);
+    const bool broadcast = result.route.isBroadcast();
+    auto targets = broadcast ? routeConnections(widgets, filter, !route.endpoint.isEmpty(), projectParser)
+                             : QList<QPair<QString, QString>>{};
+    if (broadcast && targets.isEmpty() && filter.transport == RouteTransport::Modbus)
+        targets = routeConnections(widgets, RouteTransport::Bytes, !route.endpoint.isEmpty(), projectParser);
     visitWidgets(widgets, [&](const QJsonObject &card) {
         const QString id = card.value(QStringLiteral("id")).toString();
-        if (!result.route.acceptsConnection(id) ||
-            !std::any_of(targets.cbegin(), targets.cend(), [&](const auto &target) { return target.first == id; }))
+        const bool matches = broadcast
+            ? std::any_of(targets.cbegin(), targets.cend(), [&](const auto &target) { return target.first == id; })
+            : !id.isEmpty() && result.route.connectionId == id;
+        if (!matches)
             return true;
         QString name = id;
         if (mode == QLatin1String("Modbus"))
@@ -176,11 +184,10 @@ QString previewInputCommand(const QJsonObject &properties, const QList<CanPrevie
 
 void openCommandPreview(const CanvasItem &item, const QList<CanPreviewSource> &canSources,
                         const CommandTargetPreview &destination, const QMap<QString, CommandEncoder::InputValue> &inputDefaults,
-                        QWidget *parent, const QJsonObject &frameTemplates)
+                        QWidget *parent, const QJsonObject &properties, const QJsonObject &frameTemplates)
 {
     const QString type = item.typeName();
     const QString mode = item.propertyValue(QStringLiteral("commandMode")).toString();
-    const QJsonObject properties = item.properties();
     auto *dialog = new AppDialog(tr("发送预览"), parent);
     dialog->setObjectName(QStringLiteral("commandPreviewDialog"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -217,6 +224,14 @@ void openCommandPreview(const CanvasItem &item, const QList<CanPreviewSource> &c
     };
 
     if (type == QLatin1String("DataSendCard")) {
+        if (mode == ManualCommand::Hex && !FrameTemplates::sendFields(frameTemplates, properties).isEmpty()) {
+            auto *fields = new FluentQt::PushButton(tr("按模板字段预览…"), dialog);
+            fields->setObjectName(QStringLiteral("previewSendFrameFields"));
+            layout->addWidget(fields, 0, Qt::AlignLeft);
+            QObject::connect(fields, &QPushButton::clicked, dialog, [dialog, properties, frameTemplates] {
+                editSendFrameFields(properties, frameTemplates, {}, dialog, SendFrameAction::Preview);
+            });
+        }
         auto *sample = new FluentQt::LineEdit(dialog);
         addSampleField(sampleForm, tr("示例值"), sample);
         const auto update = [output, properties, resultText, mode, frameTemplates](const QString &input) {

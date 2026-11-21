@@ -81,7 +81,7 @@ class DigitalTimingChartWidget : public HmiWidget
     int m_customWindowIndex = -1;
     QStringList m_channelNames;
     QString m_recordingName;
-    quint16 m_recordingMask = 0xffff;
+    TimingMask m_recordingMask = AllTimingChannels;
     QFile m_autoFile;
     QTimer m_autoFlushTimer;
     QString m_exportDirectory;
@@ -90,10 +90,10 @@ class DigitalTimingChartWidget : public HmiWidget
     struct Input
     {
         std::optional<BindingEntry> binding;
-        quint64 stream = 0;
+        RoutedSample source;
     };
     QList<Input> m_inputs;
-    quint16 m_channelMask = 0xffff;
+    TimingMask m_channelMask = AllTimingChannels;
     int m_bitWidth = 8;
 };
 

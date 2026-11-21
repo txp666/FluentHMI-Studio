@@ -187,6 +187,22 @@ class TestBinding : public QObject
         Message nested{{"a", QVariantMap{{"list", QVariantList{1, inner}}}}};
         QCOMPARE(path->extractFromParsed(nested).toInt(), 7);
         QVERIFY(!path->extractFromParsed(Message{{"a", 1}}).isValid());
+
+        const Message dotted{{"motor.speed", 12}, {"motor", QVariantMap{{"speed", 5}}}};
+        const auto dottedPath = BindingEntry::fromWidget(widget("Label", {{"parseMode", "JSON路径"}, {"jsonPath", "motor.speed"}}));
+        QCOMPARE(dottedPath->extractFromParsed(dotted).toInt(), 5);
+        QVector<int> keys, paths;
+        for (const auto &field : textFieldValues(dotted)) {
+            if (field.path != u"motor.speed")
+                continue;
+            if (field.nested)
+                paths.append(field.value.toInt());
+            else
+                keys.append(field.value.toInt());
+            QCOMPARE(field.supportsJsonPath(), field.nested);
+        }
+        QCOMPARE(keys, QVector<int>{12});
+        QCOMPARE(paths, QVector<int>{5});
     }
 
     void modbusRegisters()
@@ -221,6 +237,20 @@ class TestBinding : public QObject
         values = e->extractAllFromRaw(QByteArray::fromHex("341255"));
         QCOMPARE(values.size(), 1);
         QCOMPARE(values.at(0).toLongLong(), 0x1234);
+    }
+
+    void hexPointSkipsUnrelatedFrameWithNoFooter()
+    {
+        auto entry = BindingEntry::fromWidget(widget("NumericDisplay", {{"parseMode", "HEX字节提取"},
+            {"frameHeader", "AA 55 03 10"}, {"dataType", "uint16"}, {"byteOrder", "小端(LE)"}}));
+        QVERIFY(entry);
+        const auto valid = entry->extractAllFromRaw(QByteArray::fromHex("AA550310DC05C5"), 1, true);
+        QCOMPARE(valid.size(), 1);
+        QCOMPARE(valid.first().toLongLong(), 1500);
+        QVERIFY(entry->extractAllFromRaw(QByteArray::fromHex("AA550330FF838C"), 1, true).isEmpty());
+        const auto shortFrame = entry->extractAllFromRaw(QByteArray::fromHex("AA550310DC"), 1, true);
+        QCOMPARE(shortFrame.size(), 1);
+        QVERIFY(!shortFrame.first().isValid());
     }
 
     void formatting()

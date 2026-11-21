@@ -932,14 +932,14 @@ void ChartHistory::clear()
     m_readSinceWrite = false;
 }
 
-std::optional<bool> TimingLevels::level(quint16 mask) const
+std::optional<bool> TimingLevels::level(TimingMask mask) const
 {
     return valid & mask ? std::optional<bool>((high & mask) != 0) : std::nullopt;
 }
 
 void TimingLevels::setLevel(int index, std::optional<bool> value)
 {
-    const quint16 mask = quint16(1u << index);
+    const TimingMask mask = TimingMask{1} << index;
     high &= ~mask;
     valid &= ~mask;
     if (value) {
@@ -951,7 +951,7 @@ void TimingLevels::setLevel(int index, std::optional<bool> value)
 
 namespace {
 
-constexpr qint64 kTimingRecordBytes = sizeof(double) + 2 * sizeof(quint16);
+constexpr qint64 kTimingRecordBytes = sizeof(double) + 2 * sizeof(TimingMask);
 
 QStringList timingColumns(const QStringList &names)
 {
@@ -962,7 +962,7 @@ QStringList timingFields(const TimingSample &sample, qsizetype channels, const Q
 {
     QStringList fields{QString::number(sample.seconds, 'f', 6)};
     for (qsizetype i = 0; i < channels; ++i) {
-        const auto level = sample.levels.level(quint16(1u << i));
+        const auto level = sample.levels.level(TimingMask{1} << i);
         fields.append(level ? QString::number(*level) : missing);
     }
     return fields;
@@ -991,14 +991,15 @@ std::optional<TimingRecording> readTimingRecording(const QByteArray &content, Ch
     };
     TimingRecording recording;
     const auto setHeader = [&recording](QStringList columns) {
-        if (columns.size() < 2 || columns.size() > 17 || columns.first() != QLatin1String("time_s"))
+        if (columns.size() < 2 || columns.size() > MaxTimingChannels + 1 || columns.first() != QLatin1String("time_s"))
             return false;
         columns.removeFirst();
         recording.names = std::move(columns);
         return true;
     };
     const auto badHeader = [&invalid] {
-        return invalid(QCoreApplication::translate("fhmi", "时序文件首列须为 time_s，并包含 1–16 个通道"));
+        return invalid(QCoreApplication::translate("fhmi", "时序文件首列须为 time_s，并包含 1–%1 个通道")
+                           .arg(MaxTimingChannels));
     };
     const auto addSample = [&recording](TimingSample sample) {
         if (!std::isfinite(sample.seconds) || sample.seconds < 0 ||

@@ -3,7 +3,7 @@
   "appName": "17.8 空闲分帧与和校验",
   "canvas": {
     "width": 1120,
-    "height": 740,
+    "height": 768,
     "gridSize": 10
   },
   "serial": {
@@ -35,7 +35,21 @@
         "h": 24
       },
       "properties": {
-        "text": "先连右侧，再连左侧。采样值可回车，周期按 600 ms 发送。勾上「线路字节」对比空闲交付。",
+        "text": "1. 选左侧「预览运行」，点「运行预览」。先连接右侧模拟设备，再连接左侧上位机。",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "lessonAction",
+      "type": "Label",
+      "geometry": {
+        "x": 24,
+        "y": 84,
+        "w": 1072,
+        "h": 24
+      },
+      "properties": {
+        "text": "2. 改左侧采样值并回车。空闲约 150 ms 后右侧出现读数，勾选「线路字节」可对比。",
         "fontSize": 13
       }
     },
@@ -44,7 +58,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 24,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -61,7 +75,7 @@
       "type": "TcpConfigCard",
       "geometry": {
         "x": 568,
-        "y": 94,
+        "y": 122,
         "w": 528,
         "h": 200
       },
@@ -78,7 +92,7 @@
       "type": "LineEdit",
       "geometry": {
         "x": 24,
-        "y": 298,
+        "y": 326,
         "w": 300,
         "h": 36
       },
@@ -99,7 +113,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 338,
-        "y": 298,
+        "y": 326,
         "w": 214,
         "h": 36
       },
@@ -116,7 +130,8 @@
             "field": "reading",
             "inputId": "readingInput"
           }
-        ]
+        ],
+        "buttonStyle": "强调"
       }
     },
     {
@@ -124,7 +139,7 @@
       "type": "PushButton",
       "geometry": {
         "x": 24,
-        "y": 346,
+        "y": 374,
         "w": 234,
         "h": 36
       },
@@ -151,7 +166,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 298,
+        "y": 326,
         "w": 528,
         "h": 76
       },
@@ -163,9 +178,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "reading"
+        "parseMode": "工程数据点",
+        "key": "设备采样"
       }
     },
     {
@@ -173,7 +187,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 568,
-        "y": 388,
+        "y": 416,
         "w": 254,
         "h": 76
       },
@@ -185,9 +199,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "channel"
+        "parseMode": "工程数据点",
+        "key": "采样通道"
       }
     },
     {
@@ -195,7 +208,7 @@
       "type": "NumericDisplay",
       "geometry": {
         "x": 836,
-        "y": 388,
+        "y": 416,
         "w": 260,
         "h": 76
       },
@@ -207,9 +220,8 @@
         "fontSize": 20
       },
       "binding": {
-        "parseMode": "键值匹配",
-        "sourceCardId": "device",
-        "key": "command"
+        "parseMode": "工程数据点",
+        "key": "命令字"
       }
     },
     {
@@ -217,7 +229,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 24,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
@@ -231,7 +243,7 @@
       "type": "DataRecvCard",
       "geometry": {
         "x": 568,
-        "y": 482,
+        "y": 510,
         "w": 528,
         "h": 230
       },
@@ -282,5 +294,33 @@
       },
       "sample": "C3 7F 05 2E FB AD"
     }
+  },
+  "logic": {
+    "points": [
+      {
+        "name": "设备采样",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "reading"
+        }
+      },
+      {
+        "name": "采样通道",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "channel"
+        }
+      },
+      {
+        "name": "命令字",
+        "binding": {
+          "parseMode": "键值匹配",
+          "sourceCardId": "device",
+          "key": "command"
+        }
+      }
+    ]
   }
 }

@@ -2,9 +2,11 @@
 
 [简体中文](17-frame-io.zh.md) · [v0.9 user guide](../guide.en.md) · [Project files](../../examples/tutorials/README.md)
 
-Use Studio v0.9 with these UIDP 1.3 projects. Start with 17 for a complete command and readback round trip. Use 17.1–17.2 for text and JSON, 17.3–17.5 and 17.8 for binary framing, and 17.9–17.10 for mixed frames. Several project labels are in Chinese. A label or button's name in the project does not change the configured protocol.
+Use Studio v0.9.1 or later with these UIDP 1.3 projects. Start with 17 for a complete command and readback round trip. Use 17.1–17.2 for text and JSON, 17.3–17.5 and 17.8 for binary framing, and 17.9–17.10 for mixed frames. Several project labels are in Chinese. A label or button's name in the project does not change the configured protocol.
 
 For TCP exercises, start Preview and connect the simulated server on the right before the HMI client on the left. If a port is occupied, change both cards to the same free port before connecting. UDP exercises pair each card's destination with the other card's local port. Confirm a send when prompted.
+
+Open the Preview page from the left sidebar and click **Run Preview**. Each project starts with two steps that identify the connections, editable values, and expected display. Use **Project data monitor** in the preview toolbar to inspect values, sources, data quality, and sample times. Open **Data and alarms → Data points** in the designer to inspect the bindings.
 
 ## 17 Share one frame template
 
@@ -63,7 +65,7 @@ Clear the input and try Enter to see the required-field check. Inspect a receive
 [Open 17.4](../../examples/tutorials/17.4-帧尾分帧与异或.uidp) · TCP `39177`
 
 1. Press Enter with payload `21 41 42 43 DE AD`. The template sends `7E 21 41 42 43 DE AD 12 0D 0A`, which shows `ABC`, `DE AD`, and command 33.
-2. Send the longer frame and observe `XYZ` and extension `1000`. A later short frame still leaves `1000` as the last value from a frame carrying the extension. Both frames share the footer and XOR rule.
+2. Set the extension to `1000` and send the longer frame. This appends the big-endian extension `03 E8` to the current payload and recalculates XOR. Change the payload to `22 58 59 5A 12 34` and send again to see `XYZ`. A later short frame leaves the extension at the last value received in a long frame.
 
 ## 17.5 Two-byte length and CCITT
 
@@ -86,9 +88,10 @@ Clear the input and try Enter to see the required-field check. Inspect a receive
 [Open 17.7](../../examples/tutorials/17.7-CAN经典帧与FD信号.uidp) · [View and bind CAN signals on the bit map](can-bit-map.en.md)
 
 1. Connect the **Virtual CAN** adapter. It loops transmitted frames back into receive processing on the same card.
-2. Send standard ID `0x321` and extended FD+BRS ID `0x18FF0055`. Check `1500 rpm`, `-35.2 °C`, the ready bit and `2.50 bar`. Speed and temperature use Intel layout. Pressure uses Motorola MSB.
-3. Enter `1800` to send `321#0807A0FE01000000`. Start and stop the 500 ms task. Use the manual send card for `00000321#11223344` and `321#R8` to compare an extended data frame with an RTR request.
-4. Try the CAN monitor's scrolling and per-ID views, filters, and saved display preferences. Virtual CAN exercises layout and binding. An adapter is needed to validate physical bus timing.
+2. Click the standard-frame button or press Enter with speed `1800` to send `321#0807A0FE01000000`. The frame also carries the fixed temperature `-35.2 °C` and ready bit `1`. Change speed to `2250` and send again. The loopback reading and its project data point follow the new value.
+3. Set the pressure input to `325` and send the extended FD+BRS frame `0x18FF0055`. Its 12-byte payload starts with `01 45`; the Motorola MSB field reads `3.25 bar`. Start the 500 ms standard-frame task and change the speed to `2500` while it runs. Stop it from the original button or **Periodic tasks**.
+4. Use the manual send card for `00000321#11223344` and `321#R8` to compare an extended data frame with an RTR request.
+5. Try the CAN monitor's scrolling and per-ID views, filters, and saved display preferences. Virtual CAN exercises layout and binding. An adapter is needed to validate physical bus timing.
 
 ## 17.8 Idle-gap framing and sum
 
@@ -101,15 +104,23 @@ Clear the input and try Enter to see the required-field check. Inspect a receive
 
 [Open 17.9](../../examples/tutorials/17.9-同连接多种HEX帧.uidp) · TCP `39181`
 
-All three messages share `AA 55`, a one-byte data length, and CRC8. The displays select manual byte fields using the relevant prefix.
+All three messages share `AA 55`, a one-byte data length, and CRC8. Each project data point uses its command prefix to select the corresponding bytes. The displays read those points.
 
-1. Send each message to check speed, pressure/status, and temperature. Send all three in one write and check that the receiver delivers three independent records.
-2. Turn on Wire bytes and send the bad CRC example. The invalid frame appears in the diagnostic log while the speed value stays at its last accepted reading.
-3. Send `AA 55 03 10`, then `DC 05 C5`. The second write completes the speed frame and displays `1500 rpm`.
+1. Set speed to `2100` and send command `0x10`. The left side shows `2100 rpm`. Set raw temperature to `-185` and raw pressure to `416` and send their frames. Verify `-18.5 °C` and `4.16 bar`. Status codes `0`, `1`, and `2` mean stopped, running, and fault.
+2. Send the fixed three-frame sample. The receiver delivers three independent records and reads `2300 rpm`, `19.5 °C`, `3.75 bar`, and running.
+3. Turn on **Wire bytes** and send the bad CRC example. The invalid frame appears in the diagnostic log while the speed value stays at its last accepted reading.
+4. Send `AA 55 03 10`, then `DC 05 C5`. The second write completes the speed frame and displays `1500 rpm`.
 
 ## 17.10 Mixed receive templates
 
 [Open 17.10](../../examples/tutorials/17.10-同连接多接收模板.uidp) · TCP `39182`
+
+1. Connect the right and left cards in Preview. Send the three frames with the initial inputs. The displays show `1800 rpm`, `-12.5 °C`, `2.50 bar`, and fault.
+2. Change the right-side inputs to `2300`, `195`, `375`, and `1`. Send the batch again to read `2300 rpm`, `19.5 °C`, `3.75 bar`, and running. You can also send each frame separately. Press Enter in the speed field with `1800` to send `A5 5A 10 08 07 1F`.
+3. Start the 1000 ms mixed send. Change any input during the run and see the next cycle use the current value. Clear a required field to see a skipped cycle, restore it, then stop the task in **Periodic tasks**.
+4. Open **Project data monitor**. The four points use `speed.value`, `temperature.value`, `status.value`, and `status.state`. Enable **Wire bytes** and try the two recovery samples. The invalid frame is rejected and the valid speed frame that follows is delivered.
+
+Select the periodic button in the designer and open **Edit mixed send** to inspect the pressure/status, temperature, and speed templates in send order. Each frame reads its assigned inputs and calculates its length and checksum. Open the HMI TCP card's parse preview to switch templates or paste a frame to match it automatically. To try changing connections, use a project copy and select the speed template alone. The impact list shows the retained reference changing from `speed.value` to `value`.
 
 ![Temperature frame preview with a dashed length range over bytes 4–5 and a solid checksum range over bytes 2–5](../images/v0.9/17.10-frame-preview.png)
 
@@ -118,12 +129,6 @@ The preview shows the raw temperature field `195`. The project point scales it b
 Switch to **Bit map** in Parse preview. Click a bit in byte `4` or `5` to select the `value` row in the field table. Select `value` to highlight all 16 bits. The length and checksum coverage remains visible below the grid.
 
 ![The temperature frame bit map highlights bytes 4–5 and selects value in the field table](../images/v0.9/17.10-hex-bit-map.png)
-
-1. In the designer, select the HMI TCP card. Open its receive template list to see the three selected templates. In Parse preview, switch between them or paste a frame to match it automatically.
-2. Connect both cards in Preview and send the three separate messages. The displays read `1500 rpm`, `-12.5 °C`, `2.50 bar`, and fault. The three numeric data points use `speed.value`, `temperature.value`, and `status.value`.
-3. Send the combined write. The displays update to `2300 rpm`, `19.5 °C`, `3.75 bar`, and running. Enable Wire bytes and use the invalid checksum and invalid length buttons. Inspect the rejected sample and verify delivery of the valid speed frame that follows it.
-4. Enter `1800` and confirm. The template sends `A5 5A 10 08 07 1F`. Start the 1000 ms mixed send, then type `2300` in the same field. The next cycle sends `A5 5A 10 FC 08 72` as its speed frame. Clear the input to see a skipped cycle, restore it, then stop the task in **Periodic tasks**.
-5. In a project copy, change the HMI connection to the speed template alone. Review the impact list. The retained reference changes from `speed.value` to `value`, and the temperature and pressure bindings appear as unavailable until their templates return.
 
 | Template | Match | Framing and checksum |
 | --- | --- | --- |
@@ -135,16 +140,16 @@ Switch to **Bit map** in Parse preview. Click a bit in byte `4` or `5` to select
 
 [Open 17.11](../../examples/tutorials/17.11-串口收发与数据发送卡.uidp)
 
-1. Connect Virtual serial A and B in the same Preview. Send payload `01 FF 9C` from the left. The peer reads sequence `1` and sample `-100` from `D5 5D 00 05 01 FF 9C 0D 0A`.
-2. On the right start the 700 ms task with `02 00 FA`, then change its input to `03 FF 9C`. The left display changes from sequence 2 and sample 250 to sequence 3 and sample -100.
-3. Stop the sender. The two-byte big-endian length counts three payload bytes and the two footer bytes. The template uses no checksum.
+1. Connect Virtual serial A and B in Preview. On the left send by template field with sequence `1` and sample `-100`. The frame preview shows `D5 5D 00 05 01 FF 9C 0D 0A`. Confirm to update the project data points on the right.
+2. On the right start the 700 ms task with sequence `2` and sample `250`. Open the field editor during the run and apply `3` and `-100`. The left display updates on the next cycle. Stop it from the send card or **Periodic tasks**.
+3. Try the same exercise using HEX payloads `01 FF 9C`, `02 00 FA`, and `03 FF 9C`. The two-byte big-endian length counts three payload bytes and the two footer bytes. This template uses no checksum.
 
 ## 17.12 MQTT topics
 
 [Open 17.12](../../examples/tutorials/17.12-MQTT发布订阅与主题取值.uidp) · Public broker `broker.emqx.io:1883`
 
 1. Connect both MQTT cards. The app replaces the `{session}` topic segment for this run and shows the effective topics on the cards.
-2. Publish `900` by pressing Enter. Return A's feedback from the device card. B's dedicated button returns `1234`. The HMI distinguishes the same `rpm` key by topic.
+2. Publish `900` by pressing Enter. Return A's feedback from the device card. The fixed comparison button for B returns `1234`. The two project data points distinguish the same `rpm` key by topic.
 3. Start A's 1000 ms feedback task. Change and publish the target to `2300`. The next feedback uses that value. Inspect and stop the job in **Periodic tasks**.
 
 This exercise sends its sample values to the public broker. You can set both cards to a broker you control to practice on a local network. [EMQX public broker](https://www.emqx.com/en/mqtt/public-mqtt5-broker)

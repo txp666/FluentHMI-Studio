@@ -228,7 +228,7 @@ QJsonObject referencedFrameTemplates(const QJsonObject &library, const QJsonArra
     visitWidgets(widgets, [&](const QJsonObject &widget) {
         const auto props = widget.value(QStringLiteral("properties")).toObject();
         auto ids = FrameTemplates::receiveIds(props);
-        ids.append(props.value(FrameTemplates::SendId).toString());
+        ids.append(FrameTemplates::sendIds(props));
         for (const auto &id : ids) {
             if (library.contains(id))
                 templates.insert(id, library.value(id));
@@ -431,6 +431,10 @@ void DesignerPage::buildUi()
         m_history[m_historyIndex].editorPages.insert(item->widgetId(), item->editorPage());
     });
     connect(m_scene, &DesignScene::connectionRenamed, this, [this](const QString &previous, const QString &current) {
+        if (m_project.recentEndpoints.contains(previous))
+            m_project.recentEndpoints.insert(current, m_project.recentEndpoints.take(previous));
+        if (m_project.recentTextSamples.contains(previous))
+            m_project.recentTextSamples.insert(current, m_project.recentTextSamples.take(previous));
         auto points = m_project.logic.value(QStringLiteral("points")).toArray();
         for (int i = 0; i < points.size(); ++i) {
             auto point = points[i].toObject();
@@ -504,6 +508,28 @@ void DesignerPage::setModified(bool modified)
     if (modified) {
         emit projectChanged();
     }
+}
+
+void DesignerPage::rememberEndpoint(const QString &connectionId, const QString &endpoint)
+{
+    if (connectionId.isEmpty())
+        return;
+    auto &recent = m_project.recentEndpoints[connectionId];
+    if (!recent.contains(endpoint)) {
+        if (recent.size() >= 16)
+            recent.removeFirst();
+        recent.append(endpoint);
+    }
+}
+
+void DesignerPage::rememberTextSample(const QString &connectionId, const Message &message)
+{
+    m_project.recentTextSamples.insert(connectionId, message);
+}
+
+void DesignerPage::addPointFromPreview(const QJsonObject &binding, const QString &name)
+{
+    m_properties->addDataPoint(binding, name);
 }
 
 void DesignerPage::load(const Project &project)
@@ -602,6 +628,8 @@ void DesignerPage::restore(int index)
     const auto &step = m_history.at(index);
     Project project = Project::fromTrustedJson(step.project);
     project.filePath = m_project.filePath;
+    project.recentEndpoints = m_project.recentEndpoints;
+    project.recentTextSamples = m_project.recentTextSamples;
     m_properties->showItem(nullptr);
     QString error;
     if (!m_scene->loadWidgets(project.widgets, &error)) {

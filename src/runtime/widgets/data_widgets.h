@@ -1,6 +1,7 @@
 #pragma once
 
 #include "comm/modbus_slave.h"
+#include "core/can_frame.h"
 #include "runtime/hmi_widget.h"
 
 #include <QtGui/QTextBlock>
@@ -31,6 +32,7 @@ namespace fhmi {
 class ChartHeader;
 class ChartHistory;
 class ChartPlot;
+class CanSignalSet;
 
 // Multi-curve live chart; every curve has its own parse configuration, stored as
 // _curve_{i}_{field} properties exactly as PyQt UI Designer stores them. As PyQt UI Designer's
@@ -47,6 +49,8 @@ class RealtimeChartWidget : public HmiWidget
     {
         QString name;
         std::optional<BindingEntry> binding;
+        RoutedSample source;
+        DataQuality quality = DataQuality::Waiting;
     };
     // The curve configurations a property set describes.
     static std::vector<Curve> curvesFromProperties(const QJsonObject &props);
@@ -79,6 +83,8 @@ class RealtimeChartWidget : public HmiWidget
     // The sample number the live window starts at, which a loaded run is lined up with.
     qint64 windowStart() const;
     void showLiveValues();
+    void receiveCurve(int curve, const QVariant &value, const DataSource &source);
+    void updateCurve(int curve, const DataPointSample &sample);
     void showCursorValues();
     // The header: the live curves' readings, then the loaded run's at a sample number.
     void showValues(const QStringList &live, qint64 referenceSample);
@@ -129,7 +135,8 @@ class ModbusSlaveTableWidget : public HmiWidget
   public:
     ModbusSlaveTableWidget(const WidgetMeta &meta, QWidget *parent);
 
-    void showDesign(const QJsonObject *cardProperties, bool ambiguous = false);
+    void showDesign(const QJsonObject *cardProperties, bool ambiguous = false, bool editInitialValues = false);
+    QString initialValues() const;
 
   protected:
     void apply() override;
@@ -152,6 +159,7 @@ class ModbusSlaveTableWidget : public HmiWidget
     QPointer<ModbusSlave> m_slave;
     QMetaObject::Connection m_slaveConnection;
     bool m_ambiguousSource = false;
+    bool m_editInitialValues = false;
     bool m_filling = false;
 };
 
@@ -188,12 +196,18 @@ class DataRecvCardWidget : public HmiWidget
     {
         QByteArray bytes;
         LinkParser::Format format;
+        DataSource source;
+        bool request = false;
+        Message decoded;
+        std::optional<CanFrame> can;
+        std::shared_ptr<const CanSignalSet> canDefinitions;
     };
     void appendLog(const QString &kind, const QString &text, const DataSource &source, const QColor &color);
-    void appendPacket(const QByteArray &bytes, bool received, const DataSource &source);
+    void appendPacket(const QByteArray &bytes, bool received, const DataSource &source, const Message &decoded = {});
     void appendSampleLog(const QString &kind, const QString &text, const QByteArray &bytes, const DataSource &source,
                          const QColor &color);
-    std::optional<ReceiveSample> rememberSample(const QByteArray &bytes, const DataSource &source, const Link *link);
+    std::optional<ReceiveSample> packetSample(const QByteArray &bytes, const DataSource &source, const Link *link,
+                                              bool received = true, const Message &decoded = {}) const;
     void queueLog(std::unique_ptr<PacketRecord> record);
     void scheduleLogRefresh();
     void flushLog();
@@ -234,6 +248,7 @@ class DataSendCardWidget : public HmiWidget
 
   private:
     void sendInput();
+    void sendFields();
     void refreshInputOptions();
     QJsonObject inputProperties() const;
 
@@ -245,6 +260,9 @@ class DataSendCardWidget : public HmiWidget
     FluentQt::CheckBox *m_hex = nullptr;
     FluentQt::ComboBox *m_newline = nullptr;
     FluentQt::PushButton *m_send = nullptr;
+    FluentQt::PushButton *m_editFields = nullptr;
+    QJsonObject m_fieldValues;
+    bool m_sendingFields = false;
     bool m_can = false;
 };
 

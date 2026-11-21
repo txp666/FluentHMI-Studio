@@ -1,5 +1,6 @@
 #include "designer/can_signal_editor.h"
 
+#include "comm/can/can_initial_state.h"
 #include "core/binding.h"
 #include "core/dbc.h"
 #include "core/project.h"
@@ -75,17 +76,6 @@ BitMapView *makeCanBitMap(QWidget *parent)
     bits->setObjectName(QStringLiteral("canSignalBits"));
     bits->setAccessibleName(tr("CAN 报文位图"));
     return bits;
-}
-
-void showSignalBits(BitMapView *view, int size, const CanSignalDef *signal, const QByteArray *sample, int locate = -1)
-{
-    QList<BitRange> ranges;
-    if (signal) {
-        const auto color = frameByteColor(FrameByteKind::Field, 1);
-        for (const int bit : signal->bitPositions())
-            ranges.append({bit, 1, color});
-    }
-    view->setBits(size, sample, std::move(ranges), locate);
 }
 
 class CanSignalForm final : public QWidget
@@ -303,7 +293,7 @@ class CanSignalForm final : public QWidget
         const int selected = showSize ? m_viewSize->currentData().toInt() : 0;
         const int defined = message ? message->length : 8;
         const int bytes = std::max({selected == 0 ? defined : selected, needed, hasSample ? int(sample.bytes.size()) : 0});
-        showSignalBits(m_bits, bytes, signal ? &*signal : nullptr, hasSample ? &sample.bytes : nullptr, m_start->value());
+        m_bits->setCanSignal(bytes, hasSample ? &sample.bytes : nullptr, signal ? &*signal : nullptr, m_start->value());
     }
 
     const CanSignalSet *m_signalSet;
@@ -343,18 +333,32 @@ SignalCard signalCard(const QJsonObject &props, const QString &id = {})
             props.value(QStringLiteral("canFd")).toBool()};
 }
 
+QList<SignalCard> signalCards(const QJsonArray &widgets, const QString &onlyConnection = {})
+{
+    QList<SignalCard> cards;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const auto id = widget.value(QStringLiteral("id")).toString();
+        if (widget.value(QStringLiteral("type")).toString() == QLatin1String("CanConfigCard") &&
+            (onlyConnection.isEmpty() || id == onlyConnection))
+            cards.append(signalCard(widget.value(QStringLiteral("properties")).toObject(), id));
+        return true;
+    });
+    return cards;
+}
+
 class CanSignalDialog : public AppDialog
 {
   public:
     CanSignalDialog(const Project *project, QList<SignalCard> cards, const QString &connection, const QString &key,
-                    bool editing, QWidget *parent)
-        : AppDialog(editing ? tr("CAN 信号编辑") : tr("选择 CAN 信号"), parent),
-          m_project(project), m_cards(std::move(cards)), m_editing(editing)
+                    bool editing, QWidget *parent, int capacity = 0, bool framePick = false, const QString &title = {})
+        : AppDialog(!title.isEmpty() ? title
+                    : editing ? tr("CAN 信号编辑") : framePick ? tr("选择 CAN 报文") : tr("选择 CAN 信号"), parent),
+          m_project(project), m_cards(std::move(cards)), m_editing(editing), m_capacity(capacity), m_framePick(framePick)
     {
         setObjectName(editing ? QStringLiteral("canSignalEditor") : QStringLiteral("canSignalPicker"));
         setPreferredSize({1080, 620});
-        yesButton()->setText(editing ? tr("保存") : tr("选用信号"));
-        setValidator([this] { return m_editing ? m_inlineError.isEmpty() : bool(selection()); });
+        yesButton()->setText(editing ? tr("保存") : framePick ? tr("选用报文") : tr("选用信号"));
+        setValidator([this] { return m_editing ? m_inlineError.isEmpty() : m_capacity ? !m_selected.isEmpty() : bool(selection()); });
 
         auto *filter = new QHBoxLayout;
         if (!editing) {
@@ -383,6 +387,12 @@ class CanSignalDialog : public AppDialog
             connect(textButton, &QPushButton::clicked, this, &CanSignalDialog::editText);
         }
         viewLayout()->addLayout(filter);
+        if (m_capacity) {
+            auto *hint = new FluentQt::CaptionLabel(tr("勾选要添加的信号，可切换连接或报文 ID 继续选择。最多添加 %1 路。")
+                                                       .arg(m_capacity), widget());
+            hint->setWordWrap(true);
+            viewLayout()->addWidget(hint);
+        }
         m_definitionStatus = new FluentQt::CaptionLabel(widget());
         m_definitionStatus->setWordWrap(true);
         viewLayout()->addWidget(m_definitionStatus);
@@ -469,11 +479,13 @@ class CanSignalDialog : public AppDialog
         connect(m_id, &FluentQt::ComboBox::currentIndexChanged, this, [this] { showMessage(); });
         connect(m_sample, &QLineEdit::textChanged, this, [this] { parseSampleText(); });
         connect(m_table, &QTableWidget::currentCellChanged, this, [this] { updateSelection(true); });
+        if (m_capacity)
+            connect(m_table, &QTableWidget::itemChanged, this, &CanSignalDialog::selectForBatch);
         connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int row) {
             if (m_editing) {
                 if (m_rows.at(row).line >= 0)
                     editSignal(row);
-            } else if (yesButton()->isEnabled()) {
+            } else if (!m_capacity && yesButton()->isEnabled()) {
                 yesButton()->click();
             }
         });
@@ -518,10 +530,16 @@ class CanSignalDialog : public AppDialog
     {
         if (!m_inlineError.isEmpty() || !m_dbcError.isEmpty())
             return std::nullopt;
+        if (m_framePick && m_connection && m_id->currentIndex() >= 0) {
+            const auto id = currentId();
+            return CanSignalSelection{m_connection->currentData().toString(), Can::idText(id.id, id.extended),
+                                      m_id->currentText()};
+        }
         if (const auto *row = currentRow(); row && m_connection && m_connection->currentIndex() >= 0)
             return CanSignalSelection{m_connection->currentData().toString(), row->key, row->signal.name};
         return std::nullopt;
     }
+    QList<CanSignalSelection> selectedSignals() const { return m_selected; }
 
   protected:
     void resizeEvent(QResizeEvent *event) override
@@ -587,6 +605,8 @@ class CanSignalDialog : public AppDialog
         if (m_dbc) {
             for (const auto &message : m_dbc->messages) {
                 addId(message.id, message.name);
+                if (m_framePick && key == message.name)
+                    preferred = message.id;
                 for (const auto &signal : message.signalDefs)
                     locate(message.id, signal, message.name + QLatin1Char('.') + signal.name);
             }
@@ -595,6 +615,9 @@ class CanSignalDialog : public AppDialog
             addId(entry.id, {});
             locate(entry.id, entry.signal, inlineSignalKey(entry.id, entry.signal.name));
         }
+        if (m_framePick)
+            if (const auto id = Can::parseId(key))
+                preferred = *id;
         {
             const QSignalBlocker blocker(m_id);
             m_id->clear();
@@ -637,6 +660,11 @@ class CanSignalDialog : public AppDialog
                                     sig.motorola ? QStringLiteral("Motorola") : QStringLiteral("Intel"), {}};
             for (int j = 0; j < cells.size(); ++j)
                 m_table->setItem(i, j, new QTableWidgetItem(cells.at(j)));
+            if (m_capacity && m_inlineError.isEmpty() && m_dbcError.isEmpty()) {
+                auto *item = m_table->item(i, 0);
+                item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+                item->setCheckState(selectedIndex(row.key) < 0 ? Qt::Unchecked : Qt::Checked);
+            }
             if (row.key == key || (m_rows.at(selected).key != key && sig.name == key))
                 selected = i;
         }
@@ -706,7 +734,7 @@ class CanSignalDialog : public AppDialog
     void updateSelection(bool locate = false)
     {
         const auto *row = currentRow();
-        showSignalBits(m_bits, m_byteCount, row ? &row->signal : nullptr, m_haveSample ? &m_payload : nullptr,
+        m_bits->setCanSignal(m_byteCount, m_haveSample ? &m_payload : nullptr, row ? &row->signal : nullptr,
                        locate && row ? row->signal.start : -1);
         QString details;
         if (row) {
@@ -728,7 +756,41 @@ class CanSignalDialog : public AppDialog
             m_edit->setEnabled(editable && m_inlineError.isEmpty());
             m_remove->setEnabled(editable);
         }
-        yesButton()->setEnabled(m_editing ? m_inlineError.isEmpty() : bool(selection()));
+        if (m_capacity) {
+            yesButton()->setText(tr("添加 %1 路").arg(m_selected.size()));
+            yesButton()->setEnabled(!m_selected.isEmpty());
+        } else {
+            yesButton()->setEnabled(m_editing ? m_inlineError.isEmpty() : bool(selection()));
+        }
+    }
+
+    qsizetype selectedIndex(const QString &key) const
+    {
+        const auto connection = m_connection->currentData().toString();
+        const auto it = std::find_if(m_selected.cbegin(), m_selected.cend(), [&](const CanSignalSelection &entry) {
+            return entry.connectionId == connection && entry.key == key;
+        });
+        return it == m_selected.cend() ? -1 : it - m_selected.cbegin();
+    }
+
+    void selectForBatch(QTableWidgetItem *item)
+    {
+        if (item->column() != 0)
+            return;
+        const auto &row = m_rows.at(item->row());
+        const auto index = selectedIndex(row.key);
+        if (item->checkState() == Qt::Checked && index < 0) {
+            if (m_selected.size() == m_capacity) {
+                const QSignalBlocker blocked(m_table);
+                item->setCheckState(Qt::Unchecked);
+                return;
+            }
+            m_selected.append({m_connection->currentData().toString(), row.key, row.signal.name});
+        } else if (item->checkState() == Qt::Unchecked && index >= 0) {
+            m_selected.removeAt(index);
+        }
+        m_table->setCurrentCell(item->row(), 0);
+        updateSelection(true);
     }
 
     void editText();
@@ -753,6 +815,9 @@ class CanSignalDialog : public AppDialog
     QList<InlineSignal> m_inline;
     QList<CanId> m_ids;
     QList<Row> m_rows;
+    const int m_capacity;
+    const bool m_framePick;
+    QList<CanSignalSelection> m_selected;
     QString m_inlineText;
     QHash<QString, QString> m_originalKeys;
     QString m_inlineError;
@@ -908,18 +973,191 @@ std::optional<CanSignalSelection> chooseCanSignal(const Project *project, const 
                                                   const QString &connection, const QString &key, QWidget *parent,
                                                   bool onlyCurrentConnection)
 {
-    QList<SignalCard> cards;
-    visitWidgets(widgets, [&](const QJsonObject &widget) {
-        const auto id = widget.value(QStringLiteral("id")).toString();
-        if (widget.value(QStringLiteral("type")).toString() == QLatin1String("CanConfigCard") &&
-            (!onlyCurrentConnection || id == connection))
-            cards.append(signalCard(widget.value(QStringLiteral("properties")).toObject(), id));
-        return true;
-    });
-    CanSignalDialog dialog(project, std::move(cards), connection, key, false, parent);
+    CanSignalDialog dialog(project, signalCards(widgets, onlyCurrentConnection ? connection : QString()),
+                           connection, key, false, parent);
     if (dialog.exec() == QDialog::Accepted)
         return dialog.selection();
     return std::nullopt;
+}
+
+QList<CanSignalSelection> chooseCanSignals(const Project *project, const QJsonArray &widgets,
+                                           const QString &connection, int capacity, QWidget *parent)
+{
+    CanSignalDialog dialog(project, signalCards(widgets), connection, {}, false, parent, capacity);
+    return dialog.exec() == QDialog::Accepted ? dialog.selectedSignals() : QList<CanSignalSelection>{};
+}
+
+std::optional<CanSignalSelection> chooseCanMessage(const Project *project, const QJsonArray &widgets,
+                                                  const QString &connection, const QString &key, QWidget *parent,
+                                                  bool onlyCurrentConnection)
+{
+    CanSignalDialog dialog(project, signalCards(widgets, onlyCurrentConnection ? connection : QString()),
+                           connection, key, false, parent, 0, true);
+    return dialog.exec() == QDialog::Accepted ? dialog.selection() : std::nullopt;
+}
+
+namespace {
+
+FluentQt::TableWidget *pairTable(AppDialog &dialog, const QStringList &columns)
+{
+    auto *table = new FluentQt::TableWidget(dialog.widget());
+    table->setColumnCount(columns.size());
+    table->setHorizontalHeaderLabels(columns);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->verticalHeader()->hide();
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    dialog.viewLayout()->addWidget(table, 1);
+    return table;
+}
+
+void addPair(FluentQt::TableWidget *table, const QString &first, const QString &second)
+{
+    const int row = table->rowCount();
+    table->insertRow(row);
+    table->setItem(row, 0, new QTableWidgetItem(first));
+    table->setItem(row, 1, new QTableWidgetItem(second));
+    table->setCurrentCell(row, 0);
+}
+
+QStringList pairLines(const FluentQt::TableWidget *table, QChar separator)
+{
+    QStringList lines;
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const auto first = table->item(row, 0)->text().trimmed();
+        const auto second = table->item(row, 1)->text().trimmed();
+        lines.append(second.isEmpty() && separator != u'=' ? first : first + separator + second);
+    }
+    return lines;
+}
+
+QString canInitialMappingProblem(const Project *project, const QJsonObject &props,
+                                 const QString &mappingText, const QString &filterText)
+{
+    QString error;
+    const auto filter = CanFilter::parse(filterText, &error);
+    if (!filter || mappingText.trimmed().isEmpty())
+        return error;
+    const auto dbc = designerCanDatabase(project, props.value(QStringLiteral("dbcFile")).toString(), &error);
+    const auto definitions = error.isEmpty()
+        ? CanSignalSet::build(dbc, props.value(QStringLiteral("canSignals")).toString(), &error) : std::nullopt;
+    if (definitions) {
+        if (const auto mapping = CanInitialState::build(*definitions, mappingText, &error))
+            mapping->acceptsFilter(*filter, &error);
+    }
+    return error;
+}
+
+} // namespace
+
+std::optional<QString> editCanInitialMapping(const Project *project, const QJsonObject &card, QWidget *parent)
+{
+    const auto props = card.value(QStringLiteral("properties")).toObject();
+    const auto id = card.value(QStringLiteral("id")).toString();
+    AppDialog dialog(tr("发送初值映射"), parent);
+    dialog.setObjectName(QStringLiteral("canInitialMappingDialog"));
+    dialog.setPreferredSize({720, 435});
+    auto *actions = new QHBoxLayout;
+    auto *frame = new FluentQt::PushButton(tr("添加报文映射…"), dialog.widget());
+    auto *signal = new FluentQt::PushButton(tr("添加信号映射…"), dialog.widget());
+    auto *remove = new FluentQt::PushButton(tr("删除所选"), dialog.widget());
+    actions->addWidget(frame);
+    actions->addWidget(signal);
+    actions->addStretch();
+    actions->addWidget(remove);
+    auto *hint = new FluentQt::CaptionLabel(tr("先选控制端，再选反馈端。双击表格可重新选择。"), dialog.widget());
+    hint->setWordWrap(true);
+    dialog.viewLayout()->addWidget(hint);
+    dialog.viewLayout()->addLayout(actions);
+    auto *table = pairTable(dialog, {tr("控制报文或信号"), tr("反馈报文或信号")});
+    table->setObjectName(QStringLiteral("canInitialMappingRows"));
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    QStringList comments;
+    for (const auto &line : props.value(QStringLiteral("canTxInitialState")).toString().split(u'\n')) {
+        const auto text = line.trimmed();
+        if (text.isEmpty())
+            continue;
+        if (text.startsWith(u'#') || text.startsWith(QLatin1String("//")))
+            comments.append(line);
+        else
+            addPair(table, text.section(u'=', 0, 0).trimmed(), text.section(u'=', 1).trimmed());
+    }
+    const auto pick = [&](bool wholeFrame, int column, const QString &key = {}) -> std::optional<CanSignalSelection> {
+        const QString title = table->horizontalHeaderItem(column)->text();
+        CanSignalDialog picker(project, signalCards({card}, id), id, key, false, &dialog, 0, wholeFrame, title);
+        return picker.exec() == QDialog::Accepted ? picker.selection() : std::nullopt;
+    };
+    const auto append = [&](bool wholeFrame) {
+        const auto control = pick(wholeFrame, 0);
+        if (control)
+            if (const auto feedback = pick(wholeFrame, 1))
+                addPair(table, control->key, feedback->key);
+    };
+    QObject::connect(frame, &QPushButton::clicked, &dialog, [&] { append(true); });
+    QObject::connect(signal, &QPushButton::clicked, &dialog, [&] { append(false); });
+    QObject::connect(remove, &QPushButton::clicked, table, [table] { table->removeRow(table->currentRow()); });
+    QObject::connect(table, &QTableWidget::cellDoubleClicked, &dialog, [&](int row, int column) {
+        const bool wholeFrame = !table->item(row, 0)->text().contains(u'.') && !table->item(row, 1)->text().contains(u'.');
+        auto *entry = table->item(row, column);
+        if (const auto choice = pick(wholeFrame, column, entry->text()))
+            entry->setText(choice->key);
+    });
+    auto *problem = new FluentQt::BodyLabel(dialog.widget());
+    problem->setWordWrap(true);
+    dialog.viewLayout()->addWidget(problem);
+    QString result;
+    dialog.setValidator([&] {
+        result = (comments + pairLines(table, u'=')).join(u'\n');
+        if (table->rowCount() == 0)
+            return true;
+        const auto error = canInitialMappingProblem(project, props, result, props.value(QStringLiteral("canFilter")).toString());
+        problem->setText(error);
+        return error.isEmpty();
+    });
+    return dialog.exec() == QDialog::Accepted ? std::optional(result) : std::nullopt;
+}
+
+std::optional<QString> editCanReceiveFilter(const Project *project, const QJsonObject &card, QWidget *parent)
+{
+    AppDialog dialog(tr("CAN 接收过滤"), parent);
+    dialog.setObjectName(QStringLiteral("canReceiveFilterDialog"));
+    dialog.setPreferredSize({610, 385});
+    auto *actions = new QHBoxLayout;
+    auto *pick = new FluentQt::PushButton(tr("从报文选择…"), dialog.widget());
+    auto *add = new FluentQt::PushButton(tr("添加 ID 或范围"), dialog.widget());
+    auto *remove = new FluentQt::PushButton(tr("删除所选"), dialog.widget());
+    actions->addWidget(pick);
+    actions->addWidget(add);
+    actions->addStretch();
+    actions->addWidget(remove);
+    dialog.viewLayout()->addLayout(actions);
+    auto *table = pairTable(dialog, {tr("起始 ID"), tr("结束 ID（可空）")});
+    const auto props = card.value(QStringLiteral("properties")).toObject();
+    const auto filterText = props.value(QStringLiteral("canFilter")).toString().replace(u'，', u','); // i18n: ignore
+    for (const auto &row : filterText
+             .split(QRegularExpression(QStringLiteral("[,;\\s]+")), Qt::SkipEmptyParts))
+        addPair(table, row.section(u'-', 0, 0), row.section(u'-', 1));
+    QObject::connect(pick, &QPushButton::clicked, &dialog, [&] {
+        if (const auto frame = chooseCanMessage(project, {card}, card.value(QStringLiteral("id")).toString(), {}, &dialog, true))
+            addPair(table, frame->key, {});
+    });
+    QObject::connect(add, &QPushButton::clicked, &dialog, [table] {
+        addPair(table, {}, {});
+        table->editItem(table->currentItem());
+    });
+    QObject::connect(remove, &QPushButton::clicked, table, [table] { table->removeRow(table->currentRow()); });
+    auto *problem = new FluentQt::BodyLabel(dialog.widget());
+    dialog.viewLayout()->addWidget(problem);
+    QString result;
+    dialog.setValidator([&] {
+        auto rows = pairLines(table, u'-');
+        rows.removeAll(QString());
+        result = rows.join(QStringLiteral(", "));
+        const auto error = canInitialMappingProblem(project, props, props.value(QStringLiteral("canTxInitialState")).toString(), result);
+        problem->setText(error);
+        return error.isEmpty();
+    });
+    return dialog.exec() == QDialog::Accepted ? std::optional(result) : std::nullopt;
 }
 
 } // namespace fhmi

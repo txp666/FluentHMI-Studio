@@ -1,4 +1,5 @@
 #include "runtime/widgets/can_widgets.h"
+#include "runtime/receive_frame_preview.h"
 #include "comm/can/can_discovery.h"
 #include "runtime/app_dialog.h"
 #include "runtime/can_recorder.h"
@@ -663,6 +664,14 @@ class CanMonitorModel : public QAbstractTableModel
 
     using QAbstractTableModel::QAbstractTableModel;
 
+    void inspect(int row, QWidget *parent, SaveReceivedBinding save) const
+    {
+        if (row >= 0 && row < m_rows.size()) {
+            const auto &record = m_rows.at(row);
+            openCanPacketPreview(record.frame, record.signalSet, record.source, parent, std::move(save));
+        }
+    }
+
     // Whether row `row` passes the filter row; an empty ID filter takes every ID.
     bool matches(int row, const CanFilter &idFilter, TypeFilter type) const
     {
@@ -1233,6 +1242,19 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_autoScroll = new FluentQt::CheckBox(tr("自动滚动"), this);
     m_autoScroll->setObjectName(QStringLiteral("canAutoScroll"));
     toolbar->addWidget(m_autoScroll);
+    auto *inspect = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Search), this);
+    inspect->setObjectName(QStringLiteral("inspectCanPacket"));
+    fluentToolTip(inspect, tr("试解析所选"));
+    inspect->setEnabled(false);
+    toolbar->addWidget(inspect);
+    const auto inspectRow = [this](const QModelIndex &index) {
+        m_model->inspect(m_sorted->mapToSource(index).row(), window(), context() ? context()->receivePointAction()
+                                                                                : SaveReceivedBinding{});
+    };
+    connect(inspect, &QToolButton::clicked, this, [this, inspectRow] { inspectRow(m_view->currentIndex()); });
+    connect(m_view, &QTableView::doubleClicked, this, inspectRow);
+    connect(m_view->selectionModel(), &QItemSelectionModel::currentChanged, inspect,
+            [inspect](const QModelIndex &index) { inspect->setEnabled(index.isValid()); });
     auto *save = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Save), this);
     save->setObjectName(QStringLiteral("canExportCsv"));
     fluentToolTip(save, tr("导出当前筛选后的报文 (CSV)"));

@@ -412,7 +412,7 @@ def type_tables(rows, groups):
             if entry["mode"] == "flags":
                 bits = [f"位 {n} {label}" for n, label in enumerate(entry["flags"])]
                 states = "，".join([f"0 {entry['clearLabel']}", *bits])
-            span = {"word": "8 或 16 位", "timing": "8 或 16 位", "encoder": "带符号整数",
+            span = {"word": "8 或 16 位", "timing": "状态字 8 或 16 位，逐路绑定 1–32 路", "encoder": "带符号整数",
                     "cells": "电压数组", "supply": "电源反馈对象"}.get(entry["mode"],
                                                               f"{entry['minimum']}…{entry['maximum']}")
             sample = {"cells": "[3.692, 3.701, …]", "supply": "12.00 V、0.425 A、CV"}.get(entry["mode"], entry["value"])

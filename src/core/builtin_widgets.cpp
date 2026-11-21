@@ -3,6 +3,7 @@
 #include "core/industrial_catalog.h"
 
 #include "core/binding.h"
+#include "core/chart_limits.h"
 #include "core/command_encoder.h"
 #include "core/manual_command.h"
 
@@ -506,13 +507,14 @@ QList<WidgetMeta> displayWidgets()
 
 QList<PropDef> chartSeriesProperties(bool timing)
 {
+    const int limit = timing ? MaxTimingChannels : MaxRealtimeCurves;
     const QStringList modes = timing
         ? QStringList{ParseMode::None, ParseMode::CanField, ParseMode::CanSignal, ParseMode::DataPoint}
         : QStringList{ParseMode::None, ParseMode::DataPoint, ParseMode::KeyValue, ParseMode::JsonPath,
                       ParseMode::HexBytes, ParseMode::Modbus, ParseMode::CanField, ParseMode::CanSignal, ParseMode::S7};
     QList<PropDef> properties{
-        integer(QStringLiteral("curveCount"), timing ? QT_TR_NOOP("通道数量") : QT_TR_NOOP("曲线数量"), 1, 1, 8),
-        integer(QStringLiteral("currentCurve"), timing ? QT_TR_NOOP("当前编辑通道") : QT_TR_NOOP("当前编辑曲线"), 0, 0, 7),
+        integer(QStringLiteral("curveCount"), timing ? QT_TR_NOOP("通道数量") : QT_TR_NOOP("曲线数量"), 1, 1, limit),
+        integer(QStringLiteral("currentCurve"), timing ? QT_TR_NOOP("当前编辑通道") : QT_TR_NOOP("当前编辑曲线"), 0, 0, limit - 1),
         str(QStringLiteral("curveName"), timing ? QT_TR_NOOP("通道名称") : QT_TR_NOOP("曲线名称"),
             timing ? QString() : QStringLiteral("曲线1")), // i18n: value
         choice(QStringLiteral("curveParseMode"), timing ? QT_TR_NOOP("信号来源") : QT_TR_NOOP("解析模式"),

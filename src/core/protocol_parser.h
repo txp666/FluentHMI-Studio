@@ -85,6 +85,7 @@ struct DecodedRecord
 {
     Message values;
     qsizetype end; // bytes through the end of this record in the current input
+    QByteArray frame = {}; // Complete ADU when the decoder itself buffered input across reads.
 };
 
 // Incremental frame parsers, in two steps. frames() cuts the bytes a link read into complete
@@ -112,8 +113,8 @@ class Parser
     virtual void reset() = 0;
 };
 
-// Frames raw widget bindings when both delimiters are configured. Without both, the read
-// chunk stays the input unit: one widget's byte offset cannot imply a packet length.
+// Frames raw bindings when both delimiters are configured. Otherwise, the read chunk
+// stays the input unit and a configured header filters unrelated chunks.
 class RawFrameBuffer
 {
   public:

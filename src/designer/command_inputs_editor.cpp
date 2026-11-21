@@ -1,4 +1,6 @@
 #include "designer/command_inputs_editor.h"
+
+#include <QtCore/QUuid>
 #include "core/project.h"
 #include "core/frame_templates.h"
 #include "runtime/frame_bytes_view.h"
@@ -458,10 +460,7 @@ FrameFieldInputsEditor::FrameFieldInputsEditor(const QJsonArray &bindings, Input
     });
     connect(m_create, &QPushButton::clicked, this, [this] {
         const QString name = m_fields.value(m_table->currentRow());
-        QString id;
-        do {
-            id = QStringLiteral("@frameInput%1").arg(++m_nextInput);
-        } while (m_existing.contains(id));
+        const QString id = QStringLiteral("@frameInput-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
         m_pending.insert(id, name);
         m_bindings.insert(name, {{QStringLiteral("field"), name}, {QStringLiteral("inputId"), id}});
         populate();

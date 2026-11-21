@@ -3,8 +3,10 @@
 #include "core/frame_templates.h"
 
 #include "core/binding.h"
+#include "core/can_signal.h"
 #include "core/i18n.h"
 #include "core/protocol_parser.h"
+#include "runtime/bit_map_view.h"
 #include "runtime/frame_bytes_view.h"
 #include "runtime/app_dialog.h"
 
@@ -103,7 +105,7 @@ struct DecodedSpan
     QString fieldName = {};
 };
 
-enum TableRole { SpanKeyRole = Qt::UserRole, BindableFieldRole, JsonPathRole, HexFieldIndexRole };
+enum TableRole { SpanKeyRole = Qt::UserRole, BindableFieldRole, JsonPathRole, HexFieldIndexRole, SupportsJsonPathRole };
 
 QList<DecodedSpan> decodeSpans(const HexFrameConfig &config, const QByteArray &frame, const Message &values,
                                HexFrameParser::Issue issue, bool showConfiguredFields)
@@ -233,25 +235,16 @@ ReceivePreview *addScrollablePreview(AppDialog *dialog, bool binary)
     return preview;
 }
 
-void appendTextFields(QTableWidget *table, const QString &path, const QVariant &value, bool json)
+void appendTextField(QTableWidget *table, const TextFieldValue &field)
 {
     const int row = table->rowCount();
     table->insertRow(row);
-    auto *key = new QTableWidgetItem(path);
-    key->setData(BindableFieldRole, path);
-    key->setData(JsonPathRole, json);
+    auto *key = new QTableWidgetItem(field.path);
+    key->setData(BindableFieldRole, field.path);
+    key->setData(JsonPathRole, field.nested);
+    key->setData(SupportsJsonPathRole, field.supportsJsonPath());
     table->setItem(row, 0, key);
-    table->setItem(row, 1, new QTableWidgetItem(displayString(value)));
-    if (value.typeId() == QMetaType::QVariantMap) {
-        const auto fields = value.toMap();
-        for (auto it = fields.cbegin(); it != fields.cend(); ++it)
-            if (!it.key().isEmpty() && !it.key().contains(u'.'))
-                appendTextFields(table, path + u'.' + it.key(), it.value(), true);
-    } else if (value.typeId() == QMetaType::QVariantList) {
-        const auto fields = value.toList();
-        for (qsizetype i = 0; i < fields.size(); ++i)
-            appendTextFields(table, path + u'.' + QString::number(i), fields.at(i), true);
-    }
+    table->setItem(row, 1, new QTableWidgetItem(displayString(field.value)));
 }
 
 } // namespace
@@ -635,8 +628,8 @@ void ReceivePreview::refreshText()
                 if (decoded.isValid())
                     value = decoded;
             }
-            for (auto field = message.constBegin(); field != message.constEnd(); ++field)
-                appendTextFields(m_table, field.key(), field.value(), false);
+            for (const auto &field : textFieldValues(message))
+                appendTextField(m_table, field);
         }
     }
     m_status->setText(!error.isEmpty() ? error : m_table->rowCount() > 0
@@ -649,7 +642,8 @@ void ReceivePreview::refreshText()
     const auto field = path ? m_binding->jsonPath : m_binding->key;
     for (int row = 0; row < m_table->rowCount(); ++row) {
         const auto *item = m_table->item(row, 0);
-        if (item->text() == field && (path || !item->data(JsonPathRole).toBool())) {
+        const bool matchesMode = path ? item->data(SupportsJsonPathRole).toBool() : !item->data(JsonPathRole).toBool();
+        if (item->text() == field && matchesMode) {
             markBindingRow(row);
             break;
         }
@@ -785,6 +779,292 @@ void openReceiveTextPreview(const QJsonObject &settings, QWidget *parent, const 
     preview->setSample(sample);
     addSaveAction(dialog, preview, std::move(saveField));
     dialog->open();
+}
+
+namespace {
+
+AppDialog *packetDialog(const QString &title, const QString &sample, const DataSource &source, QWidget *parent)
+{
+    auto *dialog = new AppDialog(title, parent);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setPreferredSize(QSize(840, 510));
+    dialog->hideCancelButton();
+    dialog->yesButton()->setText(tr("关闭"));
+    auto *origin = new FluentQt::CaptionLabel(source.endpoint.isEmpty() ? source.connectionId
+        : source.connectionId + QStringLiteral(" · ") + source.endpoint, dialog);
+    origin->setWordWrap(true);
+    dialog->viewLayout()->addWidget(origin);
+    auto *raw = new FluentQt::LineEdit(dialog);
+    raw->setReadOnly(true);
+    raw->setAccessibleName(tr("样例报文"));
+    raw->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    raw->setText(sample);
+    dialog->viewLayout()->addWidget(raw);
+    return dialog;
+}
+
+FluentQt::TableWidget *packetTable(const QStringList &columns, QWidget *parent)
+{
+    auto *table = new FluentQt::TableWidget(parent);
+    table->setColumnCount(columns.size());
+    table->setHorizontalHeaderLabels(columns);
+    table->verticalHeader()->hide();
+    table->verticalHeader()->setDefaultSectionSize(29);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setShowGrid(false);
+    return table;
+}
+
+void packetRow(FluentQt::TableWidget *table, const QStringList &cells)
+{
+    const int row = table->rowCount();
+    table->insertRow(row);
+    for (int column = 0; column < cells.size(); ++column)
+        table->setItem(row, column, new QTableWidgetItem(cells.at(column)));
+}
+
+void addPacketSaveAction(AppDialog *dialog, QTableWidget *table, SaveReceivedBinding action)
+{
+    if (!action)
+        return;
+    bool canSave = false;
+    for (int row = 0; row < table->rowCount() && !canSave; ++row)
+        canSave = table->item(row, 0)->data(Qt::UserRole).isValid();
+    if (!canSave)
+        return;
+    auto *save = new FluentQt::PushButton(tr("将所选字段保存为数据点"), dialog->buttonGroup());
+    save->setObjectName(QStringLiteral("saveReceivedField"));
+    dialog->buttonLayout()->insertWidget(0, save, 0, Qt::AlignVCenter);
+    const auto update = [save, table] {
+        const auto *item = table->item(table->currentRow(), 0);
+        save->setEnabled(item && item->data(Qt::UserRole).isValid());
+    };
+    update();
+    QObject::connect(table, &QTableWidget::currentCellChanged, save, update);
+    QObject::connect(save, &QPushButton::clicked, dialog, [dialog, table, action = std::move(action)] {
+        auto *item = table->item(table->currentRow(), 0);
+        const auto binding = item->data(Qt::UserRole).toJsonObject();
+        const auto name = item->text();
+        QObject::connect(dialog, &QDialog::accepted, dialog, [action, binding, name] { action(binding, name); },
+                         Qt::SingleShotConnection);
+        dialog->accept();
+    });
+}
+
+} // namespace
+
+void openCanPacketPreview(const CanFrame &frame, std::shared_ptr<const CanSignalSet> definitions,
+                          const DataSource &source, QWidget *parent, SaveReceivedBinding save)
+{
+    const QString id = Can::idText(frame.id, frame.extended);
+    auto *dialog = packetDialog(tr("CAN 报文试解析 · %1").arg(id), Can::frameLine(frame), source, parent);
+    dialog->setObjectName(QStringLiteral("canPacketPreview"));
+    auto *bits = new BitMapView(dialog);
+    bits->setObjectName(QStringLiteral("canPacketBits"));
+    const bool hasPayload = !frame.rtr && !frame.error;
+    const auto target = definitions && hasPayload ? definitions->target(id) : std::nullopt;
+    auto *table = packetTable({tr("信号"), tr("起始位"), tr("位长度"), tr("解析值")}, dialog);
+    const Message decoded = target ? definitions->decode(frame) : Message{};
+    const auto fields = target ? target->signalDefs : QList<const CanSignalDef *>{};
+    for (const auto *signal : fields) {
+        const QVariant value = decoded.value(signal->name);
+        const auto text = value.isValid() ? value.toString() + (signal->unit.isEmpty() ? QString()
+                                                          : u' ' + signal->unit) : QStringLiteral("—");
+        packetRow(table, {signal->name, QString::number(signal->start), QString::number(signal->length), text});
+        if (save && value.isValid() && !source.connectionId.isEmpty()) {
+            const auto key = (target->name.isEmpty() ? id : target->name) + u'.' + signal->name;
+            table->item(table->rowCount() - 1, 0)->setData(Qt::UserRole, QJsonObject{
+                {QStringLiteral("parseMode"), ParseMode::CanField}, {QStringLiteral("key"), key},
+                {QStringLiteral("sourceCardId"), source.connectionId}});
+        }
+    }
+    auto *content = new QHBoxLayout;
+    if (hasPayload)
+        content->addWidget(bits, 1);
+    else
+        bits->hide();
+    if (!fields.isEmpty()) {
+        content->addWidget(table, 1);
+        table->setAccessibleName(tr("信号列表"));
+    } else {
+        table->hide();
+        dialog->viewLayout()->addWidget(new FluentQt::BodyLabel(
+            hasPayload ? tr("该报文 ID 没有信号定义") : tr("远程帧或错误帧没有可解析的数据"), dialog));
+    }
+    dialog->viewLayout()->addLayout(content, 1);
+    const auto showSignal = [bits, fields, definitions = std::move(definitions), payload = frame.data](int row) {
+        const auto *signal = fields.value(row);
+        bits->setCanSignal(payload.size(), &payload, signal, signal ? signal->start : -1);
+    };
+    QObject::connect(table, &QTableWidget::currentCellChanged, bits, showSignal);
+    QObject::connect(bits, &BitMapView::bitClicked, table, [table, fields](int bit) {
+        const int current = table->currentRow();
+        if (current >= 0 && fields.at(current)->bitPositions().contains(bit))
+            return;
+        for (int row = 0; row < fields.size(); ++row) {
+            if (fields.at(row)->bitPositions().contains(bit)) {
+                table->setCurrentCell(row, 0);
+                return;
+            }
+        }
+    });
+    showSignal(-1);
+    if (!fields.isEmpty())
+        table->setCurrentCell(0, 0);
+    addPacketSaveAction(dialog, table, std::move(save));
+    dialog->open();
+}
+
+void openModbusPacketPreview(const QByteArray &packet, const QString &parser, bool request, const Message &decoded,
+                             const DataSource &source, QWidget *parent, SaveReceivedBinding save)
+{
+    const bool tcp = parser == QLatin1String("modbus_tcp");
+    const bool ascii = parser == QLatin1String("modbus_ascii");
+    const QString protocol = tcp ? QStringLiteral("Modbus TCP") : ascii ? QStringLiteral("Modbus ASCII")
+                                                                       : QStringLiteral("Modbus RTU");
+    auto *dialog = packetDialog(protocol + QStringLiteral(" · ") + (request ? tr("请求") : tr("响应")),
+                                ascii ? QString::fromLatin1(packet).trimmed() : toHexString(packet), source, parent);
+    dialog->setObjectName(QStringLiteral("modbusPacketPreview"));
+    dialog->setPreferredSize(QSize(860, 585));
+    const QByteArray bytes = ascii ? parseHex(QString::fromLatin1(packet).trimmed().mid(1)).value_or(QByteArray{}) : packet;
+    const int start = tcp ? 6 : 0;
+    const int end = bytes.size() - (tcp ? 0 : ascii ? 1 : 2);
+    const auto word = [&bytes](int offset) { return int(qFromBigEndian<quint16>(bytes.constData() + offset)); };
+    const bool valid = end >= start + 2 && (tcp ? word(2) == 0 && word(4) == end - start
+        : ascii ? modbusAsciiBody(packet).has_value() : modbusCrc(packet.left(end)) == packet.right(2));
+    if (!valid) {
+        dialog->viewLayout()->addWidget(new FluentQt::BodyLabel(tr("报文尚不完整或校验未通过"), dialog));
+        dialog->open();
+        return;
+    }
+
+    auto *diagram = new FrameBytesView(dialog);
+    diagram->setMinimumHeight(86);
+    auto *table = packetTable({tr("字段"), tr("字节"), tr("解析值")}, dialog);
+    QList<FrameByteSpan> spans;
+    const auto add = [&](const QString &label, int offset, int length, const QString &value, FrameByteKind kind) {
+        packetRow(table, {label, toHexString(bytes.mid(offset, length)), value});
+        spans.append({QString::number(table->rowCount() - 1), label, offset, length, kind});
+    };
+    if (tcp) {
+        add(tr("事务 ID"), 0, 2, QString::number(word(0)), FrameByteKind::Header);
+        add(tr("协议 ID"), 2, 2, QString::number(word(2)), FrameByteKind::Header);
+        add(tr("长度"), 4, 2, QString::number(word(4)), FrameByteKind::Length);
+    }
+    const int unit = quint8(bytes.at(start));
+    const int fc = quint8(bytes.at(start + 1));
+    add(tr("从站地址"), start, 1, QString::number(unit), FrameByteKind::Field);
+    add(tr("功能码"), start + 1, 1, QStringLiteral("0x%1").arg(fc, 2, 16, u'0').toUpper(), FrameByteKind::Fixed);
+    const int body = start + 2;
+    int data = body;
+    if (end >= body + 4 && ((request && fc >= 1 && fc <= 4) || fc == 5 || fc == 6 || fc == 15 || fc == 16)) {
+        add(tr("起始地址"), data, 2, QString::number(word(data)), FrameByteKind::Field);
+        add((fc == 5 || fc == 6) ? tr("写入值") : tr("数量"), data + 2, 2, QString::number(word(data + 2)),
+            FrameByteKind::Field);
+        data += 4;
+    }
+    const bool registers = !request && (fc == 3 || fc == 4 || fc == 23) && body < end &&
+                           quint8(bytes.at(body)) == end - body - 1 && (end - body) % 2 == 1;
+    const bool writeRegisters = request && fc == 16 && data < end &&
+                                quint8(bytes.at(data)) == end - data - 1 && (end - data) % 2 == 1;
+    const bool coils = !request && (fc == 1 || fc == 2) && body + 1 < end && quint8(bytes.at(body)) == end - body - 1;
+    const auto area = fc == 1 ? QStringLiteral("线圈") : fc == 2 ? QStringLiteral("离散输入") // i18n: value
+                    : fc == 4 ? QStringLiteral("输入寄存器") : ModbusArea::HoldingRegisters; // i18n: value
+    const auto prefix = ModbusArea::prefix(area);
+    const auto rememberAddress = [&](int address) {
+        if (!save || request || source.connectionId.isEmpty() ||
+            !decoded.contains(prefix + QString::number(address)))
+            return;
+        table->item(table->rowCount() - 1, 0)->setData(Qt::UserRole, QJsonObject{
+            {QStringLiteral("parseMode"), ParseMode::Modbus}, {QStringLiteral("sourceCardId"), source.connectionId},
+            {QStringLiteral("sourceEndpoint"), source.endpoint}, {QStringLiteral("mbArea"), area},
+            {QStringLiteral("mbRegIndex"), address}, {QStringLiteral("mbSlaveFilter"), unit}});
+    };
+    int firstValue = -1;
+    int coilCount = 0;
+    QByteArray coilBytes;
+    if (registers || writeRegisters) {
+        const auto address = writeRegisters ? QVariant(word(body)) : decoded.value(QStringLiteral("start"));
+        add(tr("数据字节数"), data, 1, QString::number(quint8(bytes.at(data))), FrameByteKind::Length);
+        firstValue = table->rowCount();
+        for (int i = data + 1, index = 0; i < end; i += 2, ++index) {
+            const QString key = address.isValid()
+                ? prefix.toUpper() + QString::number(address.toInt() + index)
+                : tr("寄存器值 %1").arg(index + 1);
+            add(key, i, 2, QString::number(word(i)), FrameByteKind::Field);
+            if (address.isValid())
+                rememberAddress(address.toInt() + index);
+        }
+        data = end;
+    } else if (coils) {
+        const auto address = decoded.value(QStringLiteral("start"));
+        const int capacity = (end - body - 1) * 8;
+        coilCount = capacity;
+        if (address.isValid()) {
+            coilCount = 0;
+            while (coilCount < capacity && decoded.contains(prefix + QString::number(address.toInt() + coilCount)))
+                ++coilCount;
+        }
+        coilBytes = bytes.mid(body + 1, end - body - 1);
+        add(tr("数据字节数"), body, 1, QString::number(coilBytes.size()), FrameByteKind::Length);
+        firstValue = table->rowCount();
+        for (int bit = 0; bit < coilCount; ++bit) {
+            const auto key = address.isValid() ? prefix.toUpper() + QString::number(address.toInt() + bit)
+                                               : tr("位 %1").arg(bit);
+            const int value = (quint8(coilBytes.at(bit / 8)) >> (bit % 8)) & 1;
+            add(key, body + 1 + bit / 8, 1, QString::number(value), FrameByteKind::Field);
+            if (address.isValid())
+                rememberAddress(address.toInt() + bit);
+        }
+        data = end;
+    } else if (!request && fc >= 0x80 && data + 1 == end) {
+        add(tr("异常码"), data, 1, QString::number(quint8(bytes.at(data))), FrameByteKind::Field);
+        data = end;
+    }
+    if (data < end)
+        add(tr("数据"), data, end - data, {}, FrameByteKind::Data);
+    if (!tcp)
+        add(ascii ? QStringLiteral("LRC") : QStringLiteral("CRC16"), end, bytes.size() - end,
+            tr("校验通过"), FrameByteKind::Checksum);
+    diagram->setFrame(bytes, spans, {});
+    QObject::connect(table, &QTableWidget::currentCellChanged, diagram, [diagram](int row) {
+        diagram->selectPart(QString::number(row));
+    });
+    QObject::connect(diagram, &FrameBytesView::partClicked, table, [table](const QString &key) {
+        table->setCurrentCell(key.toInt(), 0);
+    });
+    dialog->viewLayout()->addWidget(diagram);
+    if (coilCount > 0) {
+        auto *content = new QHBoxLayout;
+        auto *bitmap = new BitMapView(dialog);
+        bitmap->setObjectName(QStringLiteral("modbusPacketBits"));
+        content->addWidget(bitmap, 1);
+        content->addWidget(table, 1);
+        dialog->viewLayout()->addLayout(content, 1);
+        const auto showBit = [bitmap, firstValue, coilCount, coilBytes](int row) {
+            const int bit = row - firstValue;
+            const QList<BitRange> marked = bit >= 0 && bit < coilCount
+                ? QList<BitRange>{{bit, 1, frameByteColor(FrameByteKind::Field, 1)}} : QList<BitRange>{};
+            bitmap->setBits(coilBytes.size(), &coilBytes, marked, marked.isEmpty() ? -1 : bit);
+        };
+        QObject::connect(table, &QTableWidget::currentCellChanged, bitmap, showBit);
+        QObject::connect(bitmap, &BitMapView::bitClicked, table, [table, firstValue, coilCount](int bit) {
+            if (bit < coilCount)
+                table->setCurrentCell(firstValue + bit, 0);
+        });
+        showBit(-1);
+    } else {
+        dialog->viewLayout()->addWidget(table, 1);
+    }
+    addPacketSaveAction(dialog, table, std::move(save));
+    dialog->open();
+    if (firstValue >= 0 && firstValue < table->rowCount()) {
+        table->setCurrentCell(firstValue, 0);
+        table->scrollTo(table->currentIndex());
+    }
 }
 
 } // namespace fhmi

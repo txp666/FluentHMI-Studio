@@ -1,5 +1,6 @@
 #include "core/project_logic.h"
 #include "core/binding.h"
+#include "core/chart_limits.h"
 #include "core/command_encoder.h"
 #include "core/expression.h"
 #include "core/frame_templates.h"
@@ -8,6 +9,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QJsonArray>
 #include <QtCore/QSet>
+#include <algorithm>
 #include <cmath>
 
 namespace fhmi {
@@ -42,7 +44,8 @@ QJsonArray renameWidgetReferences(QJsonArray widgets, const QString &previous, c
         auto props = widget.value(QStringLiteral("properties")).toObject();
         const QString type = widget.value(QStringLiteral("type")).toString();
         if (type == QLatin1String("RealtimeChart") || isTimingChart(type)) {
-            for (int curve = 0; curve < 8; ++curve) {
+            const int limit = isTimingChart(type) ? MaxTimingChannels : MaxRealtimeCurves;
+            for (int curve = 0; curve < limit; ++curve) {
                 const QString prefix = QStringLiteral("_curve_%1_").arg(curve);
                 if (props.value(prefix + QStringLiteral("parseMode")).toString() == ParseMode::DataPoint &&
                     props.value(prefix + QStringLiteral("key")).toString() == previous)
@@ -53,6 +56,9 @@ QJsonArray renameWidgetReferences(QJsonArray widgets, const QString &previous, c
             props.insert(QStringLiteral("parameterName"), current);
         if (type == QLatin1String("PushButton"))
             CommandEncoder::mapInputIds(props, [&](const QString &id) { return renamesInput(id) ? pointInputId(current) : id; });
+        for (const auto &key : {S7WritePoint, ModbusWritePoint})
+            if (props.value(key).toString() == previous)
+                props.insert(key, current);
         if (type == QLatin1String("DataTable") &&
             props.value(QStringLiteral("recordSource")).toString() == QLatin1String("points")) {
             if (props.value(QStringLiteral("recordTriggerPoint")).toString() == previous)
@@ -157,7 +163,96 @@ QJsonObject findDataPoint(const QJsonObject &logic, const QString &name)
     return {};
 }
 
+QString writePointKey(QStringView mode)
+{
+    if (mode == QLatin1String("S7"))
+        return S7WritePoint;
+    if (mode == QLatin1String("Modbus"))
+        return ModbusWritePoint;
+    return {};
+}
+
+std::optional<QJsonObject> resolvePointWrite(const QJsonObject &props, const QJsonObject &logic,
+    const QJsonArray &widgets, const QString &projectParser, QString *error, QStringView widgetType,
+    ModbusParserChoice parserChoice)
+{
+    const auto mode = props.value(QStringLiteral("commandMode")).toString();
+    const auto key = writePointKey(mode);
+    const auto name = key.isEmpty() ? QString() : props.value(key).toString();
+    if (name.isEmpty())
+        return props;
+    const auto fail = [&](const QString &reason) -> std::optional<QJsonObject> {
+        if (error)
+            *error = tr("数据点 %1 · %2").arg(name, reason);
+        return std::nullopt;
+    };
+    const auto point = findDataPoint(logic, name);
+    if (!isDeviceDataPoint(point))
+        return fail(tr("请选择同一协议的可写设备数据点"));
+    const auto binding = BindingEntry::fromWidget(
+        {{QStringLiteral("type"), QStringLiteral("NumericDisplay")},
+         {QStringLiteral("binding"), point.value(QStringLiteral("binding"))}});
+    if (!binding || binding->parseMode != mode)
+        return fail(tr("请选择同一协议的可写设备数据点"));
+    QString problem;
+    const auto route = resolveProjectRoute(widgets, projectParser, bindingRouteTransport(mode), binding->route(),
+                                           RoutePurpose::DataPoint, &problem, parserChoice);
+    if (!route || route->connectionId.isEmpty())
+        return fail(problem.isEmpty() ? tr("请选择来源连接") : problem);
+    auto output = props;
+    output.insert(QStringLiteral("commandTargetId"), route->connectionId);
+    output.insert(QStringLiteral("commandEndpoint"), route->endpoint);
+    if (mode == QLatin1String("S7")) {
+        if (!binding->s7 || binding->s7->address.area == S7::MemoryArea::Input)
+            return fail(tr("S7 输入区 I 只读，请选择 DB、M 或 Q 写入"));
+        auto command = output.value(QStringLiteral("s7Command")).toObject();
+        command.insert(QStringLiteral("address"), binding->s7->address.canonical);
+        command.insert(QStringLiteral("dataType"), binding->s7->type.name);
+        output.insert(QStringLiteral("s7Command"), command);
+        return output;
+    }
+
+    const auto area = ModbusArea::prefix(binding->mbArea);
+    if (widgetType == u"ToggleSwitch")
+        output.insert(QStringLiteral("mbArea"), binding->mbArea);
+    const int function = CommandEncoder::sendRouteFilter(output, widgetType).modbus->function;
+    if ((function == 5 && area != QLatin1String("co")) ||
+        ((function == 6 || function == 16) && area != QLatin1String("hr")) ||
+        (function != 5 && function != 6 && function != 16))
+        return fail(tr("请选择与写入功能匹配的线圈或保持寄存器"));
+    QJsonObject connection;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        if (widget.value(QStringLiteral("id")).toString() != route->connectionId)
+            return true;
+        connection = widget.value(QStringLiteral("properties")).toObject();
+        // A Modbus response topic identifies received data, not the publish destination.
+        if (widget.value(QStringLiteral("type")).toString() == QLatin1String("MqttConfigCard"))
+            output.remove(QStringLiteral("commandEndpoint"));
+        return false;
+    });
+    if (binding->mbSlaveFilter < -1 || binding->mbSlaveFilter == 0 || binding->mbSlaveFilter > 247)
+        return fail(tr("写入对象的从站地址须为 1–247，或跟随连接的默认从站"));
+    const int slave = binding->mbSlaveFilter == -1
+        ? std::clamp(connection.value(QStringLiteral("modbusSlave")).toInt(1), 1, 247) : binding->mbSlaveFilter;
+    output.insert(QStringLiteral("mbSlave"), slave);
+    output.insert(QStringLiteral("mbAddress"), binding->mbRegIndex);
+    output.insert(QStringLiteral("mbDataType"), binding->mbDataType);
+    output.insert(QStringLiteral("mbRegOrder"), binding->mbRegOrder);
+    if (function != 5 && !CommandEncoder::modbusFunctionSpec(function).dataTypes.contains(binding->mbDataType))
+        return fail(tr("数据点的类型需要使用写多个寄存器"));
+    const auto inputs = CommandEncoder::commandInputs(output);
+    if (function == 16 && !inputs.isEmpty() && inputs.first().dataType != binding->mbDataType)
+        return fail(tr("写入列表首项的数据类型应为 %1").arg(binding->mbDataType));
+    return output;
+}
+
 bool isProjectParameter(const QJsonObject &point) { return point.contains(QStringLiteral("initialValue")); }
+
+bool isDeviceDataPoint(const QJsonObject &point)
+{
+    return point.value(QStringLiteral("binding")).isObject() && !isProjectParameter(point) &&
+           point.value(QStringLiteral("expression")).toString().trimmed().isEmpty();
+}
 
 QString dataPointCommandText(const QVariant &value)
 {
@@ -195,7 +290,8 @@ QString widgetIdForInput(const QString &id)
     return id.startsWith(WidgetPrefix) ? id.mid(WidgetPrefix.size()) : id;
 }
 
-QString dataPointSourceProblem(const QJsonObject &binding, const QJsonArray &widgets, const QString &projectParser)
+QString dataPointSourceProblem(const QJsonObject &binding, const QJsonArray &widgets, const QString &projectParser,
+                              ModbusParserChoice parserChoice)
 {
     const auto entry = BindingEntry::fromWidget(
         {{QStringLiteral("type"), QStringLiteral("NumericDisplay")}, {QStringLiteral("binding"), binding}});
@@ -203,7 +299,7 @@ QString dataPointSourceProblem(const QJsonObject &binding, const QJsonArray &wid
         return tr("来源绑定不完整");
     QString problem;
     resolveProjectRoute(widgets, projectParser, bindingRouteTransport(entry->parseMode), entry->route(),
-                        RoutePurpose::DataPoint, &problem);
+                        RoutePurpose::DataPoint, &problem, parserChoice);
     return problem;
 }
 
@@ -263,8 +359,10 @@ QStringList dataPointReferences(const Project &project, const QString &name)
         const auto id = widget.value(QStringLiteral("id")).toString();
         if (boundToPoint(widget.value(QStringLiteral("binding")).toObject()))
             references.append(tr("%1 · 控件绑定").arg(id));
+        if (props.value(S7WritePoint).toString() == name || props.value(ModbusWritePoint).toString() == name)
+            references.append(tr("%1 · 写入地址").arg(id));
         if (usesChartSeries(type, props)) {
-            for (int curve = 0; curve < chartCurveCount(props); ++curve)
+            for (int curve = 0; curve < chartCurveCount(type, props); ++curve)
                 if (boundToPoint(chartCurveBinding(props, curve)))
                     references.append((isTimingChart(type) ? tr("%1 · 通道 %2") : tr("%1 · 曲线 %2"))
                                           .arg(id).arg(curve + 1));

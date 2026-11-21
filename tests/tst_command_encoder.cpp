@@ -298,7 +298,31 @@ class TestCommandEncoder : public QObject
         QCOMPARE(preview.fields.at(1).offset, 6);
         QCOMPARE(result.command->inputValues.at(1).value, speed);
         QCOMPARE(FrameTemplates::sendFields(library, props).size(), 3); // The computed length is read-only.
+        const auto manual = CommandEncoder::frameFromFieldValues(props, {{"rpm", speed}}, library);
+        QVERIFY2(manual.command, qPrintable(manual.error));
+        QCOMPARE(manual.command->bytes, result.command->bytes);
         QVERIFY(CommandEncoder::frameFieldConfigurationProblem(props, library).isEmpty());
+        auto secondSettings = settings;
+        secondSettings.insert("header", "A55A");
+        auto sequenceLibrary = library;
+        sequenceLibrary.insert("speed2", FrameTemplates::Entry{"Speed 2", {"hex", secondSettings}, {}}.toJson());
+        auto sequence = props;
+        sequence.insert(FrameTemplates::SendSequence, QJsonArray{
+            QJsonObject{{FrameTemplates::SendId, "speed"}, {FrameTemplates::SendBindings, rows}},
+            QJsonObject{{FrameTemplates::SendId, "speed2"}, {FrameTemplates::SendBindings, rows}}});
+        int reads = 0;
+        const auto mixed = CommandEncoder::buttonFromProperties(sequence, [&](const QString &id) {
+            ++reads;
+            return input(id);
+        }, nullptr, sequenceLibrary);
+        QVERIFY2(mixed.command, qPrintable(mixed.error));
+        QCOMPARE(reads, 1);
+        QCOMPARE(mixed.command->frames.size(), 2);
+        QCOMPARE(mixed.command->bytes, QByteArray::fromHex("AA5501000200DC05DA0DA55A01000200DC05DA0D"));
+        const auto missingMixed = CommandEncoder::buttonFromProperties(sequence, {}, nullptr, sequenceLibrary);
+        QVERIFY(!missingMixed.command);
+        QVERIFY(missingMixed.error.contains(QStringLiteral("第 1 帧")));
+        QCOMPARE(CommandEncoder::commandInputIds(sequence), QStringList{QStringLiteral("speedInput")});
         const auto defaults = CommandEncoder::frameFromTemplateDefaults(settings);
         QVERIFY2(defaults.command, qPrintable(defaults.error));
         QCOMPARE(defaults.command->bytes, QByteArray::fromHex("AA5501000200E803E80D"));

@@ -442,14 +442,14 @@ class TestProtocolParser : public QObject
     {
         ModbusTcpParser parser;
         const QByteArray adu = QByteArray::fromHex("0001000000070103040001FFFF");
-        // Two separate statements: the operands of + have no defined evaluation order.
-        QList<Message> out = parser.feed(adu.left(5));
-        QVERIFY(out.isEmpty());
-        out += parser.feed(adu.mid(5));
+        QVERIFY(parser.decodeRecords(adu.left(5)).isEmpty());
+        const auto out = parser.decodeRecords(adu.mid(5));
         QCOMPARE(out.size(), 1);
-        QCOMPARE(out.at(0).value("slave").toLongLong(), 1);
-        QCOMPARE(out.at(0).value("reg0").toLongLong(), 1);
-        QCOMPARE(out.at(0).value("reg1").toLongLong(), 65535);
+        QCOMPARE(out.first().frame, adu);
+        QCOMPARE(out.first().end, adu.size() - 5);
+        QCOMPARE(out.first().values.value("slave").toLongLong(), 1);
+        QCOMPARE(out.first().values.value("reg0").toLongLong(), 1);
+        QCOMPARE(out.first().values.value("reg1").toLongLong(), 65535);
     }
 
     void modbusTcpFrameBuild()

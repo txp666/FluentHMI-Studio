@@ -38,6 +38,7 @@ class ModbusSlaveStore
     ModbusSlaveStore(const QHash<QString, Area> &areas, const QString &init);
     // From a link card's slaveCoStart … slaveIrCount and slaveInit; a missing property takes its default.
     static ModbusSlaveStore fromProperties(const QJsonObject &props);
+    QString initialValues() const;
 
     // co, di, hr, ir: the order the start messages come in.
     static const QStringList &tables();

@@ -30,6 +30,9 @@ class PreviewPage : public QWidget
 
   signals:
     void exportRequested();
+    void endpointObserved(const QString &connectionId, const QString &endpoint);
+    void textSampleObserved(const QString &connectionId, const fhmi::Message &message);
+    void receivePointRequested(const QJsonObject &binding, const QString &name);
 
   private:
     void start();

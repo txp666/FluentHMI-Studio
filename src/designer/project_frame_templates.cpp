@@ -3,6 +3,7 @@
 #include "designer/reference_impact_dialog.h"
 
 #include "core/binding.h"
+#include "core/chart_limits.h"
 #include "core/command_encoder.h"
 #include "core/expression.h"
 #include "core/frame_templates.h"
@@ -71,7 +72,7 @@ bool usesTemplate(const Project &project, const QString &id)
         return true;
     return !visitWidgets(project.widgets, [&](const QJsonObject &widget) {
         const auto props = widget.value(QStringLiteral("properties")).toObject();
-        return !FrameTemplates::receiveIds(props).contains(id) && props.value(FrameTemplates::SendId).toString() != id;
+        return !FrameTemplates::receiveIds(props).contains(id) && !FrameTemplates::sendIds(props).contains(id);
     });
 }
 
@@ -231,9 +232,10 @@ void reviewWidgetReceive(QJsonObject &widget, QJsonObject &props, const ReceiveR
         if (columns != original)
             props.insert(QStringLiteral("recordColumns"), columns);
     }
-    if (type != QLatin1String("RealtimeChart"))
+    if (type != QLatin1String("RealtimeChart") && !isTimingChart(type))
         return;
-    for (int i = 0; i < 8; ++i) {
+    const int limit = isTimingChart(type) ? MaxTimingChannels : MaxRealtimeCurves;
+    for (int i = 0; i < limit; ++i) {
         const auto original = chartCurveBinding(props, i);
         auto binding = original;
         const auto detail = reviewBinding(binding);
@@ -241,8 +243,9 @@ void reviewWidgetReceive(QJsonObject &widget, QJsonObject &props, const ReceiveR
             continue;
         const auto prefix = QStringLiteral("_curve_%1_").arg(i);
         const auto name = props.value(prefix + QStringLiteral("name")).toString().trimmed();
-        const auto label = name.isEmpty() ? tr("曲线%1").arg(i + 1) : QStringLiteral("%1 (%2)").arg(name).arg(i + 1);
-        rows.append({tr("实时曲线"), QStringLiteral("%1 · %2").arg(widgetLabel(widget), label), detail});
+        const auto label = name.isEmpty() ? chartCurveName(props, i) : QStringLiteral("%1 (%2)").arg(name).arg(i + 1);
+        rows.append({isTimingChart(type) ? tr("数字时序图") : tr("实时曲线"),
+                     QStringLiteral("%1 · %2").arg(widgetLabel(widget), label), detail});
         for (const auto &property : {QStringLiteral("parseMode"), QStringLiteral("key"), QStringLiteral("jsonPath")})
             if (binding.value(property) != original.value(property))
                 props.insert(prefix + property, binding.value(property));
@@ -261,27 +264,31 @@ QJsonArray reviewWidgetReferences(QJsonArray widgets, const ReceiveReferences &r
         reviewWidgetReceive(widget, props, receive, affectedPoints, rows);
         const bool active = widgetSendsCommands(type, props);
         QStringList uses;
-        if (!id.isEmpty() && props.value(FrameTemplates::SendId).toString() == id) {
+        if (!id.isEmpty() && FrameTemplates::sendIds(props).contains(id)) {
             QStringList mapped;
-            const auto originalBindings = props.value(FrameTemplates::SendBindings).toArray();
-            auto bindings = originalBindings;
-            for (qsizetype i = 0; i < bindings.size(); ++i) {
-                auto binding = bindings.at(i).toObject();
-                const auto field = send.updateReference(binding, QStringLiteral("field"));
-                if (!field.isEmpty()) {
-                    mapped.append(field);
-                    bindings[i] = binding;
+            FrameTemplates::mapSendFrames(props, [&](QJsonObject &frame) {
+                if (frame.value(FrameTemplates::SendId).toString() != id)
+                    return;
+                const auto originalBindings = frame.value(FrameTemplates::SendBindings).toArray();
+                auto bindings = originalBindings;
+                for (qsizetype i = 0; i < bindings.size(); ++i) {
+                    auto binding = bindings.at(i).toObject();
+                    const auto field = send.updateReference(binding, QStringLiteral("field"));
+                    if (!field.isEmpty()) {
+                        mapped.append(field);
+                        bindings[i] = binding;
+                    }
                 }
-            }
-            if (bindings != originalBindings)
-                props.insert(FrameTemplates::SendBindings, bindings);
-            const auto direct = send.updateReference(props, FrameTemplates::SendValueField);
-            if (!direct.isEmpty())
-                mapped.append(direct);
+                if (bindings != originalBindings)
+                    frame.insert(FrameTemplates::SendBindings, bindings);
+                const auto direct = send.updateReference(frame, FrameTemplates::SendValueField);
+                if (!direct.isEmpty())
+                    mapped.append(direct);
+            });
             mapped.removeDuplicates();
             if (!mapped.isEmpty())
                 uses.append(tr("写入字段 %1").arg(mapped.join(QStringLiteral(", "))));
-            else if (active && FrameTemplates::sendSettings(receive.project.frameTemplates, props))
+            else if (active && (CommandEncoder::usesFrameSequence(props) || FrameTemplates::sendSettings(receive.project.frameTemplates, props)))
                 uses.append(tr("使用此发送模板"));
         }
         if (active && type == QLatin1String("PushButton")) {
@@ -553,11 +560,14 @@ void remapClipboardTemplates(QJsonArray &widgets, const QHash<QString, QString> 
         auto widget = widgets.at(index).toObject();
         const auto original = widget.value(QStringLiteral("properties")).toObject();
         auto props = original;
-        for (const auto &key : {FrameTemplates::ReceiveId, FrameTemplates::SendId}) {
-            const auto id = props.value(key).toString();
+        const auto receive = props.value(FrameTemplates::ReceiveId).toString();
+        if (ids.contains(receive))
+            props.insert(FrameTemplates::ReceiveId, ids.value(receive));
+        FrameTemplates::mapSendFrames(props, [&ids](QJsonObject &frame) {
+            const auto id = frame.value(FrameTemplates::SendId).toString();
             if (ids.contains(id))
-                props.insert(key, ids.value(id));
-        }
+                frame.insert(FrameTemplates::SendId, ids.value(id));
+        });
         if (auto selection = props.value(FrameTemplates::ReceiveIds); selection.isArray()) {
             auto group = selection.toArray();
             for (qsizetype i = 0; i < group.size(); ++i) {

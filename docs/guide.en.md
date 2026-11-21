@@ -81,7 +81,7 @@ Page containers offer classic tabs, underlined navigation, segmented navigation,
 
 Numeric displays can use an enum badge with mappings such as `0=Stopped` and `1=Running|#107c10`. Traction battery colors can follow low and warning thresholds. Use [15 Pages and styles](../examples/tutorials/15-分页与控件风格.uidp) and [16 Inputs and status filters](../examples/tutorials/16-输入与状态筛选.uidp) to try selectors, switches, badges, and filtering without hardware.
 
-Set a digital timing chart to **Per-channel binding**, then select a CAN signal or project data point for each channel. In Preview, use the time-window menu to set a custom duration, the folder button to import a recording, or the save menu to export or start logging. Select **Back to live** to return to live data after importing. The Signals and diagnostics page of the dynamic gallery provides a waveform to explore. [Dynamic widget gallery](../examples/industrial/动态控件全景.uidp) · [Timing chart settings and file formats](uidp/electronics.md#共享位定义与复合反馈)
+Set a digital timing chart to **Per-channel binding**, then select a CAN signal or project data point for each of up to 32 channels. In Preview, scroll down the lanes to view more channels. Use the time-window menu to set a custom duration, the folder button to import a recording, or the save menu to export or start logging. Select **Back to live** to return to live data after importing. The Signals and diagnostics page of the dynamic gallery provides a waveform to explore. [Dynamic widget gallery](../examples/industrial/动态控件全景.uidp) · [Timing chart settings and file formats](uidp/electronics.md#共享位定义与复合反馈)
 
 ## Inspect traffic and troubleshoot
 

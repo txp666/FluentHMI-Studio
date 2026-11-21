@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/chart_limits.h"
+
 #include <QtCore/QByteArray>
 #include <QtCore/QList>
 #include <QtCore/QString>
@@ -99,11 +101,11 @@ class ChartHistory
 
 struct TimingLevels
 {
-    quint16 high = 0;
-    quint16 valid = 0;
+    TimingMask high = 0;
+    TimingMask valid = 0;
 
     bool operator==(const TimingLevels &other) const { return high == other.high && valid == other.valid; }
-    std::optional<bool> level(quint16 mask) const;
+    std::optional<bool> level(TimingMask mask) const;
     void setLevel(int index, std::optional<bool> value);
 };
 

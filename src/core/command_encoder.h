@@ -67,6 +67,12 @@ struct EncodedCommand
     QByteArray bytes;
     QString textEncoding;
     QString framingNotice;
+    struct FramePart
+    {
+        QString name;
+        qsizetype size;
+    };
+    QList<FramePart> frames;
     ModbusRequest modbus;
     QList<CommandInputValue> inputValues;
     CanCommand can;
@@ -169,6 +175,7 @@ bool usesTemplate(InputListMode mode);
 QString singleInputProperty(InputListMode mode);
 QList<CommandInput> commandInputs(const QJsonObject &props);
 bool usesFrameFields(const QJsonObject &props);
+bool usesFrameSequence(const QJsonObject &props);
 QStringList commandInputIds(const QJsonObject &props);
 void mapInputIds(QJsonObject &properties, const std::function<QString(const QString &)> &map);
 QString frameFieldConfigurationProblem(const QJsonObject &props, const QJsonObject &frameTemplates);
@@ -206,6 +213,9 @@ struct BinaryFrameLayout
     QList<qsizetype> partSizes; // encoded body bytes for each template part, before length insertion
     QList<FieldSpan> fields; // absolute frame offsets for named fields
 };
+
+CommandResult frameFromFieldValues(const QJsonObject &props, const QJsonObject &values,
+                                   const QJsonObject &frameTemplates, BinaryFrameLayout *layout = nullptr);
 
 // The action-specific input to the encoder. Empty commands have neither a result nor an error.
 CommandResult buttonFromProperties(const QJsonObject &props, const InputValueReader &inputValue = {},

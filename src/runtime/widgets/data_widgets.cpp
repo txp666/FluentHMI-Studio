@@ -9,6 +9,7 @@
 #include "core/protocol_parser.h"
 #include "runtime/runtime_context.h"
 #include "runtime/receive_frame_preview.h"
+#include "runtime/send_frame_fields.h"
 #include "runtime/ui_helpers.h"
 #include "runtime/widgets/chart_viewport.h"
 #include "runtime/widgets/display_widgets.h"
@@ -614,13 +615,13 @@ RealtimeChartWidget::~RealtimeChartWidget() = default;
 
 std::vector<RealtimeChartWidget::Curve> RealtimeChartWidget::curvesFromProperties(const QJsonObject &props)
 {
-    const int count = std::clamp(props.value(QStringLiteral("curveCount")).toInt(1), 1, 8);
+    const int count = chartCurveCount(u"RealtimeChart", props);
     std::vector<Curve> curves;
     for (int i = 0; i < count; ++i) {
         const QJsonObject binding = chartCurveBinding(props, i);
         auto entry = BindingEntry::fromWidget(
             QJsonObject{{QStringLiteral("type"), QStringLiteral("RealtimeChart")}, {QStringLiteral("binding"), binding}});
-        curves.push_back({chartCurveName(props, i), std::move(entry)});
+        curves.push_back({chartCurveName(props, i), std::move(entry), {}});
     }
     return curves;
 }
@@ -727,10 +728,32 @@ void RealtimeChartWidget::showLiveValues()
     QStringList values;
     for (size_t i = 0; i < m_curves.size(); ++i) {
         const std::optional<double> last = m_histories[i]->last();
-        values.append(last ? reading(*last) : QStringLiteral("--"));
+        const auto quality = m_curves[i].quality;
+        values.append(quality != DataQuality::Current && quality != DataQuality::Waiting
+                          ? dataQualityText(quality) : last ? reading(*last) : QStringLiteral("--"));
         count = std::max(count, m_histories[i]->count());
     }
     showValues(values, count - 1); // the loaded run where the live one has got to
+}
+
+void RealtimeChartWidget::receiveCurve(int index, const QVariant &value, const DataSource &source)
+{
+    auto &curve = m_curves[size_t(index)];
+    if (const auto y = curve.binding->chartSample(value)) {
+        curve.source.update({*y, source, {}, DataQuality::Current, {}});
+        updateCurve(index, curve.source.sample());
+    }
+}
+
+void RealtimeChartWidget::updateCurve(int index, const DataPointSample &sample)
+{
+    auto &curve = m_curves[size_t(index)];
+    const bool changed = curve.quality != sample.quality;
+    curve.quality = sample.quality;
+    if (sample.quality == DataQuality::Current)
+        appendSample(index, sample.value.toDouble());
+    else if (changed && !m_refreshTimer->isActive())
+        m_refreshTimer->start();
 }
 
 void RealtimeChartWidget::showCursorValues()
@@ -846,8 +869,10 @@ void RealtimeChartWidget::onAttached()
     refresh();
     m_curves = curvesFromProperties(properties());
     for (Curve &curve : m_curves) {
-        if (curve.binding && !context()->resolveBindingSource(*curve.binding))
+        if (curve.binding && !context()->resolveBindingSource(*curve.binding)) {
+            curve.quality = DataQuality::ConfigurationError;
             curve.binding.reset();
+        }
     }
     m_hasCanCurves = std::any_of(m_curves.begin(), m_curves.end(), [](const Curve &curve) {
         return curve.binding && curve.binding->parseMode == ParseMode::CanSignal;
@@ -858,9 +883,16 @@ void RealtimeChartWidget::onAttached()
             return;
         for (size_t i = 0; i < m_curves.size(); ++i) {
             const auto &binding = m_curves[i].binding;
-            if (binding && binding->parseMode == ParseMode::DataPoint && values.contains(binding->key))
-                if (auto y = binding->chartSample(values.value(binding->key)))
-                    appendSample(int(i), *y);
+            if (!binding || binding->parseMode != ParseMode::DataPoint || !values.contains(binding->key))
+                continue;
+            auto sample = context()->projectData()->sample(binding->key);
+            if (sample.quality == DataQuality::Current) {
+                const auto y = binding->chartSample(values.value(binding->key));
+                if (!y)
+                    continue;
+                sample.value = *y;
+            }
+            updateCurve(int(i), sample);
         }
     }));
     QList<S7::Need> s7Needs;
@@ -870,13 +902,15 @@ void RealtimeChartWidget::onAttached()
     }
     context()->setS7CurveNeeds(this,s7Needs);
     live(connect(context(),&RuntimeContext::s7Sample,this,[this](const S7::Sample &sample) {
-        if(sample.quality!=QLatin1String("good"))return;
         for(size_t i=0;i<m_curves.size();++i) {
             const auto &binding=m_curves[i].binding;
             if (binding && binding->s7 && binding->sourceCardId == sample.sourceCardId &&
-                binding->s7->address.canonical == sample.address && binding->s7->type.name == sample.dataType)
-                if (const auto y = binding->chartSample(sample.value))
-                    appendSample(int(i), *y);
+                binding->s7->address.canonical == sample.address && binding->s7->type.name == sample.dataType) {
+                if (sample.quality == QLatin1String("good"))
+                    receiveCurve(int(i), sample.value, {sample.sourceCardId, 0, {}});
+                else
+                    updateCurve(int(i), {{}, {}, {}, DataQuality::Old, {}});
+            }
         }
     }));
 
@@ -895,15 +929,23 @@ void RealtimeChartWidget::onAttached()
         }
         for (size_t i = 0; i < m_curves.size(); ++i) {
             const auto &binding = m_curves[i].binding;
-            if (!binding || !binding->usesParsedData() || !binding->route().accepts(source)) {
+            if (!binding || !context()->acceptsMessage(*binding, message, source)) {
                 continue;
             }
             // A malformed sample skips this curve only; the frame's other curves still update.
-            if (const auto y = binding->chartSample(binding->extractFromParsed(message))) {
-                appendSample(int(i), *y);
-            }
+            receiveCurve(int(i), binding->extractFromParsed(message), source);
         }
     }));
+    live(connect(context(), &RuntimeContext::modbusReadUnavailable, this,
+        [this](const Link &link, const QString &endpoint, const ModbusBlock &block, int fallbackSlave) {
+            for (size_t index = 0; index < m_curves.size(); ++index) {
+                auto &curve = m_curves[index];
+                const auto source = curve.source.sample().source;
+                if (curve.binding && RuntimeContext::matchesModbusRead(*curve.binding, source, link, endpoint, block, fallbackSlave) &&
+                    curve.source.markOld(source.stream))
+                    updateCurve(int(index), curve.source.sample());
+            }
+        }));
     live(connect(hub, &CommHub::rawReceived, this, [this](const QByteArray &bytes, const DataSource &source) {
         if (!context()->isActive()) {
             return;
@@ -913,11 +955,8 @@ void RealtimeChartWidget::onAttached()
             if (!binding || !binding->usesRawData() || source.canText || !binding->route().accepts(source)) {
                 continue;
             }
-            for (const QVariant &value : binding->extractAllFromRaw(bytes, source.stream)) {
-                if (const auto y = binding->chartSample(value)) {
-                    appendSample(int(i), *y);
-                }
-            }
+            for (const QVariant &value : binding->extractAllFromRaw(bytes, source.stream))
+                receiveCurve(int(i), value, source);
         }
     }));
     live(connect(hub, &CommHub::canFrames, this, [this](CanLink *, const QList<CanFrame> &frames, bool sent, const DataSource &source) {
@@ -931,20 +970,26 @@ void RealtimeChartWidget::onAttached()
                 if (!binding || binding->parseMode != ParseMode::CanSignal || !binding->route().accepts(source)) {
                     continue;
                 }
-                const QVariant raw = binding->extractFromCan(frame);
-                if (!raw.isValid()) {
-                    continue;
-                }
-                if (const auto y = binding->chartSample(raw)) {
-                    appendSample(int(i), *y);
-                }
+                receiveCurve(int(i), binding->extractFromCan(frame), source);
             }
         }
     }));
     live(connect(hub, &CommHub::streamClosed, this, [this](const DataSource &source) {
-        for (Curve &curve : m_curves) {
+        for (size_t i = 0; i < m_curves.size(); ++i) {
+            auto &curve = m_curves[i];
             if (curve.binding)
                 curve.binding->resetStream(source.stream);
+            if (curve.source.close(source.stream))
+                updateCurve(int(i), curve.source.sample());
+        }
+    }));
+    live(connect(context(), &RuntimeContext::activeChanged, this, [this](bool active) {
+        if (active)
+            return;
+        for (auto &curve : m_curves) {
+            curve.source = {};
+            if (curve.binding)
+                curve.binding->resetStream();
         }
     }));
 }
@@ -1133,15 +1178,21 @@ void ModbusSlaveTableWidget::apply()
     rebuild();
 }
 
-void ModbusSlaveTableWidget::showDesign(const QJsonObject *cardProperties, bool ambiguous)
+void ModbusSlaveTableWidget::showDesign(const QJsonObject *cardProperties, bool ambiguous, bool editInitialValues)
 {
     m_ambiguousSource = ambiguous;
+    m_editInitialValues = editInitialValues;
     if (cardProperties) {
         m_design = ModbusSlaveStore::fromProperties(*cardProperties);
     } else {
         m_design.reset();
     }
     rebuild();
+}
+
+QString ModbusSlaveTableWidget::initialValues() const
+{
+    return m_design ? m_design->initialValues() : QString();
 }
 
 void ModbusSlaveTableWidget::onAttached()
@@ -1241,8 +1292,8 @@ void ModbusSlaveTableWidget::rebuild()
         m_filling = false;
         return;
     }
-    // Values are edited only while running, in the slave's own table.
-    m_table->setEditTriggers(isLive() ? QAbstractItemView::DoubleClicked : QAbstractItemView::NoEditTriggers);
+    m_table->setEditTriggers(isLive() || m_editInitialValues
+        ? QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed : QAbstractItemView::NoEditTriggers);
     const QString t = table();
     const ModbusSlaveStore::Area area = source->area(t);
     m_table->setRowCount(area.count);
@@ -1281,15 +1332,20 @@ void ModbusSlaveTableWidget::showChange(const Message &message)
 
 void ModbusSlaveTableWidget::edited(QTableWidgetItem *item)
 {
-    if (m_filling || !m_slave || item->column() != 1) {
+    const auto *current = store();
+    if (m_filling || !current || item->column() != 1 || (!isLive() && !m_editInitialValues)) {
         return;
     }
     const QString t = table();
-    const int address = m_slave->store().area(t).start + item->row();
+    const int address = current->area(t).start + item->row();
     const std::optional<quint16> value = parse(item->text());
+    if (value && m_editInitialValues && !isLive()) {
+        m_design->write(t, address, {*value});
+        return;
+    }
     if (!value || !m_slave->write(t, address, {*value})) {
         m_filling = true;
-        item->setText(display(m_slave->store().value(t, address))); // not a value: the old one stays
+        item->setText(display(current->value(t, address)));
         m_filling = false;
     }
 }
@@ -1580,7 +1636,12 @@ void DataRecvCardWidget::showReceiveSample()
         return;
     const auto sample = record ? *record : *m_recentSample;
     const auto &settings = sample.format.settings;
-    if (sample.format.type == LinkParser::HexGroup)
+    if (sample.can)
+        openCanPacketPreview(*sample.can, sample.canDefinitions, sample.source, window(), context()->receivePointAction());
+    else if (isModbusParser(sample.format.type))
+        openModbusPacketPreview(sample.bytes, sample.format.type, sample.request, sample.decoded, sample.source, window(),
+                                context()->receivePointAction());
+    else if (sample.format.type == LinkParser::HexGroup)
         openReceiveGroupPreview(settings, window(), {}, sample.bytes);
     else if (sample.format.type == QLatin1String("hex"))
         openReceiveFramePreview(settings, window(), sample.bytes);
@@ -1612,7 +1673,7 @@ void DataRecvCardWidget::appendLog(const QString &kind, const QString &text, con
     queueLog(std::make_unique<PacketRecord>(kind, source, color, text));
 }
 
-void DataRecvCardWidget::appendPacket(const QByteArray &bytes, bool received, const DataSource &source)
+void DataRecvCardWidget::appendPacket(const QByteArray &bytes, bool received, const DataSource &source, const Message &decoded)
 {
     if (bytes.isEmpty())
         return;
@@ -1622,30 +1683,34 @@ void DataRecvCardWidget::appendPacket(const QByteArray &bytes, bool received, co
     packet->received = received;
     const auto *link = context()->hub()->sourceLink(source);
     const QString parser = link ? link->parserType() : QString();
-    packet->binary = LinkParser::isHex(parser) || parser == QLatin1String("modbus") || parser == QLatin1String("modbus_tcp");
-    if (received)
-        packet->sample = rememberSample(bytes, source, link);
+    const bool modbus = isModbusParser(parser);
+    packet->binary = LinkParser::isHex(parser) || (modbus && parser != QLatin1String("modbus_ascii"));
+    if (received || modbus)
+        packet->sample = packetSample(bytes, source, link, received, decoded);
+    if (received && packet->sample)
+        m_recentSample = packet->sample;
     queueLog(std::move(packet));
 }
 
-std::optional<DataRecvCardWidget::ReceiveSample> DataRecvCardWidget::rememberSample(const QByteArray &bytes,
-                                                                                  const DataSource &source,
-                                                                                  const Link *link)
+std::optional<DataRecvCardWidget::ReceiveSample> DataRecvCardWidget::packetSample(const QByteArray &bytes,
+    const DataSource &source, const Link *link, bool received, const Message &decoded) const
 {
     if (source.canText || bytes.isEmpty() || !link)
         return {};
     const auto parser = link->parserType();
-    if (!LinkParser::isHex(parser) && parser != QLatin1String("line"))
+    if (!LinkParser::isHex(parser) && !isModbusParser(parser) && parser != QLatin1String("line"))
         return {};
-    m_recentSample = ReceiveSample{bytes.left(65536), {parser, link->parserConfig()}};
-    return m_recentSample;
+    return ReceiveSample{bytes.left(65536), {parser, link->parserConfig()}, source,
+                         received == link->answersModbus(), decoded, {}, {}};
 }
 
 void DataRecvCardWidget::appendSampleLog(const QString &kind, const QString &text, const QByteArray &bytes,
                                         const DataSource &source, const QColor &color)
 {
     auto record = std::make_unique<PacketRecord>(kind, source, color, text);
-    record->sample = rememberSample(bytes, source, context()->hub()->sourceLink(source));
+    record->sample = packetSample(bytes, source, context()->hub()->sourceLink(source));
+    if (record->sample)
+        m_recentSample = record->sample;
     queueLog(std::move(record));
 }
 
@@ -1755,25 +1820,50 @@ void DataRecvCardWidget::onAttached()
         appendSampleLog(tr("丢帧"), reason + QStringLiteral(" · ") + length + QStringLiteral(" · ") +
                         toHexString(notice.sample.left(512)), notice.sample, source, QColor(0xFFAE91));
     }));
-    live(connect(hub, &CommHub::rawReceived, this, [this](const QByteArray &bytes, const DataSource &source) {
-        if (!receiveRoute().accepts(source)) return;
-        appendPacket(bytes, true, source);
+    const auto incoming = [this](const QByteArray &bytes, const DataSource &source, const Message &decoded) {
+        appendPacket(bytes, true, source, decoded);
         ++m_receivedCount;
         scheduleLogRefresh();
+    };
+    live(connect(hub, &CommHub::rawReceived, this, [this, hub, incoming](const QByteArray &bytes, const DataSource &source) {
+        if (source.canText || !receiveRoute().accepts(source))
+            return;
+        const auto *link = hub->sourceLink(source);
+        if (!link || !isModbusParser(link->parserType()))
+            incoming(bytes, source, {});
+    }));
+    live(connect(hub, &CommHub::unitReceived, this, [this, hub, incoming](const QByteArray &bytes, const Message &decoded,
+                                                                       const DataSource &source) {
+        if (bytes.isEmpty() || !receiveRoute().accepts(source))
+            return;
+        const auto *link = hub->sourceLink(source);
+        if (link && isModbusParser(link->parserType()))
+            incoming(bytes, source, decoded);
     }));
     live(connect(hub, &CommHub::messageReceived, this, [this](const Message &message, const DataSource &source) {
         if (m_wire->isChecked() && !message.isEmpty() && acceptsEvent(receiveRoute(), source))
             appendLog(tr("解析"), messageText(message), source, eventColor);
     }));
-    live(connect(hub, &CommHub::canFrameDecoded, this, [this](const CanFrame &frame, const Message &, const DataSource &source) {
-        if (receiveRoute().accepts(source)) {
-            m_wireBytes += quint64(frame.data.size());
-            if (m_wire->isChecked())
-                scheduleLogRefresh();
+    live(connect(hub, &CommHub::canFrames, this, [this](const CanLink *link, const QList<CanFrame> &frames, bool sent,
+                                                      const DataSource &source) {
+        if (!receiveRoute().accepts(source))
+            return;
+        const auto definitions = link ? link->signalSet() : nullptr;
+        for (const auto &frame : frames) {
+            auto packet = std::make_unique<PacketRecord>(sent ? tr("发") : tr("收"), source, sent ? sentColor : receivedColor);
+            packet->received = !sent;
+            packet->bytes = Can::frameLine(frame).toUtf8();
+            packet->sample = ReceiveSample{{}, {}, source, false, {}, frame, definitions};
+            if (!sent) {
+                m_recentSample = packet->sample;
+                m_wireBytes += quint64(frame.data.size());
+                ++m_receivedCount;
+            }
+            queueLog(std::move(packet));
         }
     }));
     live(connect(hub, &CommHub::bytesSent, this, [this](const QByteArray &bytes, const DataSource &source) {
-        if (receiveRoute().accepts(source))
+        if (!source.canText && receiveRoute().accepts(source))
             appendPacket(bytes, false, source);
     }));
     live(connect(hub, &CommHub::linkConnected, this,
@@ -1825,6 +1915,9 @@ DataSendCardWidget::DataSendCardWidget(const WidgetMeta &meta, QWidget *parent) 
     ending->addWidget(new FluentQt::BodyLabel(tr("换行符"), m_newlineRow));
     ending->addWidget(m_newline);
     options->addWidget(m_hex);
+    m_editFields = new FluentQt::PushButton(tr("按字段发送…"), m_textOptions);
+    m_editFields->setObjectName(QStringLiteral("manualSendFields"));
+    options->addWidget(m_editFields);
     options->addStretch();
     options->addWidget(m_newlineRow);
     layout->addWidget(m_title);
@@ -1860,6 +1953,7 @@ void DataSendCardWidget::onAttached()
     refreshInputOptions();
     live(connect(context()->hub(), &CommHub::linksChanged, this, refresh));
     live(connect(m_send, &QPushButton::clicked, this, &DataSendCardWidget::sendInput));
+    live(connect(m_editFields, &QPushButton::clicked, this, &DataSendCardWidget::sendFields));
     live(connect(m_input, &QLineEdit::returnPressed, this, [this] {
         if (!isPeriodicSending())
             sendInput();
@@ -1870,6 +1964,7 @@ void DataSendCardWidget::sendInput()
 {
     if (stopPeriodicSend())
         return;
+    m_sendingFields = false;
     const QJsonObject props = inputProperties();
     const auto encode = [this, props] { return ManualCommand::encode(props, m_input->text(), frameTemplates()); };
     const int interval = CommandEncoder::periodicSendInterval(props);
@@ -1879,12 +1974,36 @@ void DataSendCardWidget::sendInput()
     requestSend(encode(), std::move(onSent), props.value(QStringLiteral("commandMode")).toString(), interval, encode);
 }
 
+void DataSendCardWidget::sendFields()
+{
+    const QPointer<DataSendCardWidget> card(this);
+    const auto props = inputProperties();
+    const int interval = CommandEncoder::periodicSendInterval(props);
+    const bool running = isPeriodicSending();
+    const auto action = running ? SendFrameAction::ApplyPeriodic
+                                : interval > 0 ? SendFrameAction::StartPeriodic : SendFrameAction::Send;
+    const auto values = editSendFrameFields(props, frameTemplates(), m_fieldValues, window(), action);
+    if (!values || !card || !context())
+        return;
+    m_fieldValues = *values;
+    if (running)
+        return;
+    m_sendingFields = true;
+    const auto encode = [this, props] {
+        return CommandEncoder::frameFromFieldValues(props, m_fieldValues, frameTemplates());
+    };
+    requestSend(encode(), {}, ManualCommand::Hex, interval, encode);
+}
+
 void DataSendCardWidget::periodicSendChanged(bool running)
 {
     const int interval = CommandEncoder::periodicSendInterval(inputProperties());
     m_send->setText(running ? (isPeriodicStarting() ? tr("取消启动") : tr("停止周期发送"))
                             : interval > 0 ? tr("开始周期发送") : tr("发送"));
-    m_textOptions->setEnabled(!running);
+    m_hex->setEnabled(!running);
+    m_newlineRow->setEnabled(!running);
+    m_editFields->setEnabled(!running || (m_sendingFields && !isPeriodicStarting()));
+    m_editFields->setText(running && m_sendingFields ? tr("编辑发送字段…") : tr("按字段发送…"));
 }
 
 QJsonObject DataSendCardWidget::inputProperties() const
@@ -1900,6 +2019,7 @@ void DataSendCardWidget::refreshInputOptions()
 {
     const auto props = inputProperties();
     const bool shared = FrameTemplates::sendSettings(frameTemplates(), props).has_value();
+    m_editFields->setVisible(!m_can && m_hex->isChecked() && !FrameTemplates::sendFields(frameTemplates(), props).isEmpty());
     m_newlineRow->setVisible(!m_can && !m_hex->isChecked() && !shared);
     if (m_can)
         m_input->setPlaceholderText(shared ? tr("输入 CAN ID#载荷…") : tr("CAN 链路请按 ID#数据 格式输入"));

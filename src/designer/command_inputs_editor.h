@@ -93,7 +93,6 @@ class FrameFieldInputsEditor : public QWidget
     QStringList m_required;
     QStringList m_fields;
     qsizetype m_headerSize = 0;
-    int m_nextInput = 0;
     FluentQt::TableWidget *m_table = nullptr;
     FluentQt::PushButton *m_create = nullptr;
 };

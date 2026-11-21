@@ -33,6 +33,7 @@ class UdpLink : public Link
     bool isConnected() const override { return m_open; }
     // A remote is set, or a datagram has arrived to reply to.
     bool canSend() const override { return m_open && (!m_remote.isNull() || m_hasLastSender); }
+    bool hasPeerStreams() const override { return true; }
     QStringList sendEndpoints() const override;
     bool canSendTo(const QString &endpoint) const override;
     quint16 localPort() const { return m_socket.localPort(); }
