@@ -625,6 +625,16 @@ bool ModbusSlave::writeValue(const QString &table, int address, double value, co
     return registers && write(table, address, *registers);
 }
 
+bool ModbusSlave::writeBit(const QString &table, int address, int bit, ModbusBitAction action)
+{
+    if ((table != QLatin1String("hr") && table != QLatin1String("ir")) || bit < 0 || bit > 15 ||
+        !m_store.contains(table, address, 1)) {
+        return false;
+    }
+    const ModbusRequest op{m_settings.slave, 0x06, address, 0, {}, bit, action};
+    return write(table, address, {op.withBit(m_store.value(table, address))});
+}
+
 bool ModbusSlave::acceptsCommand(const ModbusRequest &request) const
 {
     return request.destination().acceptsLocalSlave(m_settings.slave);
@@ -636,6 +646,8 @@ bool ModbusSlave::execute(const ModbusRequest &request)
         return false;
     if (request.func == 0x05)
         return write(QStringLiteral("co"), request.address, {quint16(request.value != 0 ? 1 : 0)});
+    if (request.writesBit())
+        return writeBit(QStringLiteral("hr"), request.address, request.bit, request.bitAction);
     const auto values = request.func == 0x06 ? QList<quint16>{quint16(request.value)} : request.registers;
     return write(QStringLiteral("hr"), request.address, values);
 }

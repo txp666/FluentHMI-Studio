@@ -12,7 +12,7 @@
 
 逐行记录使用「接收报文」时，记录列可以选择来源连接已经定义的 HEX 或 CAN 字段，也可以填写设备报文里的字段名。
 
-Modbus 回读线圈或离散输入时直接使用位值。读取寄存器时可选择数据类型，使用 32 位数据时还可选择寄存器序。
+Modbus 回读线圈或离散输入时直接使用位值。读取保持或输入寄存器时，设置 `mbBit`（`0`–`15`）可直接提取该位（0 或 1），设为 `-1`（默认）按所选数据类型读取整个寄存器，使用 32 位数据时还可选择寄存器序。
 
 | `parseMode` | 取值字段 | 曲线上的写法 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ Modbus 回读线圈或离散输入时直接使用位值。读取寄存器时可�
 | `"S7"` | `s7` 对象含 `address`、`dataType`、`period`，并选择 S7 来源卡 | 在 `_curve_0_s7` 填同一对象 |
 | `"JSON路径"` | `jsonPath` 用点分隔，如 `"data.sensors.0.temp"`。数组负下标从末尾数 | 同名加前缀 |
 | `"HEX字节提取"` | `byteOffset` 从 0 起，`dataType` 选 `uint8/int8/uint16/int16/uint32/int32/float32`，`byteOrder` 选 `"大端(BE)"` 或 `"小端(LE)"`。可用 `frameHeader` / `frameTail` 剥去包头包尾，再从剩余数据算偏移 | 同名加前缀。普通绑定默认类型为 `uint16`，曲线为 `float32`，建议明确写设备的类型 |
-| `"Modbus"` | `mbArea` 选 `"保持寄存器"`（默认）、`"输入寄存器"`、`"线圈"` 或 `"离散输入"`。`mbRegIndex` 是表内地址。`mbDataType` 选 `uint16/int16/uint32/int32/float32`，`mbRegOrder` 选 `"大端(AB CD)"` 或 `"小端(CD AB)"`。`mbSlaveFilter` 为 −1 时跟随连接卡的默认从站，`mbFcFilter` 为 −1 时按表区及地址匹配 | 地址字段写 `_curve_0_regIndex`。其余字段同名加前缀。普通绑定与各条曲线都可用 `mbPeriod` 设采集周期（0–60000 ms，0 用连接卡默认） |
+| `"Modbus"` | `mbArea` 选 `"保持寄存器"`（默认）、`"输入寄存器"`、`"线圈"` 或 `"离散输入"`。`mbRegIndex` 是表内地址。`mbBit` 为 `-1`（默认，整寄存器）或 `0`–`15`（保持/输入寄存器的某一位）。`mbDataType` 选 `uint16/int16/uint32/int32/float32`，`mbRegOrder` 选 `"大端(AB CD)"` 或 `"小端(CD AB)"`。`mbSlaveFilter` 为 −1 时跟随连接卡的默认从站，`mbFcFilter` 为 −1 时按表区及地址匹配 | 地址字段写 `_curve_0_regIndex`。其余字段同名加前缀（含 `_curve_0_mbBit`）。普通绑定与各条曲线都可用 `mbPeriod` 设采集周期（0–60000 ms，0 用连接卡默认） |
 | `"CAN信号"`（FluentHMI Studio） | 报文 ID、位位置、符号、缩放参数见 [CAN 信号](can.md#按位取值) | 同名加前缀 |
 
 `Label` 把结果写入 `text`，`NumericDisplay`、`GaugeMeter`、`ProgressBar` 和 `ProgressRingDisplay` 写入 `value`。`LEDIndicator` 按 `onValue` / `offValue` 判亮灭，默认分别为 `"1"` / `"0"`。`ToggleSwitch` 写入 `checked`，`Slider` 和 `SpinBox` 写入 `value`。设备反馈可以更新这三种输入控件，只有用户操作才触发它们的发送命令。

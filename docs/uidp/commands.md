@@ -9,7 +9,7 @@
 | 控件 | 发什么、何时发 |
 | --- | --- |
 | `PushButton` | 点击发送 `command`，或合并「输入列表」里的当前值。Modbus 的单项参数用 `mbValue` 设置读取数量、开关状态或写入值 |
-| `ToggleSwitch` | 用户拨动时发送 `onCommand` 或 `offCommand`。Modbus 模式下，`mbArea` 为 `"线圈"`（默认）时用 FC05 写开/关，为 `"保持寄存器"` 时用 FC06 写 `1` / `0` |
+| `ToggleSwitch` | 用户拨动时发送 `onCommand` 或 `offCommand`。Modbus 模式下，`mbArea` 为 `"线圈"`（默认）时用 FC05 写开/关，为 `"保持寄存器"` 时用 FC06 写 `1` / `0`，为 `"保持寄存器位"` 时按 `mbBit`（`0`–`15`）先读出寄存器再只改该位写回 |
 | `Slider`、`SpinBox` | 开启「变化时向设备下发」（`sendOnChange`）后发送已提交的值。滑块在松手时发送，数值框手输后按回车或离开输入框时发送。步进操作每步提交 |
 | `LineEdit` | 按回车发送输入值。开启「仅输入」时，回车只结束输入，按钮可以读取其当前值并统一发送 |
 | `ComboBox` | 开启 `sendOnSelect` 后，选择一项就发送该行 `options` 中的 `value`。值留空时使用显示名称 `label` |
@@ -83,7 +83,7 @@ UIDP 1.3 中，HEX 模板的 `parserConfig.sendDefaults` 按字段名保存默�
 
 在 HEX 按钮的「编辑发送配置」中切到「多模板混发」，可依次添加工程模板。选中列表中的一帧即可绑定输入或设置固定值。各帧独立组帧，按列表顺序拼入同一次发送。周期发送时每轮读取当时的输入值。任一帧有必填字段缺值时，整轮不会发送。UIDP 1.3 用 `sendFrameSequence` 保存有序列表，各项包含 `sendFrameTemplateId` 与 `sendFrameFieldBindings`。
 
-Modbus 和 S7 发送控件可选可写设备数据点作为「写入对象」。连接、地址和数据类型沿用该点的配置，并在「实际写入目标」中显示。Modbus 线圈对应 FC05，保持寄存器可用 FC06 或 FC16。FC16 写入列表沿用数据点的起始地址和寄存器序，首项类型须与所选数据点一致。对 UDP 和 TCP 服务端，写入使用数据点指定的子通道，或当前有效反馈确认的对端。
+Modbus 和 S7 发送控件可选可写设备数据点作为「写入对象」。连接、地址和数据类型沿用该点的配置，并在「实际写入目标」中显示。Modbus 线圈对应 FC05，保持寄存器可用 FC06 或 FC16，带位号（`mbBit` 为 `0`–`15`）的保持寄存器数据点用 FC06 按位读-改-写。FC16 写入列表沿用数据点的起始地址和寄存器序，首项类型须与所选数据点一致。对 UDP 和 TCP 服务端，写入使用数据点指定的子通道，或当前有效反馈确认的对端。
 
 数据发送卡选用工程 HEX 模板后，可点「按字段发送…」，输入各字段并核对组帧结果。字段默认值、必填和校验规则沿用模板。周期任务运行时可编辑已选字段的值，下个周期组帧时生效。
 
@@ -149,7 +149,7 @@ S7 写入在一个表单中设置连接、地址、类型和单值来源。可�
 | `"文本"`（默认） | 将 `commandTemplate` 中的 `{value}` 替换为当前命令或值。例如 `SPEED={value}` 发出 `SPEED=75`。末尾的 `commandNewline` 可选 `"无"`、`"\\r\\n"`（默认）、`"\\n"`、`"\\r"`，这里按 JSON 文件中的转义方式书写 |
 | `"HEX"` | `dataType` 为 `"HEX字符串"` 时直接使用 HEX 文本（如 `01 03 00 00`）。数值类型按 `dataType`、`byteOrder` 打包后放进模板，可以加 `frameHeader` / `frameTail` |
 | `"JSON"` | `{value}` 占一个完整 JSON 值的位置。例如模板 `{"cmd":"setSpeed","value":{value}}` 可以产生 `{"cmd":"setSpeed","value":75}`。输入是合法 JSON 值时保留类型，普通文字自动转义成字符串。编码后按 `commandJsonNewline` 加结尾，默认 `"无"` |
-| `"Modbus"` | `mbSlave`、`mbFunc`、`mbAddress` 指定从站、功能码和地址。按链路封装 RTU、TCP 或 ASCII。读操作填写数量。`"05 写单线圈"` 输入 `1` 写开（`0xFF00`），输入 `0` 写关（`0x0000`）。`"06 写单寄存器"` 可写 `uint16/int16`，`"16 写多个寄存器"` 还可写 `uint32/int32/float32`。32 位值占两个寄存器，`mbRegOrder` 决定寄存器序。按钮的 `mbValue` 可按所选类型填写数值文本，例如用 `"25.3"` 写入 float32 |
+| `"Modbus"` | `mbSlave`、`mbFunc`、`mbAddress` 指定从站、功能码和地址。按链路封装 RTU、TCP 或 ASCII。读操作填写数量。`"05 写单线圈"` 输入 `1` 写开（`0xFF00`），输入 `0` 写关（`0x0000`）。`"06 写单寄存器"` 可写 `uint16/int16`，设置 `mbBit`（`0`–`15`）时按位读-改-写（按钮通过 `mbBitAction` 选 `"置位"`、`"复位"` 或 `"取反"`）；`"16 写多个寄存器"` 还可写 `uint32/int32/float32`。32 位值占两个寄存器，`mbRegOrder` 决定寄存器序。按钮的 `mbValue` 可按所选类型填写数值文本，例如用 `"25.3"` 写入 float32 |
 | `"CAN"`（FluentHMI Studio） | DBC 信号与原始报文的命令见 [CAN 总线](can.md) |
 
 例如下面是一个滑块的 `properties`。用户将滑块调到 75，松手时设备收到一行 `SPEED=75`。

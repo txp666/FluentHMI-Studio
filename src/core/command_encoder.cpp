@@ -61,6 +61,13 @@ bool supportsPeriodicInputs(const QJsonObject &props)
 
 QString modbusValueText(const ModbusRequest &request)
 {
+    if (request.writesBit()) {
+        switch (request.bitAction) {
+        case ModbusBitAction::Set: return QCoreApplication::translate("fhmi", "位 %1 = 1").arg(request.bit);
+        case ModbusBitAction::Clear: return QCoreApplication::translate("fhmi", "位 %1 = 0").arg(request.bit);
+        case ModbusBitAction::Toggle: return QCoreApplication::translate("fhmi", "位 %1 取反").arg(request.bit);
+        }
+    }
     if (request.func == 0x05)
         return QStringLiteral("0x") + QString::number(request.value, 16).rightJustified(4, u'0').toUpper();
     if (request.func == 0x10) {
@@ -93,7 +100,9 @@ QString describe(const EncodedCommand &command, const QString &mode)
     switch (command.kind) {
     case EncodedCommand::Kind::Modbus: {
         const auto &request = command.modbus;
-        const QString summary = request.func != 0x10 || command.inputValues.isEmpty()
+        const QString summary = request.writesBit()
+            ? modbusValueText(request) + u'\n' + tr("先用 03 读出该寄存器，只改这一位再写回")
+            : request.func != 0x10 || command.inputValues.isEmpty()
             ? (request.func < 0x05 ? tr("读取数量 %1") : tr("写入值 %1")).arg(modbusValueText(request))
             : tr("写入 %1 个寄存器").arg(request.registers.size());
         return tr("%1\n从站 %2 · 地址 %3\n%4")
@@ -709,6 +718,23 @@ bool usesRegisterOrder(QStringView dataType)
     return type && type->registerCount > 1;
 }
 
+int modbusBit(const QJsonObject &props)
+{
+    const auto bit = integerProp(props, "mbBit", WholeRegister);
+    return bit && *bit >= 0 && *bit <= 15 ? int(*bit) : WholeRegister;
+}
+
+QStringList bitActions()
+{
+    return {QStringLiteral("置位"), QStringLiteral("复位"), QStringLiteral("取反")}; // i18n: value
+}
+
+ModbusBitAction bitAction(const QString &option)
+{
+    const int index = int(bitActions().indexOf(option));
+    return index == 1 ? ModbusBitAction::Clear : index == 2 ? ModbusBitAction::Toggle : ModbusBitAction::Set;
+}
+
 std::optional<QList<quint16>> modbusRegisters(const QString &value, const QString &dataType,
                                               const QString &regOrder, QString *error)
 {
@@ -881,6 +907,20 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
     const auto configured = props.value(QStringLiteral("mbValue"));
     const QString amount = configured.isBool() ? QString::number(configured.toBool())
                                                : prop(props, "mbValue", QStringLiteral("1"));
+    if (const int bit = modbusBit(props); func == 0x06 && bit != WholeRegister) {
+        if (!validModbusAddress(*slave, *address))
+            return CommandResult::failure(QCoreApplication::translate("fhmi", "Modbus 从站地址或寄存器地址超出范围"));
+        ModbusRequest request{int(*slave), 0x06, int(*address), 0, {}, bit};
+        if (!value && props.contains(QStringLiteral("mbBitAction"))) {
+            request.bitAction = bitAction(prop(props, "mbBitAction", {}));
+        } else {
+            const auto number = integerText(value.value_or(amount));
+            if (!number || (*number != 0 && *number != 1))
+                return CommandResult::failure(QCoreApplication::translate("fhmi", "寄存器位的写入值应为 0 或 1"));
+            request.bitAction = *number ? ModbusBitAction::Set : ModbusBitAction::Clear;
+        }
+        return CommandResult::ok(modbusCommand(props, request));
+    }
     const auto request = modbusRequest(*slave, func, *address, value.value_or(amount),
                                        prop(props, "mbDataType", QStringLiteral("uint16")),
                                        prop(props, "mbRegOrder", registerOrders().first()), &error);
@@ -893,14 +933,22 @@ CommandResult modbusFromProperties(const QJsonObject &props, const std::optional
 static int modbusSwitchFunction(const QJsonObject &props)
 {
     // Projects without mbArea write a coil, just like projects that select the coil explicitly.
-    return prop(props, "mbArea", {}) == ModbusArea::HoldingRegisters ? 0x06 : 0x05;
+    const QString area = prop(props, "mbArea", {});
+    return area == ModbusArea::HoldingRegisters || area == ModbusArea::HoldingRegisterBit ? 0x06 : 0x05;
 }
 
 CommandResult modbusSwitchFromProperties(const QJsonObject &props, bool checked)
 {
     QJsonObject write = props;
+    const QString area = prop(props, "mbArea", {});
     write.insert(QStringLiteral("mbFunc"), functionOptions({modbusSwitchFunction(props)}).first());
     write.insert(QStringLiteral("mbDataType"), QStringLiteral("uint16"));
+    if (area != ModbusArea::HoldingRegisterBit) {
+        write.remove(QStringLiteral("mbBit"));
+    } else if (!write.contains(QStringLiteral("mbBit"))) {
+        write.insert(QStringLiteral("mbBit"), 0);
+    }
+    write.remove(QStringLiteral("mbBitAction"));
     return modbusFromProperties(write, QString::number(checked ? 1 : 0));
 }
 
@@ -1018,6 +1066,9 @@ QList<CommandInput> commandInputs(const QJsonObject &props)
     if (mode == InputListMode::None)
         return {};
     if (const QString key = singleInputProperty(mode); !key.isEmpty()) {
+        if (mode == InputListMode::ModbusValue && functionCode(prop(props, "mbFunc", {})) == 0x06 &&
+            modbusBit(props) != WholeRegister)
+            return {};
         const QString id = props.value(key).toString();
         return id.isEmpty() ? QList<CommandInput>{} : QList<CommandInput>{{id, {}, {}}};
     }
@@ -1671,6 +1722,14 @@ CommandResult buttonFromProperties(const QJsonObject &props, const InputValueRea
         return mappedFrame(props, props.value(FrameTemplates::SendBindings), inputValue, layout,
                            FrameTemplates::sendSettings(frameTemplates, props), true);
     const auto listMode = inputListMode(props);
+    if (listMode == InputListMode::ModbusValue && functionCode(prop(props, "mbFunc", {})) == 0x06 &&
+        modbusBit(props) != WholeRegister) {
+        // A button's bit write does what mbBitAction says; it reads no input.
+        QJsonObject command = props;
+        if (!command.contains(QStringLiteral("mbBitAction")))
+            command.insert(QStringLiteral("mbBitAction"), bitActions().first());
+        return modbusFromProperties(command);
+    }
     if (!singleInputProperty(listMode).isEmpty()) {
         const auto inputs = commandInputs(props);
         std::optional<CommandInputValue> input;

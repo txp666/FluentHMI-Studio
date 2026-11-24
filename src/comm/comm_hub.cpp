@@ -195,19 +195,34 @@ QByteArray CommHub::sendModbusTo(const ModbusRequest &request, const SendTarget 
 {
     auto *link = target.link.data();
     if (!link->parsesModbus()) {
+        if (request.writesBit()) {
+            emit linkError(tr("按位写寄存器需要连接使用 Modbus 解析模式"), link->eventSource(target.endpoint));
+            return {};
+        }
         const auto frame = CommandEncoder::rtuFrame(request);
         return link->send(frame, target.endpoint) ? frame : QByteArray{};
     }
     auto *master = link->modbusMaster(target.endpoint);
     const auto source = link->eventSource(target.endpoint);
     const QPointer<CommHub> self(this);
-    return master->enqueue(request, 1000, ModbusMaster::Priority::Write, [self, source](const ModbusResult &result) {
+    const bool writesBit = request.writesBit();
+    const int address = request.address;
+    return master->enqueue(request, 1000, ModbusMaster::Priority::Write,
+                           [self, source, writesBit, address](const ModbusResult &result) {
         if (!self)
             return;
-        if (result.ok)
+        if (result.ok) {
+            if (writesBit && result.message.contains(QStringLiteral("value")) &&
+                result.message.value(QStringLiteral("address")).toLongLong() == address) {
+                Message confirmed = result.message;
+                confirmed.insert(QStringLiteral("hr") + QString::number(address),
+                                 result.message.value(QStringLiteral("value")));
+                emit self->unitReceived({}, confirmed, result.source);
+            }
             emit self->linkInfo(tr("已收到 Modbus 设备应答"), source);
-        else
+        } else {
             emit self->linkError(result.problem, source);
+        }
     }, target.endpoint);
 }
 

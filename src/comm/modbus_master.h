@@ -69,6 +69,7 @@ struct ModbusResult
 {
     bool ok = false;
     Message message;               // the reply; empty without one
+    DataSource source;             // where the reply came from
     QString problem;               // empty on success, 无响应（T ms 超时）, 设备返回异常 02 非法数据地址 or 发送失败
     bool timedOut = false;         // no reply in time, or the link went down first
     bool cancelled = false;        // the link went down (cancelAll), reported as timed out
@@ -122,6 +123,9 @@ class ModbusMaster : public QObject
         Priority priority = Priority::Write;
         Done done;
         QString destination;
+        // Present during phase 1 (FC 03 read) of a register bit write; phase 2 replaces `request` with FC 06
+        // in place so queued writes to the same register never interleave.
+        std::optional<ModbusRequest> bitWrite;
     };
 
     void pump();

@@ -44,7 +44,7 @@ std::optional<ModbusNeed> modbusNeed(const BindingEntry &binding)
     need.slave = binding.mbSlaveFilter;
     need.table = table;
     need.address = binding.mbRegIndex;
-    need.count = !isBitTable(table) && CommandEncoder::usesRegisterOrder(binding.mbDataType) ? 2 : 1;
+    need.count = !isBitTable(table) && binding.mbBit < 0 && CommandEncoder::usesRegisterOrder(binding.mbDataType) ? 2 : 1;
     need.period = binding.mbPeriod;
     return need;
 }
@@ -157,8 +157,14 @@ QByteArray ModbusMaster::enqueue(const ModbusRequest &request, int timeoutMs, Pr
     if (!m_link->canSendTo(target)) {
         return {};
     }
+    ModbusRequest first = request;
+    std::optional<ModbusRequest> bitWrite;
+    if (request.writesBit()) {
+        bitWrite = request;
+        first = ModbusRequest{request.slave, 0x03, request.address, 1, {}};
+    }
     const QString type = m_link->parserType();
-    Entry entry{request, frame(request, type), type, std::max(1, timeoutMs), priority, std::move(done), target};
+    Entry entry{first, frame(first, type), type, std::max(1, timeoutMs), priority, std::move(done), target, bitWrite};
     const QByteArray bytes = entry.frame;
     if (!m_onLine && m_queue.isEmpty() && !m_pumping) {
         // Straight onto the line: a request the link refuses to write is not accepted.
@@ -238,10 +244,37 @@ void ModbusMaster::onMessage(const Message &message, const DataSource &source)
     }
     ModbusResult result;
     result.message = message;
+    result.source = source;
     const QString exception = modbusException(message);
     result.ok = exception.isEmpty();
     if (!result.ok) {
         result.problem = QCoreApplication::translate("fhmi", "设备返回%1").arg(exception);
+    }
+    if (m_onLine->bitWrite) {
+        if (!result.ok) {
+            finish(std::move(result));
+            return;
+        }
+        const QVariant current = message.value(QStringLiteral("hr") + QString::number(request.address));
+        bool ok = false;
+        const qlonglong value = current.toLongLong(&ok);
+        if (!current.isValid() || !ok || value < 0 || value > 65535) {
+            finish(failure(false, QCoreApplication::translate("fhmi", "读取保持寄存器 %1 失败").arg(request.address)));
+            return;
+        }
+        const ModbusRequest write{request.slave, 0x06, request.address,
+                                  int(m_onLine->bitWrite->withBit(quint16(value))), {}};
+        const QString type = m_link->parserType();
+        const QByteArray bytes = frame(write, type);
+        m_onLine->request = write;
+        m_onLine->frame = bytes;
+        m_onLine->framedFor = type;
+        m_onLine->bitWrite.reset();
+        m_timer->start(m_onLine->timeoutMs);
+        if (!m_link->send(bytes, m_onLine->destination)) {
+            finish(failure(false, QCoreApplication::translate("fhmi", "发送失败")));
+        }
+        return;
     }
     finish(std::move(result));
 }

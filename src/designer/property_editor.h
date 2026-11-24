@@ -122,7 +122,8 @@ class PropertyEditor : public FluentQt::ScrollArea
     void refreshNumericRows();
     void updateVisibility();
     void setRowVisible(const QString &key, bool visible);
-    void setModbusReadFields(const QJsonObject &binding, const QString &typeRow, const QString &orderRow);
+    void setModbusReadFields(const QJsonObject &binding, const QString &bitRow, const QString &typeRow,
+                             const QString &orderRow);
     void updateRouteEndpoint(const QString &connection, const QString &endpoint, bool active = true);
 
     QPointer<CanvasItem> m_item;

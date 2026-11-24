@@ -821,8 +821,15 @@ void RuntimeContext::writeModbusSlaves(const HmiWidget *widget, double value, bo
         if (slaves.size() != 1)
             continue;
         ModbusSlave *slave = slaves.first();
-        if (binding.mbSlaveFilter < 0 || slave->settings().slave == binding.mbSlaveFilter)
-            slave->writeValue(table, binding.mbRegIndex, value, binding.mbDataType, binding.mbRegOrder);
+        if (binding.mbSlaveFilter < 0 || slave->settings().slave == binding.mbSlaveFilter) {
+            if ((table == QLatin1String("hr") || table == QLatin1String("ir")) &&
+                binding.mbBit >= 0 && binding.mbBit <= 15) {
+                slave->writeBit(table, binding.mbRegIndex, binding.mbBit,
+                                value != 0 ? ModbusBitAction::Set : ModbusBitAction::Clear);
+            } else {
+                slave->writeValue(table, binding.mbRegIndex, value, binding.mbDataType, binding.mbRegOrder);
+            }
+        }
     }
 }
 

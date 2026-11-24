@@ -359,6 +359,15 @@ class FrameTemplateEditor : public AppDialog
             inputLayout->insertWidget(0, m_staticSettings);
         else
             inputLayout->addWidget(m_staticSettings);
+        if (m_mode == InputListMode::ModbusValue &&
+            CommandEncoder::functionCode(item.propertyValue(QStringLiteral("mbFunc")).toString()) == 0x06) {
+            m_bitActionSettings = new QWidget(inputPane);
+            auto *bitRow = new QHBoxLayout(m_bitActionSettings);
+            bitRow->setContentsMargins(0, 0, 0, 0);
+            addSetting(bitRow, item, QStringLiteral("mbBitAction"));
+            bitRow->addStretch();
+            inputLayout->addWidget(m_bitActionSettings);
+        }
         if (!hasTemplate && m_mode != InputListMode::Registers)
             inputLayout->addStretch();
         if (m_mode == InputListMode::Registers) {
@@ -457,9 +466,13 @@ class FrameTemplateEditor : public AppDialog
             const auto effective = resolvePointWrite(configured, m_project.logic, m_project.widgets, m_project.parserType(),
                                                      &pointProblem, u"PushButton", ModbusParserChoice::OnConnect);
             const auto props = effective.value_or(configured);
+            const bool writesBit = m_mode == InputListMode::ModbusValue &&
+                CommandEncoder::functionCode(props.value(QStringLiteral("mbFunc")).toString()) == 0x06 &&
+                CommandEncoder::modbusBit(props) != CommandEncoder::WholeRegister;
             QString error = m_sequenceEnabled
                 ? (m_sequence->frames().isEmpty() ? fhmi::tr("请添加至少一个发送帧模板") : QString())
-                : usesMappedFields() ? m_namedFields->validate() : m_inputEditor->validate();
+                : usesMappedFields() ? m_namedFields->validate()
+                : writesBit ? QString() : m_inputEditor->validate();
             if (error.isEmpty())
                 error = pointProblem;
             if (error.isEmpty() && editsFixedCan() && !templateText().trimmed().isEmpty())
@@ -536,7 +549,7 @@ class FrameTemplateEditor : public AppDialog
         const auto rows = m_inputEditor->toJson();
         const QString key = CommandEncoder::singleInputProperty(m_mode);
         if (!key.isEmpty()) {
-            if (!rows.isEmpty() || m_properties.contains(key))
+            if (!writesModbusBit() && (!rows.isEmpty() || m_properties.contains(key)))
                 changes.insert(key, rows.isEmpty() ? QString() : m_inputEditor->rows().first().inputId);
         } else if (m_mode != InputListMode::Json || !rows.isEmpty() || m_properties.value(QStringLiteral("jsonUseInputs")).toBool()) {
             if (!rows.isEmpty() || m_properties.contains(QStringLiteral("commandInputs")))
@@ -557,10 +570,25 @@ class FrameTemplateEditor : public AppDialog
     {
         if (m_sequenceEnabled)
             return m_sequence->pendingInputs();
+        if (writesModbusBit())
+            return {};
         return usesMappedFields() ? m_namedFields->pendingInputs() : m_inputEditor->pendingInputs();
     }
 
   private:
+    bool writesModbusBit() const
+    {
+        if (m_mode != InputListMode::ModbusValue)
+            return false;
+        auto configured = m_properties;
+        for (auto it = m_editedSettings.begin(); it != m_editedSettings.end(); ++it)
+            configured.insert(it.key(), it.value());
+        const auto effective = resolvePointWrite(configured, m_project.logic, m_project.widgets, m_project.parserType(),
+                                                 nullptr, u"PushButton", ModbusParserChoice::OnConnect);
+        const auto props = effective.value_or(configured);
+        return CommandEncoder::functionCode(props.value(QStringLiteral("mbFunc")).toString()) == 0x06 &&
+               CommandEncoder::modbusBit(props) != CommandEncoder::WholeRegister;
+    }
     bool usesMappedFields() const { return !m_sequenceEnabled && m_payloadMode && m_payloadMode->currentItem() == FieldPayload; }
     bool editsFixedCan() const { return !m_signalNames.isEmpty() && !m_hasInputs; }
 
@@ -748,6 +776,19 @@ class FrameTemplateEditor : public AppDialog
             };
             number("mbSlave", fhmi::tr("从站地址"), 0, 247);
             number("mbAddress", fhmi::tr("起始地址"), 0, 65535);
+            if (m_mode == InputListMode::ModbusValue &&
+                CommandEncoder::functionCode(item.propertyValue(QStringLiteral("mbFunc")).toString()) == 0x06) {
+                auto *bit = new FluentQt::SpinBox(m_manualAddress);
+                bit->setObjectName(QStringLiteral("modbusBitEditor"));
+                bit->setRange(CommandEncoder::WholeRegister, 15);
+                bit->setSpecialValueText(fhmi::tr("整个寄存器"));
+                bit->setValue(CommandEncoder::modbusBit(m_properties));
+                form->addRow(fhmi::tr("位号"), bit);
+                connect(bit, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
+                    m_editedSettings.insert(QStringLiteral("mbBit"), value);
+                    refreshPreview();
+                });
+            }
         }
         connect(target, &FluentQt::ComboBox::currentIndexChanged, this, [this, target] {
             m_editedSettings.insert(QStringLiteral("commandTargetId"), selectedValue(target));
@@ -1330,6 +1371,13 @@ class FrameTemplateEditor : public AppDialog
         const auto pointName = configured.value(writePointKey(configured.value(QStringLiteral("commandMode")).toString())).toString();
         if (m_manualAddress)
             m_manualAddress->setVisible(pointName.isEmpty());
+        if (m_bitActionSettings) {
+            const bool writesBit = CommandEncoder::functionCode(props.value(QStringLiteral("mbFunc")).toString()) == 0x06 &&
+                                   CommandEncoder::modbusBit(props) != CommandEncoder::WholeRegister;
+            m_bitActionSettings->setVisible(writesBit);
+            m_inputEditor->setVisible(!writesBit);
+            m_staticSettings->setVisible(!writesBit && !m_hasInputs && !editsFixedCan());
+        }
         const bool shared = FrameTemplates::sendSettings(m_project.frameTemplates, props).has_value();
         if (m_payloadHint)
             m_payloadHint->setVisible(!m_sequenceEnabled && shared && !usesMappedFields());
@@ -1493,6 +1541,7 @@ class FrameTemplateEditor : public AppDialog
     FluentQt::CaptionLabel *m_payloadHint = nullptr;
     bool m_payloadModeChosen = false;
     QWidget *m_staticSettings = nullptr;
+    QWidget *m_bitActionSettings = nullptr;
     QWidget *m_registerOrder = nullptr;
     QWidget *m_manualFraming = nullptr;
     QWidget *m_byteOrderSetting = nullptr;

@@ -158,6 +158,28 @@ class TestBinding : public QObject
         QVERIFY(read(with({{"mbArea", "输入寄存器"}, {"mbRegIndex", 100}})).isEmpty());
         QCOMPARE(read(with({{"mbArea", "线圈"}, {"mbRegIndex", 9}})), (QVariantList{1LL}));
         QVERIFY(read(with({{"mbArea", "保持寄存器"}, {"mbRegIndex", 100}, {"mbSlaveFilter", 2}})).isEmpty());
+
+        // Reading individual bits (0–15) from holding and input registers; mbBit overrides wide data types,
+        // and coils/discrete inputs ignore mbBit.
+        const auto bitEntry = BindingEntry::fromWidget(
+            widget("LEDIndicator", {{"parseMode", "Modbus"}, {"mbArea", "保持寄存器"},
+                                    {"mbRegIndex", 10}, {"mbBit", 3}, {"mbDataType", "float32"}}));
+        QVERIFY(bitEntry);
+        QCOMPARE(bitEntry->extractFromParsed(Message{{"slave", 1LL}, {"fc", 3LL}, {"hr10", 0x0008LL}}), QVariant(1LL));
+        QCOMPARE(bitEntry->extractFromParsed(Message{{"slave", 1LL}, {"fc", 3LL}, {"hr10", 0xFFF7LL}}), QVariant(0LL));
+        const auto irBit = BindingEntry::fromWidget(
+            widget("LEDIndicator", {{"parseMode", "Modbus"}, {"mbArea", "输入寄存器"}, {"mbRegIndex", 2}, {"mbBit", 15}}));
+        QVERIFY(irBit);
+        QCOMPARE(irBit->extractFromParsed(Message{{"slave", 1LL}, {"fc", 4LL}, {"ir2", 0x8000LL}}), QVariant(1LL));
+        QCOMPARE(irBit->extractFromParsed(Message{{"slave", 1LL}, {"fc", 4LL}, {"ir2", 0x7FFFLL}}), QVariant(0LL));
+        const auto wholeReg = BindingEntry::fromWidget(
+            widget("NumericDisplay", {{"parseMode", "Modbus"}, {"mbArea", "保持寄存器"}, {"mbRegIndex", 10}, {"mbBit", -1}}));
+        QVERIFY(wholeReg);
+        QCOMPARE(wholeReg->extractFromParsed(Message{{"slave", 1LL}, {"fc", 3LL}, {"hr10", 0x0008LL}}), QVariant(8LL));
+        const auto coilWithBit = BindingEntry::fromWidget(
+            widget("LEDIndicator", {{"parseMode", "Modbus"}, {"mbArea", "线圈"}, {"mbRegIndex", 9}, {"mbBit", 3}}));
+        QVERIFY(coilWithBit);
+        QCOMPARE(coilWithBit->extractFromParsed(Message{{"slave", 1LL}, {"fc", 1LL}, {"co9", 1LL}}), QVariant(1LL));
     }
 
     void unconfiguredBindingIsSkipped()

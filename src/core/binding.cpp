@@ -226,6 +226,7 @@ QJsonObject chartCurveBinding(const QJsonObject &props, int curve)
         {QStringLiteral("frameHeader"), field("frameHeader", QString())},
         {QStringLiteral("frameTail"), field("frameTail", QString())},
         {QStringLiteral("mbRegIndex"), field("regIndex", 0)},
+        {QStringLiteral("mbBit"), field("mbBit", -1)},
         {QStringLiteral("mbDataType"), field("mbDataType", QStringLiteral("uint16"))},
         {QStringLiteral("mbRegOrder"), field("mbRegOrder", QStringLiteral("大端(AB CD)"))}, // i18n: value
         {QStringLiteral("mbFcFilter"), field("mbFcFilter", -1)},
@@ -391,6 +392,7 @@ std::optional<BindingEntry> BindingEntry::fromWidget(const QJsonObject &widget)
     entry.frameHeader = parseHexOrEmpty(binding.value(QStringLiteral("frameHeader")).toString());
     entry.frameTail = parseHexOrEmpty(binding.value(QStringLiteral("frameTail")).toString());
     entry.mbRegIndex = binding.value(QStringLiteral("mbRegIndex")).toInt(0);
+    entry.mbBit = binding.value(QStringLiteral("mbBit")).toInt(-1);
     entry.mbSlaveFilter = binding.value(QStringLiteral("mbSlaveFilter")).toInt(-1);
     entry.mbDataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
     entry.mbRegOrder =
@@ -515,6 +517,9 @@ QVariant BindingEntry::extractModbus(const Message &data) const
     const auto r0 = reg(mbRegIndex);
     if (!r0) {
         return {};
+    }
+    if (mbBit >= 0 && mbBit <= 15) {
+        return qlonglong((*r0 >> mbBit) & 1u);
     }
     if (mbDataType == QLatin1String("uint16")) {
         return qlonglong(*r0);

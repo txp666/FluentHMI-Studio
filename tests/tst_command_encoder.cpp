@@ -477,6 +477,56 @@ class TestCommandEncoder : public QObject
         QCOMPARE(coil.command->modbus.value, 0xFF00);
     }
 
+    void modbusRegisterBitCommands()
+    {
+        // ToggleSwitch in HoldingRegisterBit mode writes only the selected bit; switching back to whole register ignores mbBit.
+        const QJsonObject swBit{{"commandMode", "Modbus"}, {"mbSlave", 2}, {"mbArea", "保持寄存器位"},
+                                {"mbAddress", 10}, {"mbBit", 3}};
+        const auto on = CommandEncoder::switchFromProperties(swBit, true);
+        const auto off = CommandEncoder::switchFromProperties(swBit, false);
+        QVERIFY(on.command && off.command);
+        QVERIFY(on.command->modbus.writesBit());
+        QVERIFY(off.command->modbus.writesBit());
+        QCOMPARE(on.command->modbus.slave, 2);
+        QCOMPARE(on.command->modbus.func, 0x06);
+        QCOMPARE(on.command->modbus.address, 10);
+        QCOMPARE(on.command->modbus.bit, 3);
+        QCOMPARE(on.command->modbus.bitAction, ModbusBitAction::Set);
+        QCOMPARE(off.command->modbus.bitAction, ModbusBitAction::Clear);
+        QCOMPARE(on.command->modbus.withBit(0x00F0), quint16(0x00F8));
+        QCOMPARE(off.command->modbus.withBit(0x00F8), quint16(0x00F0));
+        QCOMPARE(CommandEncoder::modbusValueText(on.command->modbus), QStringLiteral("位 3 = 1"));
+        QCOMPARE(CommandEncoder::modbusValueText(off.command->modbus), QStringLiteral("位 3 = 0"));
+        QVERIFY(CommandEncoder::describe(*on.command, QStringLiteral("Modbus")).contains(QStringLiteral("03")));
+
+        QJsonObject swWhole = swBit;
+        swWhole.insert(QStringLiteral("mbArea"), QStringLiteral("保持寄存器"));
+        const auto wholeOn = CommandEncoder::switchFromProperties(swWhole, true);
+        QVERIFY(wholeOn.command);
+        QVERIFY(!wholeOn.command->modbus.writesBit());
+        QCOMPARE(wholeOn.command->modbus.value, 1);
+
+        // PushButton FC06 with mbBit supports 置位 / 复位 / 取反 and takes no input.
+        const QJsonObject btnToggle{{"commandMode", "Modbus"}, {"mbSlave", 1}, {"mbFunc", "06 写单寄存器"},
+                                    {"mbAddress", 20}, {"mbBit", 5}, {"mbBitAction", "取反"}, {"mbInputId", "spin1"}};
+        QVERIFY(CommandEncoder::commandInputs(btnToggle).isEmpty());
+        const auto toggled = CommandEncoder::buttonFromProperties(btnToggle);
+        QVERIFY(toggled.command);
+        QVERIFY(toggled.command->modbus.writesBit());
+        QCOMPARE(toggled.command->modbus.bit, 5);
+        QCOMPARE(toggled.command->modbus.bitAction, ModbusBitAction::Toggle);
+        QCOMPARE(toggled.command->modbus.withBit(0x0000), quint16(0x0020));
+        QCOMPARE(toggled.command->modbus.withBit(0x0021), quint16(0x0001));
+        QCOMPARE(CommandEncoder::modbusValueText(toggled.command->modbus), QStringLiteral("位 5 取反"));
+
+        // Direct encode with mbBit accepts 0 or 1 and rejects other numbers.
+        const QJsonObject direct{{"commandMode", "Modbus"}, {"mbSlave", 1}, {"mbFunc", "06 写单寄存器"},
+                                 {"mbAddress", 10}, {"mbBit", 1}};
+        QCOMPARE(CommandEncoder::encode(direct, QStringLiteral("1")).command->modbus.bitAction, ModbusBitAction::Set);
+        QCOMPARE(CommandEncoder::encode(direct, QStringLiteral("0")).command->modbus.bitAction, ModbusBitAction::Clear);
+        QVERIFY(!CommandEncoder::encode(direct, QStringLiteral("2")).command);
+    }
+
     void selectionMovesLabelWithCommand()
     {
         const auto options = CommandEncoder::selectionOptions({QJsonObject{{"label", "Run"}, {"value", "1"}},

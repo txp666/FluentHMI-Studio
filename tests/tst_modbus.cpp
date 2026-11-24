@@ -236,6 +236,13 @@ class TestModbus : public QObject
         QVERIFY(holding);
         QCOMPARE(holding->table, QStringLiteral("hr"));
         QCOMPARE(holding->address, 2);
+        // A register bit binding always needs 1 register, even if a wide mbDataType was left over.
+        const auto bitNeed = need({{"parseMode", "Modbus"}, {"mbArea", "保持寄存器"}, {"mbRegIndex", 10},
+                                   {"mbBit", 4}, {"mbDataType", "float32"}});
+        QVERIFY(bitNeed);
+        QCOMPARE(bitNeed->table, QStringLiteral("hr"));
+        QCOMPARE(bitNeed->address, 10);
+        QCOMPARE(bitNeed->count, 1);
         QVERIFY(!need({{"parseMode", "Modbus"}, {"mbArea", "响应内序号"}, {"mbRegIndex", 2}}));
         QVERIFY(!need({{"parseMode", "键值匹配"}, {"key", "t"}}));
     }
@@ -435,6 +442,136 @@ class TestModbus : public QObject
         QCOMPARE(hub.sendModbus(request(1, 3, 0, 1), nullptr, {QStringLiteral("PLC"), {}}), 1);
         QCOMPARE(plc.modbusMaster()->pending(), 1);
         QCOMPARE(lines.sent.size(), 1);
+        hub.removeLink(&plc);
+        hub.removeLink(&lines);
+    }
+
+    // Register bit writes execute FC03 read then FC06 write in place so queued writes to the same register
+    // serialize without clobbering each other's bits, and errors abort before writing.
+    void bitWritesReadModifyWriteSequentially()
+    {
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
+        ModbusMaster *master = link.modbusMaster();
+        Results results;
+
+        const ModbusRequest set0{1, 0x06, 10, 0, {}, 0, ModbusBitAction::Set};
+        const ModbusRequest set2{1, 0x06, 10, 0, {}, 2, ModbusBitAction::Set};
+        const ModbusRequest clear1{1, 0x06, 10, 0, {}, 1, ModbusBitAction::Clear};
+        const ModbusRequest toggle3{1, 0x06, 10, 0, {}, 3, ModbusBitAction::Toggle};
+
+        // Queue all 4 back-to-back while the first read is on the line.
+        QCOMPARE(master->enqueue(set0, 1000, ModbusMaster::Priority::Write, results.done()), rtu("0103000a0001"));
+        QVERIFY(!master->enqueue(set2, 1000, ModbusMaster::Priority::Write, results.done()).isEmpty());
+        QVERIFY(!master->enqueue(clear1, 1000, ModbusMaster::Priority::Write, results.done()).isEmpty());
+        QVERIFY(!master->enqueue(toggle3, 1000, ModbusMaster::Priority::Write, results.done()).isEmpty());
+        QCOMPARE(link.sent.size(), 1);
+
+        // Initial register value on device is 0x000A (bits 1 and 3 set).
+        // 1. set bit 0 -> 0x000B
+        link.inject(rtu("010302000a"));
+        QCOMPARE(link.sent.last(), rtu("0106000a000b"));
+        QCOMPARE(results.list.size(), 0); // not finished until FC06 echo
+        link.inject(rtu("0106000a000b"));
+        QCOMPARE(results.list.size(), 1);
+        QVERIFY(results.list.last().ok);
+
+        // 2. set bit 2 -> reads 0x000B, writes 0x000F
+        QCOMPARE(link.sent.last(), rtu("0103000a0001"));
+        link.inject(rtu("010302000b"));
+        QCOMPARE(link.sent.last(), rtu("0106000a000f"));
+        link.inject(rtu("0106000a000f"));
+        QCOMPARE(results.list.size(), 2);
+        QVERIFY(results.list.last().ok);
+
+        // 3. clear bit 1 -> reads 0x000F, writes 0x000D
+        QCOMPARE(link.sent.last(), rtu("0103000a0001"));
+        link.inject(rtu("010302000f"));
+        QCOMPARE(link.sent.last(), rtu("0106000a000d"));
+        link.inject(rtu("0106000a000d"));
+        QCOMPARE(results.list.size(), 3);
+        QVERIFY(results.list.last().ok);
+
+        // 4. toggle bit 3 -> reads 0x000D, writes 0x0005
+        QCOMPARE(link.sent.last(), rtu("0103000a0001"));
+        link.inject(rtu("010302000d"));
+        QCOMPARE(link.sent.last(), rtu("0106000a0005"));
+        link.inject(rtu("0106000a0005"));
+        QCOMPARE(results.list.size(), 4);
+        QVERIFY(results.list.last().ok);
+        QVERIFY(!master->busy());
+
+        // Exception during phase 1 (FC03) aborts without sending FC06, and next queued write still runs.
+        master->enqueue(set0, 1000, ModbusMaster::Priority::Write, results.done());
+        master->enqueue(request(1, 6, 11, 42), 1000, ModbusMaster::Priority::Write, results.done());
+        QCOMPARE(link.sent.last(), rtu("0103000a0001"));
+        link.inject(rtu("018302"));
+        QCOMPARE(results.list.size(), 5);
+        QVERIFY(!results.list.at(4).ok);
+        QCOMPARE(results.list.at(4).problem, QStringLiteral("设备返回异常 02 非法数据地址"));
+        QCOMPARE(link.sent.last(), rtu("0106000b002a"));
+        link.inject(rtu("0106000b002a"));
+        QCOMPARE(results.list.size(), 6);
+        QVERIFY(results.list.at(5).ok);
+
+        // Modbus TCP read-modify-write frames both FC03 and FC06 with distinct MBAP transaction IDs.
+        FakeLink tcp;
+        QVERIFY(tcp.setParser(QStringLiteral("modbus_tcp"), {}));
+        Results tcpResults;
+        const QByteArray readAdu =
+            tcp.modbusMaster()->enqueue(ModbusRequest{1, 0x06, 10, 0, {}, 2, ModbusBitAction::Toggle},
+                                        1000, ModbusMaster::Priority::Write, tcpResults.done());
+        QCOMPARE(readAdu.mid(6), QByteArray::fromHex("0103000a0001"));
+        const QByteArray tid1 = readAdu.left(2);
+        tcp.inject(tid1 + QByteArray::fromHex("000000050103020001")); // hr10 = 0x0001 -> toggle bit 2 -> 0x0005
+        const QByteArray writeAdu = tcp.sent.last();
+        QCOMPARE(writeAdu.mid(6), QByteArray::fromHex("0106000a0005"));
+        const QByteArray tid2 = writeAdu.left(2);
+        QVERIFY(tid2 != tid1);
+        tcp.inject(tid2 + QByteArray::fromHex("000000060106000a0005"));
+        QCOMPARE(tcpResults.list.size(), 1);
+        QVERIFY(tcpResults.list.first().ok);
+    }
+
+    // CommHub rejects register bit writes on non-Modbus links, delivers confirmed hr<addr> on FC06 ack,
+    // and local ModbusSlave executes bit writes without clobbering other bits.
+    void bitWritesOnHubAndLocalSlave()
+    {
+        CommHub hub;
+        FakeLink plc;
+        QVERIFY(plc.setParser(QStringLiteral("modbus"), {}));
+        FakeLink lines;
+        hub.addLink(&plc, QStringLiteral("PLC"));
+        hub.addLink(&lines, QStringLiteral("Lines"));
+        QSignalSpy units(&hub, &CommHub::unitReceived);
+        QSignalSpy errors(&hub, &CommHub::linkError);
+
+        const ModbusRequest set4{1, 0x06, 10, 0, {}, 4, ModbusBitAction::Set};
+        QCOMPARE(hub.sendModbus(set4, nullptr, {QStringLiteral("Lines"), {}}), 0);
+        QCOMPARE(errors.size(), 1);
+        QVERIFY(lines.sent.isEmpty());
+
+        QCOMPARE(hub.sendModbus(set4, nullptr, {QStringLiteral("PLC"), {}}), 1);
+        QCOMPARE(plc.sent.last(), rtu("0103000a0001"));
+        plc.inject(rtu("0103020001"));
+        QCOMPARE(plc.sent.last(), rtu("0106000a0011"));
+        plc.inject(rtu("0106000a0011"));
+        bool sawConfirmed = false;
+        for (const auto &call : units) {
+            const auto msg = call.at(1).value<Message>();
+            if (msg.value("fc").toInt() == 6 && msg.value("hr10").toInt() == 0x0011)
+                sawConfirmed = true;
+        }
+        QVERIFY(sawConfirmed);
+
+        ModbusSlave slave({1}, ModbusSlaveStore({{QStringLiteral("hr"), {0, 20}}}, QStringLiteral("hr10=5")));
+        QVERIFY(slave.execute(ModbusRequest{1, 0x06, 10, 0, {}, 1, ModbusBitAction::Set}));
+        QCOMPARE(slave.store().value(QStringLiteral("hr"), 10), quint16(7));
+        QVERIFY(slave.execute(ModbusRequest{1, 0x06, 10, 0, {}, 2, ModbusBitAction::Toggle}));
+        QCOMPARE(slave.store().value(QStringLiteral("hr"), 10), quint16(3));
+        QVERIFY(slave.execute(ModbusRequest{1, 0x06, 10, 0, {}, 0, ModbusBitAction::Clear}));
+        QCOMPARE(slave.store().value(QStringLiteral("hr"), 10), quint16(2));
+
         hub.removeLink(&plc);
         hub.removeLink(&lines);
     }

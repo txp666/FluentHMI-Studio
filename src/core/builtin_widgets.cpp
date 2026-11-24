@@ -265,6 +265,9 @@ QList<WidgetMeta> basicWidgets()
                choice(QStringLiteral("mbFunc"), QT_TR_NOOP("功能码"), QStringLiteral("03 读保持寄存器"), // i18n: value
                       kAllFunctions),
                address,
+               integer(QStringLiteral("mbBit"), QT_TR_NOOP("位号"), CommandEncoder::WholeRegister, -1, 15),
+               choice(QStringLiteral("mbBitAction"), QT_TR_NOOP("位操作"), CommandEncoder::bitActions().first(),
+                      CommandEncoder::bitActions()),
                dataType,
                regOrder,
                mbValue};
@@ -341,8 +344,9 @@ QList<WidgetMeta> basicWidgets()
     toggle += hexFraming(kHexTypes, QStringLiteral("HEX字符串"), false); // i18n: value
     toggle += {slave,
                choice(QStringLiteral("mbArea"), QT_TR_NOOP("写入区"), QStringLiteral("线圈"), // i18n: value
-                      {QStringLiteral("线圈"), ModbusArea::HoldingRegisters}),                  // i18n: value
-               integer(QStringLiteral("mbAddress"), QT_TR_NOOP("写入地址"), 0, 0, 65535).withHelp("modbus.addressing")};
+                      {QStringLiteral("线圈"), ModbusArea::HoldingRegisters, ModbusArea::HoldingRegisterBit}), // i18n: value
+               integer(QStringLiteral("mbAddress"), QT_TR_NOOP("写入地址"), 0, 0, 65535).withHelp("modbus.addressing"),
+               integer(QStringLiteral("mbBit"), QT_TR_NOOP("位号"), 0, 0, 15)};
     toggle += canCommand();
     toggle += s7Command();
     toggle += notification(QT_TR_NOOP("切换通知"), QT_TR_NOOP("开关已切换"), QStringLiteral("信息")); // i18n: value
@@ -546,6 +550,7 @@ QList<PropDef> chartSeriesProperties(bool timing)
             choice(QStringLiteral("curveMbArea"), QT_TR_NOOP("寄存器区"), ModbusArea::HoldingRegisters,
                    ModbusArea::options()),
             integer(QStringLiteral("curveRegIndex"), QT_TR_NOOP("寄存器地址"), 0, 0, 65535).withHelp("modbus.addressing"),
+            integer(QStringLiteral("curveMbBit"), QT_TR_NOOP("位号"), CommandEncoder::WholeRegister, -1, 15),
             choice(QStringLiteral("curveMbDataType"), QT_TR_NOOP("数据类型(MB)"), QStringLiteral("uint16"), mbTypes),
             choice(QStringLiteral("curveMbRegOrder"), QT_TR_NOOP("寄存器序(MB)"),
                    QStringLiteral("大端(AB CD)"),                                   // i18n: value

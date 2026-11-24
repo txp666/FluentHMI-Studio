@@ -213,13 +213,24 @@ std::optional<QJsonObject> resolvePointWrite(const QJsonObject &props, const QJs
     }
 
     const auto area = ModbusArea::prefix(binding->mbArea);
-    if (widgetType == u"ToggleSwitch")
-        output.insert(QStringLiteral("mbArea"), binding->mbArea);
+    const bool isBit = (area == QLatin1String("hr") || area == QLatin1String("ir")) &&
+                       binding->mbBit >= 0 && binding->mbBit <= 15;
+    if (widgetType == u"ToggleSwitch") {
+        if (area == QLatin1String("hr") && isBit) {
+            output.insert(QStringLiteral("mbArea"), ModbusArea::HoldingRegisterBit);
+            output.insert(QStringLiteral("mbBit"), binding->mbBit);
+        } else {
+            output.insert(QStringLiteral("mbArea"), binding->mbArea);
+            output.remove(QStringLiteral("mbBit"));
+        }
+    }
     const int function = CommandEncoder::sendRouteFilter(output, widgetType).modbus->function;
     if ((function == 5 && area != QLatin1String("co")) ||
         ((function == 6 || function == 16) && area != QLatin1String("hr")) ||
         (function != 5 && function != 6 && function != 16))
         return fail(tr("请选择与写入功能匹配的线圈或保持寄存器"));
+    if (isBit && function != 6)
+        return fail(tr("寄存器位数据点请使用 06 写单寄存器"));
     QJsonObject connection;
     visitWidgets(widgets, [&](const QJsonObject &widget) {
         if (widget.value(QStringLiteral("id")).toString() != route->connectionId)
@@ -238,7 +249,9 @@ std::optional<QJsonObject> resolvePointWrite(const QJsonObject &props, const QJs
     output.insert(QStringLiteral("mbAddress"), binding->mbRegIndex);
     output.insert(QStringLiteral("mbDataType"), binding->mbDataType);
     output.insert(QStringLiteral("mbRegOrder"), binding->mbRegOrder);
-    if (function != 5 && !CommandEncoder::modbusFunctionSpec(function).dataTypes.contains(binding->mbDataType))
+    if (widgetType != u"ToggleSwitch")
+        output.insert(QStringLiteral("mbBit"), isBit ? binding->mbBit : CommandEncoder::WholeRegister);
+    if (function != 5 && !isBit && !CommandEncoder::modbusFunctionSpec(function).dataTypes.contains(binding->mbDataType))
         return fail(tr("数据点的类型需要使用写多个寄存器"));
     const auto inputs = CommandEncoder::commandInputs(output);
     if (function == 16 && !inputs.isEmpty() && inputs.first().dataType != binding->mbDataType)
@@ -314,8 +327,12 @@ QString dataPointSourceText(const QJsonObject &binding)
         parts.append(entry->sourceEndpoint);
     if (entry->parseMode == ParseMode::Modbus) {
         parts.append(QStringLiteral("Modbus"));
-        parts.append(QStringLiteral("%1 %2").arg(translated(entry->mbArea)).arg(entry->mbRegIndex));
-        if (const QString table = ModbusArea::prefix(entry->mbArea); table == QLatin1String("hr") || table == QLatin1String("ir"))
+        const QString table = ModbusArea::prefix(entry->mbArea);
+        const bool isReg = table == QLatin1String("hr") || table == QLatin1String("ir");
+        const bool isBit = isReg && entry->mbBit >= 0 && entry->mbBit <= 15;
+        parts.append(isBit ? QStringLiteral("%1 %2.%3").arg(translated(entry->mbArea)).arg(entry->mbRegIndex).arg(entry->mbBit)
+                           : QStringLiteral("%1 %2").arg(translated(entry->mbArea)).arg(entry->mbRegIndex));
+        if (isReg && !isBit)
             parts.append(entry->mbDataType);
         if (entry->mbSlaveFilter >= 0)
             parts.append(tr("从站 %1").arg(entry->mbSlaveFilter));

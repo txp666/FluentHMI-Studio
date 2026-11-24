@@ -1,3 +1,4 @@
+#include "core/binding.h"
 #include "core/project.h"
 #include "core/command_encoder.h"
 #include "core/project_logic.h"
@@ -348,6 +349,26 @@ class TestProject : public QObject
             << QByteArray(R"json({"widgets":[{"type":"NumericDisplay","id":"pv",
                 "binding":{"parseMode":"Modbus","mbArea":"保持寄存器","mbPeriod":250}}]})json")
             << QString();
+        QTest::newRow("valid binding bit")
+            << QByteArray(R"json({"version":"1.3","widgets":[{"type":"LEDIndicator","id":"led",
+                "binding":{"parseMode":"Modbus","mbArea":"保持寄存器","mbRegIndex":10,"mbBit":7}}]})json")
+            << QString();
+        QTest::newRow("invalid binding bit")
+            << QByteArray(R"json({"widgets":[{"type":"LEDIndicator","id":"led",
+                "binding":{"parseMode":"Modbus","mbArea":"保持寄存器","mbRegIndex":10,"mbBit":16}}]})json")
+            << QStringLiteral("控件 led 的 mbBit 必须是 -1–15 的整数");
+        QTest::newRow("invalid toggle bit")
+            << QByteArray(R"json({"widgets":[{"type":"ToggleSwitch","id":"sw",
+                "properties":{"commandMode":"Modbus","mbArea":"保持寄存器位","mbAddress":10,"mbBit":-1}}]})json")
+            << QStringLiteral("控件 sw 的 mbBit 必须是 0–15 的整数");
+        QTest::newRow("invalid button bit")
+            << QByteArray(R"json({"widgets":[{"type":"PushButton","id":"btn",
+                "properties":{"commandMode":"Modbus","mbFunc":"06 写单寄存器","mbAddress":10,"mbBit":20}}]})json")
+            << QStringLiteral("控件 btn 的 mbBit 必须是 -1–15 的整数");
+        QTest::newRow("invalid bit action")
+            << QByteArray(R"json({"version":"1.3","widgets":[{"type":"PushButton","id":"btn",
+                "properties":{"commandMode":"Modbus","mbFunc":"06 写单寄存器","mbAddress":10,"mbBit":2,"mbBitAction":"清零"}}]})json")
+            << QStringLiteral("控件 btn 的 mbBitAction 只能是 置位、复位、取反");
     }
 
     void checksModbusKeys()
@@ -569,6 +590,73 @@ class TestProject : public QObject
         QCOMPARE(normalizedWidgetProperties("CanMonitor", legacy).value("autoSaveRows").toInt(), 1234);
         const auto fresh = WidgetRegistry::instance().find("CanMonitor")->newWidgetProperties();
         QCOMPARE(normalizedWidgetProperties("CanMonitor", fresh).value("autoSaveRows").toInt(), 100000);
+    }
+
+    void modbusBitDataPointWriteResolution()
+    {
+        const QJsonArray widgets{QJsonObject{{"id", "plc"}, {"type", "SerialConfigCard"},
+                                             {"properties", QJsonObject{{"defaultParser", "modbus"}, {"modbusSlave", 2}}}}};
+        const QJsonObject hrBit{{"parseMode", "Modbus"}, {"sourceCardId", "plc"}, {"mbArea", "保持寄存器"},
+                                {"mbRegIndex", 10}, {"mbBit", 3}, {"mbDataType", "float32"}};
+        const QJsonObject irBit{{"parseMode", "Modbus"}, {"sourceCardId", "plc"}, {"mbArea", "输入寄存器"},
+                                {"mbRegIndex", 10}, {"mbBit", 1}};
+        const QJsonObject logic{{"points", QJsonArray{
+            QJsonObject{{"name", "Relay3"}, {"binding", hrBit}},
+            QJsonObject{{"name", "Input1"}, {"binding", irBit}}}}};
+
+        QVERIFY(dataPointSourceText(hrBit).contains(QStringLiteral("保持寄存器 10.3")));
+        QVERIFY(!dataPointSourceText(hrBit).contains(QStringLiteral("float32")));
+
+        QString error;
+        const auto sw = resolvePointWrite(
+            QJsonObject{{"commandMode", "Modbus"}, {"mbWritePoint", "Relay3"}},
+            logic, widgets, QStringLiteral("line"), &error, u"ToggleSwitch");
+        QVERIFY2(sw.has_value(), qPrintable(error));
+        QCOMPARE(sw->value("mbArea").toString(), ModbusArea::HoldingRegisterBit);
+        QCOMPARE(sw->value("mbAddress").toInt(), 10);
+        QCOMPARE(sw->value("mbBit").toInt(), 3);
+        QCOMPARE(sw->value("mbSlave").toInt(), 2);
+
+        const auto btn = resolvePointWrite(
+            QJsonObject{{"commandMode", "Modbus"}, {"mbFunc", "06 写单寄存器"},
+                        {"mbWritePoint", "Relay3"}, {"mbBitAction", "取反"}},
+            logic, widgets, QStringLiteral("line"), &error, u"PushButton");
+        QVERIFY2(btn.has_value(), qPrintable(error));
+        QCOMPARE(btn->value("mbBit").toInt(), 3);
+        QCOMPARE(btn->value("mbBitAction").toString(), QStringLiteral("取反"));
+
+        // FC 16 cannot target a single bit data point; input register bits are read-only.
+        QVERIFY(!resolvePointWrite(
+            QJsonObject{{"commandMode", "Modbus"}, {"mbFunc", "16 写多个寄存器"}, {"mbWritePoint", "Relay3"}},
+            logic, widgets, QStringLiteral("line"), &error, u"PushButton"));
+        QCOMPARE(error, QStringLiteral("数据点 Relay3 · 寄存器位数据点请使用 06 写单寄存器"));
+        QVERIFY(!resolvePointWrite(
+            QJsonObject{{"commandMode", "Modbus"}, {"mbWritePoint", "Input1"}},
+            logic, widgets, QStringLiteral("line"), &error, u"ToggleSwitch"));
+
+        // Manual bit writes save as UIDP 1.3 with sendConfiguration so older versions cannot mis-send them.
+        Project bitProject;
+        bitProject.widgets = QJsonArray{
+            QJsonObject{{"id", "plc"}, {"type", "SerialConfigCard"},
+                        {"properties", QJsonObject{{"defaultParser", "modbus"}}}},
+            QJsonObject{{"id", "sw"}, {"type", "ToggleSwitch"},
+                        {"properties", QJsonObject{{"commandMode", "Modbus"}, {"commandTargetId", "plc"},
+                                                   {"mbArea", "保持寄存器位"}, {"mbAddress", 10}, {"mbBit", 3}}}},
+            QJsonObject{{"id", "btn"}, {"type", "PushButton"},
+                        {"properties", QJsonObject{{"commandMode", "Modbus"}, {"commandTargetId", "plc"},
+                                                   {"mbFunc", "06 写单寄存器"}, {"mbAddress", 10},
+                                                   {"mbBit", 4}, {"mbBitAction", "取反"}}}}};
+        const QJsonObject saved = bitProject.toJson();
+        QCOMPARE(saved.value("version").toString(), QStringLiteral("1.3"));
+        for (int index : {1, 2}) {
+            const QJsonObject savedProps = saved.value("widgets").toArray().at(index).toObject()
+                                               .value("properties").toObject();
+            QCOMPARE(savedProps.value("commandMode").toString(), QStringLiteral("requiresSendConfiguration"));
+            QVERIFY(savedProps.value("sendConfiguration").isObject());
+        }
+        Project restored;
+        QVERIFY2(Project::fromJson(saved, &restored, &error), qPrintable(error));
+        QCOMPARE(restored.widgets, bitProject.widgets);
     }
 };
 

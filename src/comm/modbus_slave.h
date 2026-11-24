@@ -164,6 +164,7 @@ class ModbusSlave : public QObject
     // A control's own value at its Modbus binding: a coil or discrete input takes 1 for any value but 0; registers
     // take the value as `dataType` in `regOrder`, clamped to the type's range, the way a Modbus command packs it.
     bool writeValue(const QString &table, int address, double value, const QString &dataType, const QString &regOrder);
+    bool writeBit(const QString &table, int address, int bit, ModbusBitAction action);
     // A Modbus command: FC 05 writes the coil (1 for any value but 0), FC 06 and 16 the registers; reads do nothing.
     bool acceptsCommand(const ModbusRequest &request) const;
     bool execute(const ModbusRequest &request);

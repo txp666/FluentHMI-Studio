@@ -5917,6 +5917,134 @@ class TestRuntime : public QObject
         QCOMPARE(card->height(), height);
         QCOMPARE(status->text(), QStringLiteral("连接失败"));
     }
+
+    // Holding-register bit data point shared as both read binding and write target for ToggleSwitch and PushButton,
+    // plus PropertyEditor visibility for bit fields.
+    void modbusRegisterBitReadWriteAndEditor()
+    {
+        Project project;
+        project.widgets = QJsonArray{
+            QJsonObject{{"id", "sim"}, {"type", "TcpConfigCard"},
+                        {"properties", QJsonObject{{"defaultParser", "modbus_tcp"}, {"modbusRole", "从站"},
+                                                   {"modbusSlave", 1}, {"slaveHrCount", 20},
+                                                   {"slaveInit", "hr10=4"}}}},
+            QJsonObject{{"id", "sw0"}, {"type", "ToggleSwitch"},
+                        {"properties", QJsonObject{{"commandMode", "Modbus"}, {"mbWritePoint", "Relay0"}}},
+                        {"binding", QJsonObject{{"parseMode", "工程数据点"}, {"key", "Relay0"}}}},
+            QJsonObject{{"id", "btn1"}, {"type", "PushButton"},
+                        {"properties", QJsonObject{{"commandMode", "Modbus"}, {"mbFunc", "06 写单寄存器"},
+                                                   {"mbWritePoint", "Relay1"}, {"mbBitAction", "取反"}}}},
+            QJsonObject{{"id", "led1"}, {"type", "LEDIndicator"},
+                        {"binding", QJsonObject{{"parseMode", "工程数据点"}, {"key", "Relay1"}}}},
+            QJsonObject{{"id", "led2"}, {"type", "LEDIndicator"},
+                        {"binding", QJsonObject{{"parseMode", "Modbus"}, {"sourceCardId", "sim"},
+                                                {"mbArea", "保持寄存器"}, {"mbRegIndex", 10}, {"mbBit", 2}}}}};
+        project.logic = QJsonObject{{"points", QJsonArray{
+            QJsonObject{{"name", "Relay0"}, {"binding", QJsonObject{
+                {"parseMode", "Modbus"}, {"sourceCardId", "sim"}, {"mbArea", "保持寄存器"},
+                {"mbRegIndex", 10}, {"mbBit", 0}}}},
+            QJsonObject{{"name", "Relay1"}, {"binding", QJsonObject{
+                {"parseMode", "Modbus"}, {"sourceCardId", "sim"}, {"mbArea", "保持寄存器"},
+                {"mbRegIndex", 10}, {"mbBit", 1}}}}}}};
+
+        RuntimeSurface surface;
+        surface.build(project);
+        QCOMPARE(surface.context()->hub()->modbusSlaves().size(), 1);
+        ModbusSlave *slave = surface.context()->hub()->modbusSlaves().first();
+        QApplication::processEvents();
+
+        const auto widgetById = [&surface](const QString &id) -> HmiWidget * {
+            for (HmiWidget *w : surface.widgets()) {
+                if (w->property("fhmiWidgetId").toString() == id)
+                    return w;
+            }
+            return nullptr;
+        };
+        auto *sw0 = widgetById("sw0")->findChild<FluentQt::SwitchButton *>("hmiToggleSwitch");
+        auto *btn1 = widgetById("btn1")->findChild<QPushButton *>();
+        QVERIFY(sw0 && btn1);
+        QVERIFY(!sw0->isChecked());
+        QVERIFY(surface.context()->projectData()->values().contains("Relay0"));
+        QCOMPARE(surface.context()->projectData()->values().value("Relay0").toInt(), 0);
+        QCOMPARE(surface.context()->projectData()->values().value("Relay1").toInt(), 0);
+
+        // Toggle Relay0 ON -> sets bit 0 without touching bit 2 (4 -> 5).
+        sw0->setChecked(true);
+        QCOMPARE(slave->store().value(QStringLiteral("hr"), 10), quint16(5));
+        QCOMPARE(surface.context()->projectData()->values().value("Relay0").toInt(), 1);
+        QCOMPARE(surface.context()->projectData()->values().value("Relay1").toInt(), 0);
+
+        // PushButton toggles Relay1 -> sets bit 1 (5 -> 7), then clears bit 1 (7 -> 5).
+        btn1->click();
+        QCOMPARE(slave->store().value(QStringLiteral("hr"), 10), quint16(7));
+        QCOMPARE(surface.context()->projectData()->values().value("Relay1").toInt(), 1);
+        btn1->click();
+        QCOMPARE(slave->store().value(QStringLiteral("hr"), 10), quint16(5));
+        QCOMPARE(surface.context()->projectData()->values().value("Relay1").toInt(), 0);
+
+        // PropertyEditor hides mbDataType when binding.mbBit >= 0, shows ToggleSwitch mbBit only for 保持寄存器位,
+        // and keeps PushButton mbBitAction visible when linked to a bit data point.
+        PropertyEditor editor;
+        editor.setProject(&project);
+        editor.show();
+
+        std::unique_ptr<CanvasItem> ledItem(CanvasItem::fromJson(project.widgets.at(4).toObject(), QString()));
+        editor.showItem(ledItem.get());
+        QApplication::processEvents();
+        QWidget *bitSpin = fieldFor(&editor, QStringLiteral("位号"));
+        QWidget *typeCombo = fieldFor(&editor, QStringLiteral("数据类型"));
+        QVERIFY(bitSpin && !bitSpin->isHidden());
+        QVERIFY(typeCombo && typeCombo->isHidden());
+
+        // ToggleSwitch manual 保持寄存器位 vs 保持寄存器.
+        std::unique_ptr<CanvasItem> swManual(CanvasItem::fromJson(QJsonObject{
+            {"id", "swM"}, {"type", "ToggleSwitch"},
+            {"properties", QJsonObject{{"commandMode", "Modbus"}, {"mbArea", "保持寄存器位"}, {"mbBit", 2}}}}, QString()));
+        editor.showItem(swManual.get());
+        QApplication::processEvents();
+        auto hasVisibleLabel = [&editor](const QString &labelText) {
+            for (auto *label : editor.findChildren<QLabel *>()) {
+                if (label->text() == labelText && !label->isHidden())
+                    return true;
+            }
+            return false;
+        };
+        QVERIFY(hasVisibleLabel(QStringLiteral("位号")));
+        auto *areaCombo = qobject_cast<FluentQt::ComboBox *>(fieldFor(&editor, QStringLiteral("写入区")));
+        QVERIFY(areaCombo);
+        areaCombo->setCurrentIndex(areaCombo->findData(ModbusArea::HoldingRegisters));
+        QApplication::processEvents();
+        QVERIFY(!hasVisibleLabel(QStringLiteral("位号")));
+
+        // PushButton linked to Relay1 (holding register bit): mbBitAction stays visible while mbBit is hidden.
+        std::unique_ptr<CanvasItem> btnLinked(CanvasItem::fromJson(project.widgets.at(2).toObject(), QString()));
+        editor.showItem(btnLinked.get());
+        QApplication::processEvents();
+        QVERIFY(hasVisibleLabel(QStringLiteral("位操作")));
+        QVERIFY(!hasVisibleLabel(QStringLiteral("位号")));
+
+        // FrameTemplateEditor for manual FC06 PushButton: setting modbusBitEditor switches to bit action & updates preview.
+        std::unique_ptr<CanvasItem> btnManual(CanvasItem::fromJson(QJsonObject{
+            {"id", "btnM"}, {"type", "PushButton"},
+            {"properties", QJsonObject{{"commandMode", "Modbus"}, {"commandTargetId", "sim"},
+                                       {"mbFunc", "06 写单寄存器"}, {"mbAddress", 10}}}}, QString()));
+        editor.showItem(btnManual.get());
+        QApplication::processEvents();
+        auto *editBtn = editor.findChild<QPushButton *>(QStringLiteral("editFrameTemplate"));
+        QVERIFY(editBtn && !editBtn->isHidden());
+        editBtn->click();
+        QPointer<AppDialog> dialog(editor.findChild<AppDialog *>(QStringLiteral("frameTemplateEditor")));
+        QVERIFY(dialog);
+        auto *bitEditor = dialog->findChild<QSpinBox *>(QStringLiteral("modbusBitEditor"));
+        auto *preview = dialog->findChild<QPlainTextEdit *>(QStringLiteral("frameTemplatePreview"));
+        QVERIFY(bitEditor && preview);
+        bitEditor->setValue(3);
+        QApplication::processEvents();
+        QVERIFY(preview->toPlainText().contains(QStringLiteral("位 3 = 1")));
+        dialog->yesButton()->click();
+        QTRY_VERIFY(dialog.isNull());
+        QCOMPARE(btnManual->propertyValue(QStringLiteral("mbBit")).toInt(), 3);
+    }
 };
 
 QTEST_MAIN(TestRuntime)

@@ -181,8 +181,9 @@ const QHash<QString, QSet<QString>> &modeVisibility()
           QStringLiteral("commandTemplate"), QStringLiteral("commandJsonNewline")}},
         {QStringLiteral("S7"), {QStringLiteral("s7Command")}},
         {QStringLiteral("Modbus"),
-         {QStringLiteral("mbSlave"), QStringLiteral("mbFunc"), QStringLiteral("mbAddress"), QStringLiteral("mbValue"),
-          QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder"), QStringLiteral("mbArea")}},
+         {QStringLiteral("mbSlave"), QStringLiteral("mbFunc"), QStringLiteral("mbAddress"), QStringLiteral("mbBit"),
+          QStringLiteral("mbBitAction"), QStringLiteral("mbValue"), QStringLiteral("mbDataType"),
+          QStringLiteral("mbRegOrder"), QStringLiteral("mbArea")}},
         // A message with signals takes Signal=value assignments in the template, a raw ID HEX mode's bytes.
         {QStringLiteral("CAN"),
          {QStringLiteral("command"), QStringLiteral("onCommand"), QStringLiteral("offCommand"),
@@ -483,9 +484,9 @@ const QHash<QString, QSet<QString>> &chartParseVisibility()
           QStringLiteral("curveFrameHeader"), QStringLiteral("curveFrameTail")}},
         {ParseMode::S7, {QStringLiteral("curveS7")}},
         {ParseMode::Modbus,
-         {QStringLiteral("curveMbArea"), QStringLiteral("curveRegIndex"), QStringLiteral("curveMbDataType"),
-          QStringLiteral("curveMbRegOrder"), QStringLiteral("curveMbFcFilter"), QStringLiteral("curveMbSlaveFilter"),
-          QStringLiteral("curveMbPeriod")}},
+         {QStringLiteral("curveMbArea"), QStringLiteral("curveRegIndex"), QStringLiteral("curveMbBit"),
+          QStringLiteral("curveMbDataType"), QStringLiteral("curveMbRegOrder"), QStringLiteral("curveMbFcFilter"),
+          QStringLiteral("curveMbSlaveFilter"), QStringLiteral("curveMbPeriod")}},
     };
     return table;
 }
@@ -508,6 +509,7 @@ const QHash<QString, QString> &curveFields()
         {QStringLiteral("curveFrameHeader"), QStringLiteral("frameHeader")},
         {QStringLiteral("curveFrameTail"), QStringLiteral("frameTail")},
         {QStringLiteral("curveRegIndex"), QStringLiteral("regIndex")},
+        {QStringLiteral("curveMbBit"), QStringLiteral("mbBit")},
         {QStringLiteral("curveMbDataType"), QStringLiteral("mbDataType")},
         {QStringLiteral("curveMbRegOrder"), QStringLiteral("mbRegOrder")},
         {QStringLiteral("curveMbPeriod"), QStringLiteral("mbPeriod")},
@@ -781,13 +783,17 @@ void PropertyEditor::setRowVisible(const QString &key, bool visible)
     }
 }
 
-void PropertyEditor::setModbusReadFields(const QJsonObject &binding, const QString &typeRow, const QString &orderRow)
+void PropertyEditor::setModbusReadFields(const QJsonObject &binding, const QString &bitRow, const QString &typeRow,
+                                         const QString &orderRow)
 {
     const QString table = ModbusArea::prefix(binding.value(QStringLiteral("mbArea")).toString(ModbusArea::HoldingRegisters));
     const bool registers = table == QLatin1String("hr") || table == QLatin1String("ir");
+    const int bit = binding.value(QStringLiteral("mbBit")).toInt(CommandEncoder::WholeRegister);
+    const bool isBit = registers && bit >= 0 && bit <= 15;
     const QString dataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
-    setRowVisible(typeRow, registers);
-    setRowVisible(orderRow, registers && CommandEncoder::usesRegisterOrder(dataType));
+    setRowVisible(bitRow, registers);
+    setRowVisible(typeRow, registers && !isBit);
+    setRowVisible(orderRow, registers && !isBit && CommandEncoder::usesRegisterOrder(dataType));
 }
 
 void PropertyEditor::updateRouteEndpoint(const QString &connection, const QString &endpoint, bool active)
@@ -1031,6 +1037,9 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
             spin->setValue(value.isString() ? value.toString().toInt() : value.toInt());
             if (def.name == QLatin1String("curveMbPeriod"))
                 spin->setSpecialValueText(tr("默认周期"));
+            if ((def.name == QLatin1String("mbBit") && def.minimum && *def.minimum < 0) ||
+                def.name == QLatin1String("curveMbBit"))
+                spin->setSpecialValueText(tr("整个寄存器"));
             if (def.name == CommandEncoder::SendInterval) {
                 spin->setSpecialValueText(tr("单次发送"));
                 spin->setSuffix(QStringLiteral(" ms"));
@@ -3196,6 +3205,9 @@ void PropertyEditor::buildBindingForm(QFormLayout *form)
     add("mbArea", tr("读取区"),
         combo(ModbusArea::options(), value("mbArea", ModbusArea::HoldingRegisters).toString()));
     add("mbRegIndex", tr("读取地址"), spin(0, 65535, value("mbRegIndex", 0).toInt()), QStringLiteral("modbus.addressing"));
+    auto *mbBit = spin(-1, 15, value("mbBit", CommandEncoder::WholeRegister).toInt());
+    mbBit->setSpecialValueText(tr("整个寄存器"));
+    add("mbBit", tr("位号"), mbBit);
     add("mbDataType", tr("数据类型"),
         combo({QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"), QStringLiteral("int32"),
                QStringLiteral("float32")},
@@ -3252,7 +3264,7 @@ void PropertyEditor::commitBinding(const QString &field)
     for (const char *key : {"key", "jsonPath", "dataType", "byteOrder", "frameHeader", "frameTail",
                             "mbDataType", "mbRegOrder", "mbArea", "sourceCardId"})
         binding.insert(QLatin1String(key), textOf(key));
-    for (const char *key : {"byteOffset", "mbRegIndex", "mbFcFilter", "mbSlaveFilter", "mbPeriod"})
+    for (const char *key : {"byteOffset", "mbRegIndex", "mbBit", "mbFcFilter", "mbSlaveFilter", "mbPeriod"})
         binding.insert(QLatin1String(key), intOf(key));
     const QString endpoint = textOf("sourceEndpoint");
     binding.insert(QStringLiteral("sourceEndpoint"), endpoint.isEmpty() ? QJsonValue(QJsonValue::Undefined) : QJsonValue(endpoint));
@@ -3486,15 +3498,23 @@ void PropertyEditor::updateVisibility()
             const QString dataType = m_item->propertyValue(QStringLiteral("mbDataType")).toString();
             const auto spec = CommandEncoder::modbusFunctionSpec(function);
             const bool registers = spec.argument == CommandEncoder::ModbusArgument::Register;
+            const bool isFc06 = function == 0x06;
+            const bool writesBit = isFc06 && CommandEncoder::modbusBit(effective) != CommandEncoder::WholeRegister;
             if (auto *box = qobject_cast<FluentQt::ComboBox *>(m_rows.value(QStringLiteral("mbDataType")).second))
                 replaceChoices(box, spec.dataTypes, dataType);
             const bool writeList = listMode == InputListMode::Registers && batch;
-            setRowVisible(QStringLiteral("mbDataType"), registers && !writeList);
+            setRowVisible(QStringLiteral("mbBit"), isFc06);
+            setRowVisible(QStringLiteral("mbBitAction"), writesBit);
+            setRowVisible(QStringLiteral("mbDataType"), registers && !writeList && !writesBit);
             const bool usesOrder = writeList ? std::any_of(inputs.cbegin(), inputs.cend(), [](const auto &input) {
                 return CommandEncoder::usesRegisterOrder(input.dataType);
             }) : registers && spec.dataTypes.contains(dataType) && CommandEncoder::usesRegisterOrder(dataType);
-            setRowVisible(QStringLiteral("mbRegOrder"), usesOrder);
-            setRowVisible(QStringLiteral("mbValue"), !batch && spec.argument != CommandEncoder::ModbusArgument::Unsupported);
+            setRowVisible(QStringLiteral("mbRegOrder"), usesOrder && !writesBit);
+            setRowVisible(QStringLiteral("mbValue"), !batch && !writesBit && spec.argument != CommandEncoder::ModbusArgument::Unsupported);
+        }
+        if (sends && mode == QLatin1String("Modbus") && meta.typeName == QLatin1String("ToggleSwitch")) {
+            setRowVisible(QStringLiteral("mbBit"),
+                          m_item->propertyValue(QStringLiteral("mbArea")).toString() == ModbusArea::HoldingRegisterBit);
         }
         if (unified) {
             for (const char *key : {"command", "commandTemplate", "frameHeader", "frameTail", "dataType", "byteOrder",
@@ -3552,7 +3572,7 @@ void PropertyEditor::updateVisibility()
                 setRowVisible(QLatin1String(key), false);
         }
         if (linked)
-            for (const char *key : {"mbSlave", "mbAddress", "mbArea", "mbDataType", "mbRegOrder",
+            for (const char *key : {"mbSlave", "mbAddress", "mbArea", "mbBit", "mbDataType", "mbRegOrder",
                                     "s7Command.address", "s7Command.dataType"})
                 setRowVisible(QLatin1String(key), false);
         setRowVisible(QStringLiteral("commandTargetId"), sends && !linked);
@@ -3666,7 +3686,8 @@ void PropertyEditor::updateVisibility()
                                             .toString(QStringLiteral("float32"))));
         setRowVisible(QStringLiteral("curveExpression"), mode != ParseMode::None && !visualValues);
         if (mode == ParseMode::Modbus)
-            setModbusReadFields(binding, QStringLiteral("curveMbDataType"), QStringLiteral("curveMbRegOrder"));
+            setModbusReadFields(binding, QStringLiteral("curveMbBit"), QStringLiteral("curveMbDataType"),
+                                QStringLiteral("curveMbRegOrder"));
         for(const QString &field:{QStringLiteral("address"),QStringLiteral("dataType"),QStringLiteral("period")})
             setRowVisible(QStringLiteral("curveS7.")+field,mode==ParseMode::S7);
         // Only once the curve has an ID to judge: an empty one is a field still to fill, not a mistake.
@@ -3726,11 +3747,12 @@ void PropertyEditor::updateVisibility()
             setRowVisible(QStringLiteral("binding.byteOrder"), usesByteOrder(selectedValue(type)));
         }
         for (const char *field :
-             {"mbArea", "mbRegIndex", "mbDataType", "mbRegOrder", "mbFcFilter", "mbSlaveFilter", "mbPeriod"}) {
+             {"mbArea", "mbRegIndex", "mbBit", "mbDataType", "mbRegOrder", "mbFcFilter", "mbSlaveFilter", "mbPeriod"}) {
             setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::Modbus);
         }
         if (mode == ParseMode::Modbus)
-            setModbusReadFields(m_item->binding(), QStringLiteral("binding.mbDataType"), QStringLiteral("binding.mbRegOrder"));
+            setModbusReadFields(m_item->binding(), QStringLiteral("binding.mbBit"), QStringLiteral("binding.mbDataType"),
+                                QStringLiteral("binding.mbRegOrder"));
         setRowVisible(QStringLiteral("binding.savePoint"), usesSource && BindingEntry::fromWidget(m_item->toJson()).has_value());
         setRowVisible(QStringLiteral("binding.example"), mode != ParseMode::None);
         if (m_rows.contains(QStringLiteral("binding.localWrite"))) {

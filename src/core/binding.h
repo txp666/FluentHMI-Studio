@@ -25,7 +25,8 @@ QList<TextFieldValue> textFieldValues(const Message &message);
 // The register table a Modbus binding reads, by register address: a reply names its registers that way
 // (hr100) once the request it answers is known.
 namespace ModbusArea {
-inline const QString HoldingRegisters = QStringLiteral("保持寄存器"); // i18n: value
+inline const QString HoldingRegisters = QStringLiteral("保持寄存器");    // i18n: value
+inline const QString HoldingRegisterBit = QStringLiteral("保持寄存器位"); // i18n: value
 QStringList options();               // 保持寄存器 (the default), 输入寄存器, 线圈, 离散输入
 QString prefix(const QString &area); // "hr", "ir", "co", "di"; empty for anything else
 } // namespace ModbusArea
@@ -140,6 +141,7 @@ class BindingEntry
     QByteArray frameHeader;
     QByteArray frameTail;
     int mbRegIndex = 0;
+    int mbBit = -1; // 0–15 of a holding/input register, -1 for the whole register
     int mbSlaveFilter = -1;
     QString mbDataType = QStringLiteral("uint16");
     QString mbRegOrder = QStringLiteral("大端(AB CD)"); // i18n: value

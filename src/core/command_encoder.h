@@ -17,6 +17,14 @@
 
 namespace fhmi {
 
+// What a bit write does to its bit.
+enum class ModbusBitAction
+{
+    Set,
+    Clear,
+    Toggle,
+};
+
 struct ModbusRequest
 {
     int slave = 1;
@@ -24,7 +32,25 @@ struct ModbusRequest
     int address = 0;
     int value = 1; // register value for writes, quantity for reads
     QList<quint16> registers; // what an FC 16 request writes from address on
+    // An FC 06 request with a bit (0–15) writes only that bit of the holding register: the master reads the
+    // register with FC 03 first and writes it back with the bit changed (read-modify-write). -1 writes `value`.
+    int bit = -1;
+    ModbusBitAction bitAction = ModbusBitAction::Set;
 
+    bool writesBit() const { return func == 0x06 && bit >= 0 && bit <= 15; }
+    // The register value a bit write turns `current` into.
+    quint16 withBit(quint16 current) const
+    {
+        if (bit < 0 || bit > 15)
+            return current;
+        const quint16 mask = quint16(1u << bit);
+        switch (bitAction) {
+        case ModbusBitAction::Set: return quint16(current | mask);
+        case ModbusBitAction::Clear: return quint16(current & ~mask);
+        case ModbusBitAction::Toggle: return quint16(current ^ mask);
+        }
+        return current;
+    }
     ModbusDestination destination() const { return {slave, func}; }
 };
 
@@ -132,6 +158,13 @@ QStringList dataTypes();
 QStringList registerOrders();
 bool usesRegisterOrder(QStringView dataType);
 
+// The bit of a holding register an FC 06 write changes (mbBit): 0–15, or -1 for the whole register.
+inline constexpr int WholeRegister = -1;
+int modbusBit(const QJsonObject &props);
+// mbBitAction's options: 置位 (the default), 复位, 取反.
+QStringList bitActions();
+ModbusBitAction bitAction(const QString &option);
+
 // The registers holding `value` as `dataType`: one for 16-bit types, two for 32-bit ones,
 // the two swapped for 小端(CD AB).
 std::optional<QList<quint16>> modbusRegisters(const QString &value, const QString &dataType,
@@ -157,7 +190,8 @@ int nextTransaction();
 CommandResult s7FromProperties(const QJsonObject &props, const std::optional<QString> &value = std::nullopt);
 
 // A Modbus request from widget properties (mbSlave, mbFunc, mbAddress, mbValue, mbDataType,
-// mbRegOrder). `value` overrides mbValue.
+// mbRegOrder). `value` overrides mbValue. With FC 06 and an mbBit of 0–15 it writes that bit of the register:
+// mbBitAction (置位, 复位 or 取反) when given, else the value, which must be 0 or 1.
 CommandResult modbusFromProperties(const QJsonObject &props, const std::optional<QString> &value = std::nullopt);
 CommandResult modbusSwitchFromProperties(const QJsonObject &props, bool checked);
 

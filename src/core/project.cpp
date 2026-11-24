@@ -89,6 +89,10 @@ bool validateModbus(const QJsonObject &item, QString *error)
         return !period.isUndefined() && !period.isNull() &&
                (!isStrictInt(period) || period.toDouble() < 0 || period.toDouble() > 60000);
     };
+    const auto badBit = [](const QJsonValue &bit, int minimum) {
+        return !bit.isUndefined() && !bit.isNull() &&
+               (!isStrictInt(bit) || bit.toDouble() < minimum || bit.toDouble() > 15);
+    };
     const QString onlyAreas = areas.join(QCoreApplication::translate("fhmi", "、"));
     const QJsonObject binding = item.value(QStringLiteral("binding")).toObject();
     if (binding.value(QStringLiteral("parseMode")).toString() == ParseMode::Modbus) {
@@ -96,9 +100,26 @@ bool validateModbus(const QJsonObject &item, QString *error)
             return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbArea 只能是 %2").arg(id, onlyAreas));
         if (badPeriod(binding.value(QStringLiteral("mbPeriod"))))
             return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbPeriod 必须是 0–60000 的整数").arg(id));
+        if (badBit(binding.value(QStringLiteral("mbBit")), CommandEncoder::WholeRegister))
+            return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbBit 必须是 -1–15 的整数").arg(id));
     }
     const QString type = item.value(QStringLiteral("type")).toString();
     const QJsonObject props = item.value(QStringLiteral("properties")).toObject();
+    if (props.value(QStringLiteral("commandMode")).toString() == QLatin1String("Modbus")) {
+        if (type == QLatin1String("ToggleSwitch")) {
+            if (props.value(QStringLiteral("mbArea")).toString() == ModbusArea::HoldingRegisterBit &&
+                badBit(props.value(QStringLiteral("mbBit")), 0))
+                return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbBit 必须是 0–15 的整数").arg(id));
+        } else if (badBit(props.value(QStringLiteral("mbBit")), CommandEncoder::WholeRegister)) {
+            return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbBit 必须是 -1–15 的整数").arg(id));
+        }
+        const auto action = props.value(QStringLiteral("mbBitAction"));
+        const QStringList actions = CommandEncoder::bitActions();
+        if (!action.isUndefined() && !action.isNull() && !actions.contains(action.toString())) {
+            return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbBitAction 只能是 %2")
+                                   .arg(id, actions.join(QCoreApplication::translate("fhmi", "、"))));
+        }
+    }
     if (usesChartSeries(type, props)) {
         const int count = chartCurveCount(type, props);
         for (int curve = 0; curve < count; ++curve) {
@@ -112,6 +133,8 @@ bool validateModbus(const QJsonObject &item, QString *error)
             }
             if (badPeriod(props.value(prefix + QStringLiteral("mbPeriod"))))
                 return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbPeriod 必须是 0–60000 的整数").arg(id));
+            if (badBit(props.value(prefix + QStringLiteral("mbBit")), CommandEncoder::WholeRegister))
+                return fail(error, QCoreApplication::translate("fhmi", "控件 %1 的 mbBit 必须是 -1–15 的整数").arg(id));
         }
     }
     return true;
@@ -212,10 +235,23 @@ bool validateWidgets(const QJsonValue &items, int depth, QSet<QString> &ids, con
     return true;
 }
 
+bool usesModbusBitWrite(const QString &type, const QJsonObject &props)
+{
+    if (props.value(QStringLiteral("commandMode")).toString() != QLatin1String("Modbus"))
+        return false;
+    if (type == QLatin1String("ToggleSwitch"))
+        return props.value(QStringLiteral("mbArea")).toString() == ModbusArea::HoldingRegisterBit;
+    return CommandEncoder::functionCode(props.value(QStringLiteral("mbFunc")).toString()) == 0x06 &&
+           CommandEncoder::modbusBit(props) != CommandEncoder::WholeRegister;
+}
+
 bool usesV13Features(const QJsonArray &widgets)
 {
-    const auto versionedBinding = [](const QString &mode) {
-        return mode == ParseMode::DataPoint || mode == ParseMode::CanField;
+    const auto versionedBinding = [](const QJsonObject &binding) {
+        const QString mode = binding.value(QStringLiteral("parseMode")).toString();
+        return mode == ParseMode::DataPoint || mode == ParseMode::CanField ||
+               (mode == ParseMode::Modbus &&
+                binding.value(QStringLiteral("mbBit")).toInt(CommandEncoder::WholeRegister) >= 0);
     };
     bool used = false;
     visitWidgets(widgets, [&](const QJsonObject &widget) {
@@ -231,8 +267,8 @@ bool usesV13Features(const QJsonArray &widgets)
         const QString type = widget.value(QStringLiteral("type")).toString();
         used |= type.startsWith(QLatin1String("Alarm")) ||
                 (isTimingChart(type) && TimingSource::usesChannels(props)) ||
-                versionedBinding(widget.value(QStringLiteral("binding")).toObject()
-                                     .value(QStringLiteral("parseMode")).toString()) ||
+                versionedBinding(widget.value(QStringLiteral("binding")).toObject()) ||
+                usesModbusBitWrite(type, props) ||
                 props.value(QStringLiteral("displayFormat")).toString() == QStringLiteral("枚举") || // i18n: value
                 (type == QLatin1String("SpinBox") &&
                  props.value(QStringLiteral("numberMode")).toString() == QStringLiteral("小数")) || // i18n: value
@@ -253,7 +289,7 @@ bool usesV13Features(const QJsonArray &widgets)
                 props.value(QStringLiteral("autoRecover")).toBool();
         const int limit = isTimingChart(type) ? MaxTimingChannels : type == QLatin1String("RealtimeChart") ? MaxRealtimeCurves : 0;
         for (int i = 0; i < limit; ++i)
-            used |= versionedBinding(props.value(QStringLiteral("_curve_%1_parseMode").arg(i)).toString());
+            used |= versionedBinding(chartCurveBinding(props, i));
         return true;
     });
     return used;
@@ -664,7 +700,8 @@ QJsonArray projectSendConfiguration(QJsonArray widgets, bool saving)
         const auto type = widget.value(QStringLiteral("type")).toString();
         const auto pointKey = writePointKey(mode);
         if (saving && widgetSendsCommands(type, props) &&
-            (CommandEncoder::usesFrameSequence(props) || (!pointKey.isEmpty() && !props.value(pointKey).toString().isEmpty()))) {
+            (CommandEncoder::usesFrameSequence(props) || usesModbusBitWrite(type, props) ||
+             (!pointKey.isEmpty() && !props.value(pointKey).toString().isEmpty()))) {
             QJsonObject configuration;
             for (const auto &key : {CommandMode, target, endpoint, on, off}) {
                 if (props.contains(key))
@@ -865,10 +902,13 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
                     return fail(error, QCoreApplication::translate("fhmi", "数据点 %1 · %2").arg(
                         point.value(QStringLiteral("name")).toString(), problem));
             }
-            withPoints.append(QJsonObject{
+            const QJsonObject pointItem{
                 {QStringLiteral("id"), pointInputId(point.value(QStringLiteral("name")).toString())},
                 {QStringLiteral("type"), QStringLiteral("NumericDisplay")},
-                {QStringLiteral("binding"), point.value(QStringLiteral("binding"))}});
+                {QStringLiteral("binding"), binding}};
+            if (!validateModbus(pointItem, error))
+                return false;
+            withPoints.append(pointItem);
         }
     }
     if (!visitWidgets(widgets, [&](const QJsonObject &widget) {
