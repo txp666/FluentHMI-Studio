@@ -479,7 +479,8 @@ if(FHMI_BUILD_TESTS)
     add_test(NAME runtime COMMAND tst_runtime)
     set_tests_properties(runtime PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-    add_executable(tst_update tests/tst_update.cpp src/studio/update_release.cpp src/studio/update_service.cpp)
+    add_executable(tst_update tests/tst_update.cpp src/studio/update_release.cpp src/studio/update_service.cpp
+                   src/studio/update_installer.cpp)
     target_include_directories(tst_update PRIVATE src)
     target_link_libraries(tst_update PRIVATE Qt6::Network Qt6::Test)
     target_compile_definitions(tst_update PRIVATE FHMI_VERSION="${PROJECT_VERSION}")

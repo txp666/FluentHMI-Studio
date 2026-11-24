@@ -4,6 +4,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -15,6 +16,42 @@ namespace fhmi {
 namespace {
 
 const QString FailureFile = QStringLiteral("update-failed.txt");
+const QString RestoreNoticeFile = QStringLiteral("restore-notice.txt");
+
+bool hasStrandedState(const QString &staging)
+{
+    const QDir dir(staging);
+    if (!dir.exists()) {
+        return false;
+    }
+    if (QFileInfo::exists(dir.filePath(FailureFile)) || QFileInfo::exists(dir.filePath(RestoreNoticeFile))) {
+        return true;
+    }
+    return !dir.entryList({QStringLiteral("old"), QStringLiteral("old-*")}, QDir::Dirs | QDir::NoDotAndDotDot)
+                .isEmpty();
+}
+
+QString takeReportFile(const QString &staging, const QString &fileName, const QString &fallback)
+{
+    if (staging.isEmpty()) {
+        return QString();
+    }
+    const QString reportPath = QDir(staging).filePath(fileName);
+    QFile file(reportPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    QString report = QString::fromUtf8(file.readAll()).trimmed();
+    file.close();
+    if (report.startsWith(QChar(0xFEFF))) {
+        report.remove(0, 1);
+    }
+    QFile::remove(reportPath);
+    if (!hasStrandedState(staging)) {
+        QDir(staging).removeRecursively();
+    }
+    return report.isEmpty() ? fallback : report;
+}
 
 bool fail(QString *error, const QString &message)
 {
@@ -23,6 +60,132 @@ bool fail(QString *error, const QString &message)
     }
     return false;
 }
+
+// PowerShell swap script used on Windows (also exposed via windowsSwapScript() for tests).
+// Moves the old installation aside, moves the new version into place, restores every user file and
+// vendor driver that was not part of the previous package (using package-files.txt, or falling back
+// to runtime-files.txt + the new manifest for older installs), and only removes staging when nothing
+// was left behind.
+const char WindowsSwapScript[] =
+    R"PS1(param([int]$ProcessId, [string]$Root, [string]$New, [string]$Backup, [string]$Staging, [int]$Relaunch)
+$log = Join-Path $Staging 'update-failed.txt'
+$restoreLog = Join-Path $Staging 'restore-notice.txt'
+# Until the studio exits its files are locked.
+if ($ProcessId -gt 0) {
+    try { Wait-Process -Id $ProcessId -Timeout 120 -ErrorAction Stop } catch {}
+}
+# A virus scanner can still hold a file for a moment after the process ends.
+function Invoke-Retried([scriptblock]$Action) {
+    for ($i = 0; $i -lt 30; $i++) {
+        try { & $Action; return $true } catch { $script:lastError = $_.Exception.Message; Start-Sleep -Milliseconds 500 }
+    }
+    return $false
+}
+function Add-Manifest([string]$Path, $Files, $Dirs) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    foreach ($raw in [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8)) {
+        $rel = $raw.Trim().Replace('/', '\').TrimStart('\')
+        if (-not $rel) { continue }
+        [void]$Files.Add($rel)
+        $parent = [System.IO.Path]::GetDirectoryName($rel)
+        while ($parent) {
+            [void]$Dirs.Add($parent)
+            $parent = [System.IO.Path]::GetDirectoryName($parent)
+        }
+    }
+    return $true
+}
+$done = $false
+$restoreErrors = [System.Collections.Generic.List[string]]::new()
+if (Invoke-Retried { Move-Item -LiteralPath $Root -Destination $Backup -ErrorAction Stop }) {
+    if (Invoke-Retried { Move-Item -LiteralPath $New -Destination $Root -ErrorAction Stop }) {
+        $done = $true
+    } else {
+        Invoke-Retried { Move-Item -LiteralPath $Backup -Destination $Root -ErrorAction Stop } | Out-Null
+    }
+}
+if ($done) {
+    $packaged = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $packagedDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $hasManifest = Add-Manifest (Join-Path $Backup 'package-files.txt') $packaged $packagedDirs
+    if ($hasManifest) {
+        [void]$packaged.Add('package-files.txt')
+    } else {
+        # Fallback for installations created before package-files.txt existed: treat the old runtime list,
+        # core studio files and the new package's manifest as application files, and preserve everything else.
+        Add-Manifest (Join-Path $Backup 'runtime-files.txt') $packaged $packagedDirs | Out-Null
+        Add-Manifest (Join-Path $Root 'package-files.txt') $packaged $packagedDirs | Out-Null
+        foreach ($core in @('FluentHMIStudio.exe', 'runtime-files.txt', 'LICENSE.txt', 'package-files.txt')) {
+            [void]$packaged.Add($core)
+        }
+    }
+    function Restore-UserItems([string]$SrcDir, [string]$DstDir, [string]$RelPrefix) {
+        $items = @(Get-ChildItem -LiteralPath $SrcDir -Force -ErrorAction Stop)
+        foreach ($item in $items) {
+            $rel = if ($RelPrefix) { "$RelPrefix\$($item.Name)" } else { $item.Name }
+            $dst = Join-Path $DstDir $item.Name
+            if ($item.PSIsContainer) {
+                $dstExists = Test-Path -LiteralPath $dst
+                if ($dstExists -and -not (Test-Path -LiteralPath $dst -PathType Container)) {
+                    $restoreErrors.Add("${rel}: conflicts with file in new version")
+                    continue
+                }
+                if (-not $packagedDirs.Contains($rel) -and -not $dstExists) {
+                    [System.IO.Directory]::CreateDirectory($DstDir) | Out-Null
+                    if (-not (Invoke-Retried { Move-Item -LiteralPath $item.FullName -Destination $dst -ErrorAction Stop })) {
+                        $restoreErrors.Add("${rel}: $script:lastError")
+                    }
+                } else {
+                    Restore-UserItems $item.FullName $dst $rel
+                }
+            } else {
+                if ($packaged.Contains($rel)) { continue }
+                if (Test-Path -LiteralPath $dst) {
+                    $restoreErrors.Add("${rel}: already exists in new version")
+                    continue
+                }
+                [System.IO.Directory]::CreateDirectory($DstDir) | Out-Null
+                if (-not (Invoke-Retried { Move-Item -LiteralPath $item.FullName -Destination $dst -ErrorAction Stop })) {
+                    $restoreErrors.Add("${rel}: $script:lastError")
+                }
+            }
+        }
+    }
+    try {
+        Restore-UserItems $Backup $Root ''
+    } catch {
+        $restoreErrors.Add($_.Exception.Message)
+    }
+}
+if ($done -and $restoreErrors.Count -gt 0) {
+    $parentDir = [System.IO.Path]::GetDirectoryName($Root)
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $candidate = Join-Path $parentDir "FluentHMI-Studio-backup-$stamp"
+    $suffix = 1
+    while (Test-Path -LiteralPath $candidate) {
+        $candidate = Join-Path $parentDir "FluentHMI-Studio-backup-$stamp-$suffix"
+        $suffix++
+    }
+    $savedBackup = if (Invoke-Retried { Move-Item -LiteralPath $Backup -Destination $candidate -ErrorAction Stop }) { $candidate } else { $Backup }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("Some user files could not be restored automatically. Backup kept at: $savedBackup")
+    foreach ($err in $restoreErrors) { $lines.Add($err) }
+    Set-Content -LiteralPath $restoreLog -Value $lines -Encoding UTF8
+} elseif (-not $done) {
+    Set-Content -LiteralPath $log -Value $script:lastError -Encoding UTF8
+}
+if ($Relaunch) { Start-Process -FilePath (Join-Path $Root 'FluentHMIStudio.exe') -WorkingDirectory $Root }
+if ($done -and $restoreErrors.Count -eq 0) {
+    Invoke-Retried { Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction Stop } | Out-Null
+    $otherKept = @(Get-ChildItem -LiteralPath $Staging -Force -ErrorAction SilentlyContinue | Where-Object {
+        ($_.PSIsContainer -and ($_.Name -eq 'old' -or $_.Name -like 'old-*')) -or
+        ($_.Name -eq 'update-failed.txt' -or $_.Name -eq 'restore-notice.txt')
+    })
+    if ($otherKept.Count -eq 0) {
+        Invoke-Retried { Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction Stop } | Out-Null
+    }
+}
+)PS1";
 
 #if defined(Q_OS_MACOS)
 // $1 pid  $2 installation  $3 new installation  $4 backup  $5 staging  $6 relaunch (1/0)
@@ -33,38 +196,14 @@ while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 600 ]; do sleep 0.2; n=$((n + 1))
 if mv "$root" "$backup" 2>>"$log"; then
     if mv "$new" "$root" 2>>"$log"; then
         [ "$relaunch" = 1 ] && open "$root"
-        rm -rf "$staging"
+        rm -rf "$backup" "$staging/new"
+        rmdir "$staging" 2>/dev/null || true
         exit 0
     fi
     mv "$backup" "$root" 2>>"$log"
 fi
 echo "could not move the new version into place" >>"$log"
 [ "$relaunch" = 1 ] && open "$root"
-)";
-#elif defined(Q_OS_WIN)
-const char SwapScript[] =
-    R"(param([int]$ProcessId, [string]$Root, [string]$New, [string]$Backup, [string]$Staging, [int]$Relaunch)
-$log = Join-Path $Staging 'update-failed.txt'
-# Until the studio exits its files are locked.
-try { Wait-Process -Id $ProcessId -Timeout 120 -ErrorAction Stop } catch {}
-# A virus scanner can still hold a file for a moment after the process ends.
-function Invoke-Retried([scriptblock]$Action) {
-    for ($i = 0; $i -lt 30; $i++) {
-        try { & $Action; return $true } catch { $script:lastError = $_.Exception.Message; Start-Sleep -Milliseconds 500 }
-    }
-    return $false
-}
-$done = $false
-if (Invoke-Retried { Move-Item -LiteralPath $Root -Destination $Backup -ErrorAction Stop }) {
-    if (Invoke-Retried { Move-Item -LiteralPath $New -Destination $Root -ErrorAction Stop }) {
-        $done = $true
-    } else {
-        Invoke-Retried { Move-Item -LiteralPath $Backup -Destination $Root -ErrorAction Stop } | Out-Null
-    }
-}
-if (-not $done) { Set-Content -LiteralPath $log -Value $script:lastError -Encoding UTF8 }
-if ($Relaunch) { Start-Process -FilePath (Join-Path $Root 'FluentHMIStudio.exe') -WorkingDirectory $Root }
-if ($done) { Invoke-Retried { Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction Stop } | Out-Null }
 )";
 #elif defined(Q_OS_LINUX)
 // Runs as root, through pkexec. It is passed on the command line, so nothing the user could change runs with
@@ -194,34 +333,34 @@ bool UpdateInstaller::canInstall(QString *reason)
     const QString writable = QFileInfo(root).absolutePath();
 #endif
     const QString staging = stagingDir();
-    QDir(staging).removeRecursively();
+    const bool keepStaging = hasStrandedState(staging);
+    if (!keepStaging) {
+        QDir(staging).removeRecursively();
+    }
     QFile probe(QDir(staging).filePath(QStringLiteral("probe")));
     if (!QDir().mkpath(staging) || !probe.open(QIODevice::WriteOnly)) {
-        QDir(staging).removeRecursively();
+        if (!keepStaging) {
+            QDir(staging).removeRecursively();
+        }
         return fail(reason, tr("没有写入 %1 的权限").arg(QDir::toNativeSeparators(writable)));
     }
     probe.close();
-    QDir(staging).removeRecursively();
+    if (keepStaging) {
+        probe.remove();
+    } else {
+        QDir(staging).removeRecursively();
+    }
     return true;
 }
 
 QString UpdateInstaller::takeFailureReport()
 {
-    const QString staging = stagingDir();
-    if (staging.isEmpty()) {
-        return QString();
-    }
-    QFile file(QDir(staging).filePath(FailureFile));
-    if (!file.open(QIODevice::ReadOnly)) {
-        return QString();
-    }
-    QString report = QString::fromUtf8(file.readAll()).trimmed();
-    file.close();
-    if (report.startsWith(QChar(0xFEFF))) {
-        report.remove(0, 1);
-    }
-    QDir(staging).removeRecursively();
-    return report.isEmpty() ? tr("无法替换旧版本") : report;
+    return takeReportFile(stagingDir(), FailureFile, tr("无法替换旧版本"));
+}
+
+QString UpdateInstaller::takeRestoreNotice()
+{
+    return takeReportFile(stagingDir(), RestoreNoticeFile, QString());
 }
 
 void UpdateInstaller::prepare(const QString &package)
@@ -325,9 +464,16 @@ void UpdateInstaller::discard()
     cancel();
     const QString staging = stagingDir();
     if (!staging.isEmpty()) {
-        QDir(staging).removeRecursively();
+        if (hasStrandedState(staging)) {
+            QDir(QDir(staging).filePath(QStringLiteral("new"))).removeRecursively();
+            QFile::remove(QDir(staging).filePath(QStringLiteral("swap.ps1")));
+        } else {
+            QDir(staging).removeRecursively();
+        }
     }
 }
+
+QByteArray UpdateInstaller::windowsSwapScript() { return QByteArray(WindowsSwapScript); }
 
 bool UpdateInstaller::launch(bool relaunch, QString *error)
 {
@@ -336,7 +482,11 @@ bool UpdateInstaller::launch(bool relaunch, QString *error)
         return fail(error, tr("没有准备好的新版本"));
     }
     const QString staging = stagingDir();
-    const QString backup = QDir(staging).filePath(QStringLiteral("old"));
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    QString backup = QDir(staging).filePath(QStringLiteral("old-") + stamp);
+    for (int suffix = 1; QFileInfo::exists(backup); ++suffix) {
+        backup = QDir(staging).filePath(QStringLiteral("old-%1-%2").arg(stamp).arg(suffix));
+    }
     const QString pid = QString::number(QCoreApplication::applicationPid());
     QProcess helper;
     // Not inside the installation: a working directory there would keep it from being moved.
@@ -348,7 +498,7 @@ bool UpdateInstaller::launch(bool relaunch, QString *error)
 #elif defined(Q_OS_WIN)
     const QString script = QDir(staging).filePath(QStringLiteral("swap.ps1"));
     QFile file(script);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(SwapScript) < 0) {
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(WindowsSwapScript) < 0) {
         return fail(error, tr("无法写入 %1").arg(QDir::toNativeSeparators(script)));
     }
     file.close();

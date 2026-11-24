@@ -5,6 +5,8 @@
 #include "studio/update_installer.h"
 #include "studio/update_service.h"
 
+#include <FluentQtWidgets/Dialogs/Dialog.h>
+
 #include <QtCore/QEventLoop>
 #include <QtCore/QSettings>
 #include <QtCore/QTextStream>
@@ -54,6 +56,13 @@ void UpdateController::startupCheck()
     const QString report = UpdateInstaller::takeFailureReport();
     if (!report.isEmpty()) {
         showInfoBar(m_window, tr("上次更新没有完成，仍在使用原来的版本"), report, NotifyType::Warning, 8000);
+    }
+    const QString restoreNotice = UpdateInstaller::takeRestoreNotice();
+    if (!restoreNotice.isEmpty()) {
+        FluentQt::MessageBox box(tr("更新已完成，部分原有文件已保留到备份目录"), restoreNotice, m_window);
+        box.yesButton()->setText(tr("确定"));
+        box.cancelButton()->hide();
+        box.exec();
     }
     if (checkAtStartup()) {
         check(false);

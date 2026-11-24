@@ -1,7 +1,11 @@
+#include "studio/update_installer.h"
 #include "studio/update_release.h"
 #include "studio/update_service.h"
 
 #include <QtCore/QCryptographicHash>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QProcess>
 #include <QtCore/QTemporaryDir>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
@@ -202,6 +206,153 @@ class TestUpdate : public QObject
         service.check();
         QVERIFY(failed.wait(5000));
         QVERIFY(failed.first().first().toString().contains(QStringLiteral("没有找到")));
+    }
+
+    void windowsSwapScriptPreservesUserFilesAndDrivers()
+    {
+        const QByteArray script = UpdateInstaller::windowsSwapScript();
+        QVERIFY(script.contains("package-files.txt"));
+        QVERIFY(script.contains("runtime-files.txt"));
+        QVERIFY(script.contains("ReadAllLines"));
+        QVERIFY(script.contains("-LiteralPath"));
+        QVERIFY(script.contains("FluentHMI-Studio-backup-"));
+        QVERIFY(script.contains("restore-notice.txt"));
+
+#if defined(Q_OS_WIN)
+        const auto writeFile = [](const QString &path, const QByteArray &data) {
+            QDir().mkpath(QFileInfo(path).absolutePath());
+            QFile file(path);
+            QVERIFY2(file.open(QIODevice::WriteOnly | QIODevice::Truncate), qPrintable(path));
+            QCOMPARE(file.write(data), data.size());
+        };
+        const auto readFile = [](const QString &path) {
+            QFile file(path);
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+        const auto runSwap = [&](const QString &root, const QString &next, const QString &staging) {
+            const QString ps1 = QDir(staging).filePath(QStringLiteral("swap.ps1"));
+            writeFile(ps1, script);
+            QProcess ps;
+            ps.setProgram(QDir(qEnvironmentVariable("SystemRoot", QStringLiteral("C:/Windows")))
+                              .filePath(QStringLiteral("System32/WindowsPowerShell/v1.0/powershell.exe")));
+            ps.setArguments({QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+                             QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"), QStringLiteral("-File"),
+                             QDir::toNativeSeparators(ps1), QStringLiteral("-ProcessId"), QStringLiteral("0"),
+                             QStringLiteral("-Root"), QDir::toNativeSeparators(root), QStringLiteral("-New"),
+                             QDir::toNativeSeparators(next), QStringLiteral("-Backup"),
+                             QDir::toNativeSeparators(QDir(staging).filePath(QStringLiteral("old"))),
+                             QStringLiteral("-Staging"), QDir::toNativeSeparators(staging),
+                             QStringLiteral("-Relaunch"), QStringLiteral("0")});
+            ps.start();
+            QVERIFY2(ps.waitForFinished(30000), qPrintable(ps.errorString()));
+            QCOMPARE(ps.exitStatus(), QProcess::NormalExit);
+            QCOMPARE(ps.exitCode(), 0);
+        };
+
+        // 1. Standard upgrade with package-files.txt: updates app files, removes obsolete packaged files,
+        //    and preserves user projects (including Chinese names and brackets), CAN drivers, and folders.
+        {
+            QTemporaryDir work;
+            const QString root = work.filePath(QStringLiteral("FluentHMI-Studio"));
+            const QString staging = work.filePath(QStringLiteral(".fluenthmi-update"));
+            const QString next = QDir(staging).filePath(QStringLiteral("new/FluentHMI-Studio"));
+
+            writeFile(root + QStringLiteral("/FluentHMIStudio.exe"), "old-studio");
+            writeFile(root + QStringLiteral("/old-only.dll"), "obsolete");
+            writeFile(root + QStringLiteral("/tutorials/01-温湿度采集.uidp"), "old-tutorial");
+            writeFile(root + QStringLiteral("/package-files.txt"),
+                      QStringLiteral("FluentHMIStudio.exe\nold-only.dll\ntutorials/01-温湿度采集.uidp\npackage-files.txt\n")
+                          .toUtf8());
+            // User files and CAN drivers placed in the folder:
+            writeFile(root + QStringLiteral("/my_project.uidp"), "user-project");
+            writeFile(root + QStringLiteral("/中文工程[1].uidp"), "user-cn");
+            writeFile(root + QStringLiteral("/zlgcan.dll"), "zlg-dll");
+            writeFile(root + QStringLiteral("/kerneldlls/dll_cfg.ini"), "zlg-cfg");
+            writeFile(root + QStringLiteral("/kerneldlls/USBCANFD.dll"), "zlg-kernel");
+            writeFile(root + QStringLiteral("/zlgcan/zlgcan.dll"), "zlg-sub");
+            writeFile(root + QStringLiteral("/tutorials/user_demo.uidp"), "user-in-tutorials");
+            QVERIFY(QDir().mkpath(root + QStringLiteral("/recordings/empty")));
+
+            writeFile(next + QStringLiteral("/FluentHMIStudio.exe"), "new-studio");
+            writeFile(next + QStringLiteral("/new-only.dll"), "fresh");
+            writeFile(next + QStringLiteral("/tutorials/01-温湿度采集.uidp"), "new-tutorial");
+            writeFile(next + QStringLiteral("/package-files.txt"),
+                      QStringLiteral("FluentHMIStudio.exe\nnew-only.dll\ntutorials/01-温湿度采集.uidp\npackage-files.txt\n")
+                          .toUtf8());
+
+            runSwap(root, next, staging);
+
+            QCOMPARE(readFile(root + QStringLiteral("/FluentHMIStudio.exe")), QByteArray("new-studio"));
+            QCOMPARE(readFile(root + QStringLiteral("/new-only.dll")), QByteArray("fresh"));
+            QCOMPARE(readFile(root + QStringLiteral("/tutorials/01-温湿度采集.uidp")), QByteArray("new-tutorial"));
+            QVERIFY(!QFileInfo::exists(root + QStringLiteral("/old-only.dll")));
+            QCOMPARE(readFile(root + QStringLiteral("/my_project.uidp")), QByteArray("user-project"));
+            QCOMPARE(readFile(root + QStringLiteral("/中文工程[1].uidp")), QByteArray("user-cn"));
+            QCOMPARE(readFile(root + QStringLiteral("/zlgcan.dll")), QByteArray("zlg-dll"));
+            QCOMPARE(readFile(root + QStringLiteral("/kerneldlls/dll_cfg.ini")), QByteArray("zlg-cfg"));
+            QCOMPARE(readFile(root + QStringLiteral("/kerneldlls/USBCANFD.dll")), QByteArray("zlg-kernel"));
+            QCOMPARE(readFile(root + QStringLiteral("/zlgcan/zlgcan.dll")), QByteArray("zlg-sub"));
+            QCOMPARE(readFile(root + QStringLiteral("/tutorials/user_demo.uidp")), QByteArray("user-in-tutorials"));
+            QVERIFY(QDir(root + QStringLiteral("/recordings/empty")).exists());
+            QVERIFY(!QDir(staging).exists());
+        }
+
+        // 2. Fallback upgrade from a legacy install without package-files.txt (only runtime-files.txt).
+        {
+            QTemporaryDir work;
+            const QString root = work.filePath(QStringLiteral("FluentHMI-Studio"));
+            const QString staging = work.filePath(QStringLiteral(".fluenthmi-update"));
+            const QString next = QDir(staging).filePath(QStringLiteral("new/FluentHMI-Studio"));
+
+            writeFile(root + QStringLiteral("/FluentHMIStudio.exe"), "old-studio");
+            writeFile(root + QStringLiteral("/Qt6Core.dll"), "old-qt");
+            writeFile(root + QStringLiteral("/runtime-files.txt"), "Qt6Core.dll\n");
+            writeFile(root + QStringLiteral("/zlgcan.dll"), "zlg-dll");
+            writeFile(root + QStringLiteral("/projects/pump.uidp"), "pump-project");
+
+            writeFile(next + QStringLiteral("/FluentHMIStudio.exe"), "new-studio");
+            writeFile(next + QStringLiteral("/Qt6Core.dll"), "new-qt");
+            writeFile(next + QStringLiteral("/runtime-files.txt"), "Qt6Core.dll\n");
+            writeFile(next + QStringLiteral("/package-files.txt"),
+                      "FluentHMIStudio.exe\nQt6Core.dll\nruntime-files.txt\npackage-files.txt\n");
+
+            runSwap(root, next, staging);
+
+            QCOMPARE(readFile(root + QStringLiteral("/FluentHMIStudio.exe")), QByteArray("new-studio"));
+            QCOMPARE(readFile(root + QStringLiteral("/Qt6Core.dll")), QByteArray("new-qt"));
+            QCOMPARE(readFile(root + QStringLiteral("/zlgcan.dll")), QByteArray("zlg-dll"));
+            QCOMPARE(readFile(root + QStringLiteral("/projects/pump.uidp")), QByteArray("pump-project"));
+            QVERIFY(!QDir(staging).exists());
+        }
+
+        // 3. Collision with a new packaged file: keep new app file intact and save user's colliding file in a
+        //    visible backup folder beside Root rather than deleting it.
+        {
+            QTemporaryDir work;
+            const QString root = work.filePath(QStringLiteral("FluentHMI-Studio"));
+            const QString staging = work.filePath(QStringLiteral(".fluenthmi-update"));
+            const QString next = QDir(staging).filePath(QStringLiteral("new/FluentHMI-Studio"));
+
+            writeFile(root + QStringLiteral("/FluentHMIStudio.exe"), "old-studio");
+            writeFile(root + QStringLiteral("/package-files.txt"), "FluentHMIStudio.exe\npackage-files.txt\n");
+            writeFile(root + QStringLiteral("/extra.txt"), "user-extra");
+
+            writeFile(next + QStringLiteral("/FluentHMIStudio.exe"), "new-studio");
+            writeFile(next + QStringLiteral("/extra.txt"), "packaged-extra");
+            writeFile(next + QStringLiteral("/package-files.txt"),
+                      "FluentHMIStudio.exe\nextra.txt\npackage-files.txt\n");
+
+            runSwap(root, next, staging);
+
+            QCOMPARE(readFile(root + QStringLiteral("/extra.txt")), QByteArray("packaged-extra"));
+            QVERIFY(QFileInfo::exists(QDir(staging).filePath(QStringLiteral("restore-notice.txt"))));
+            QVERIFY(!QFileInfo::exists(QDir(staging).filePath(QStringLiteral("update-failed.txt"))));
+            const QStringList backups =
+                QDir(work.path()).entryList({QStringLiteral("FluentHMI-Studio-backup-*")}, QDir::Dirs);
+            QCOMPARE(backups.size(), 1);
+            QCOMPARE(readFile(work.filePath(backups.first() + QStringLiteral("/extra.txt"))), QByteArray("user-extra"));
+        }
+#endif
     }
 };
 

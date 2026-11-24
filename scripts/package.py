@@ -390,6 +390,12 @@ def package_windows(build_dir, output_dir, version, config):
     (stage / "runtime-files.txt").write_text("\n".join(runtime_files) + "\n", encoding="utf-8", newline="\n")
     bundle_tutorials(stage)
     shutil.copy2(ROOT / "LICENSE", stage / "LICENSE.txt")
+    # Record every file shipped in this package so online updates replace only application files
+    # and preserve user projects and vendor CAN drivers placed in the folder.
+    package_files = sorted(
+        {p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file()} | {"package-files.txt"}
+    )
+    (stage / "package-files.txt").write_text("\n".join(package_files) + "\n", encoding="utf-8", newline="\n")
 
     # The virus scanner can still hold a just-loaded DLL when the folder is removed.
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as work:

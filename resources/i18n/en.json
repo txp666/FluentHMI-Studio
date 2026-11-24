@@ -2473,5 +2473,6 @@
   "控件 %1 的 mbBitAction 只能是 %2": "mbBitAction of widget %1 must be one of %2",
   "整个寄存器": "Whole register",
   "置位": "Set",
-  "读取保持寄存器 %1 失败": "Failed to read holding register %1"
+  "读取保持寄存器 %1 失败": "Failed to read holding register %1",
+  "更新已完成，部分原有文件已保留到备份目录": "Update completed; some existing files were kept in a backup folder"
 }

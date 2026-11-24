@@ -35,8 +35,11 @@ class UpdateInstaller : public QObject
     // behind.
     static bool canInstall(QString *reason);
     // What the helper left after an update that did not complete, or empty. Removes the
-    // staging folder it reads it from.
+    // staging folder it reads it from when nothing else must stay behind.
     static QString takeFailureReport();
+    // Notice written when an update succeeded on Windows but some user files collided with the
+    // new package or could not be moved back and were kept in a backup folder.
+    static QString takeRestoreNotice();
 
     // Unpacks the package (a .deb stays as it is); answers with prepared() or failed().
     void prepare(const QString &package);
@@ -46,6 +49,8 @@ class UpdateInstaller : public QObject
     void discard();
     // Starts the helper. The caller must then exit; the swap waits for this process to end.
     bool launch(bool relaunch, QString *error);
+    // The PowerShell script Windows updates run after Studio exits; exposed for tests.
+    static QByteArray windowsSwapScript();
 
   signals:
     void prepared();
