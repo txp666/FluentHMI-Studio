@@ -6337,6 +6337,69 @@ class TestRuntime : public QObject
             QCOMPARE(recent.first(), demoPath);
         }
     }
+
+    void horizontalWheelScrollAndCanDemoRouting()
+    {
+        // 1. CanMonitorWidget supports Shift+wheel and Ctrl+wheel horizontal scrolling
+        Project proj;
+        proj.widgets = QJsonArray{QJsonObject{
+            {"id", "mon"}, {"type", "CanMonitor"}, {"geometry", QJsonObject{{"x", 0}, {"y", 0}, {"w", 320}, {"h", 220}}}}};
+        RuntimeSurface surface;
+        surface.build(proj);
+        surface.resize(400, 300);
+        surface.show();
+        QApplication::processEvents();
+        auto *view = surface.findChild<QTableView *>(QStringLiteral("canMessages"));
+        QVERIFY(view);
+        QScrollBar *hbar = view->horizontalScrollBar();
+        QVERIFY(hbar);
+        QVERIFY(hbar->maximum() > 0);
+        QCOMPARE(hbar->value(), 0);
+
+        const QPointF pos(40, 40);
+        QWheelEvent ctrlDown(pos, view->viewport()->mapToGlobal(pos), QPoint(), QPoint(0, -120), Qt::NoButton,
+                             Qt::ControlModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(view->viewport(), &ctrlDown);
+        QVERIFY(ctrlDown.isAccepted());
+        const int afterCtrl = hbar->value();
+        QVERIFY(afterCtrl > 0);
+
+        QWheelEvent shiftDown(pos, view->viewport()->mapToGlobal(pos), QPoint(), QPoint(0, -120), Qt::NoButton,
+                              Qt::ShiftModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(view->viewport(), &shiftDown);
+        QVERIFY(shiftDown.isAccepted());
+        QVERIFY(hbar->value() > afterCtrl);
+
+        QWheelEvent shiftUp(pos, view->viewport()->mapToGlobal(pos), QPoint(), QPoint(0, 240), Qt::NoButton,
+                            Qt::ShiftModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(view->viewport(), &shiftUp);
+        QVERIFY(shiftUp.isAccepted());
+        QVERIFY(hbar->value() < afterCtrl);
+
+        // 2. 12-CAN收发测试.uidp routes TX to can1 and RX displays to can2 (avoiding Ambiguous source)
+        Project canDemo;
+        QString err;
+        const QDir root(QStringLiteral(FHMI_EXAMPLES_DIR));
+        QVERIFY2(Project::load(root.filePath(QStringLiteral("tutorials/12-CAN收发测试.uidp")), &canDemo, &err),
+                 qPrintable(err));
+        int txCount = 0;
+        int rxCount = 0;
+        for (const QJsonValue &v : canDemo.widgets) {
+            const QJsonObject w = v.toObject();
+            const QJsonObject props = w.value(QStringLiteral("properties")).toObject();
+            if (props.contains(QStringLiteral("commandTargetId"))) {
+                QCOMPARE(props.value(QStringLiteral("commandTargetId")).toString(), QStringLiteral("can1"));
+                ++txCount;
+            }
+            const QJsonObject binding = w.value(QStringLiteral("binding")).toObject();
+            if (binding.contains(QStringLiteral("sourceCardId"))) {
+                QCOMPARE(binding.value(QStringLiteral("sourceCardId")).toString(), QStringLiteral("can2"));
+                ++rxCount;
+            }
+        }
+        QVERIFY(txCount >= 5);
+        QVERIFY(rxCount >= 5);
+    }
 };
 
 QTEST_MAIN(TestRuntime)

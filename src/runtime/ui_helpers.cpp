@@ -14,12 +14,16 @@
 #include <QtCore/QPointer>
 #include <QtGui/QImageReader>
 #include <QtGui/QPixmap>
+#include <QtGui/QWheelEvent>
 #include <QtWidgets/QAbstractButton>
+#include <QtWidgets/QAbstractScrollArea>
 #include <QtWidgets/QGraphicsProxyWidget>
 #include <QtWidgets/QGraphicsScene>
 #include <QtWidgets/QGraphicsView>
+#include <QtWidgets/QScrollBar>
 
 #include <algorithm>
+#include <cmath>
 
 namespace fhmi {
 
@@ -47,6 +51,56 @@ class SquareFollower : public QObject
   private:
     QPointer<QAbstractButton> m_button;
     QPointer<QWidget> m_field;
+};
+
+class HorizontalWheelFilter : public QObject
+{
+  public:
+    explicit HorizontalWheelFilter(QAbstractScrollArea *area) : QObject(area), m_area(area)
+    {
+        if (area && area->viewport()) {
+            area->viewport()->installEventFilter(this);
+        }
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (!m_area || watched != m_area->viewport() || event->type() != QEvent::Wheel) {
+            return false;
+        }
+        auto *wheel = static_cast<QWheelEvent *>(event);
+        if (!(wheel->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier))) {
+            return false;
+        }
+        QScrollBar *hbar = m_area->horizontalScrollBar();
+        if (!hbar || hbar->maximum() <= hbar->minimum()) {
+            wheel->accept();
+            return true;
+        }
+        const QPoint pixel = wheel->pixelDelta();
+        const QPoint angle = wheel->angleDelta();
+        int step = 0;
+        if (!pixel.isNull()) {
+            step = pixel.y() != 0 ? pixel.y() : pixel.x();
+        } else {
+            const int delta = angle.y() != 0 ? angle.y() : angle.x();
+            if (delta != 0) {
+                const int unit = std::max(60, hbar->singleStep() * 3);
+                step = int(std::lround(double(delta) / 120.0 * double(unit)));
+                if (step == 0) {
+                    step = delta > 0 ? 1 : -1;
+                }
+            }
+        }
+        if (step != 0) {
+            hbar->setValue(std::clamp(hbar->value() - step, hbar->minimum(), hbar->maximum()));
+        }
+        wheel->accept();
+        return true;
+    }
+
+  private:
+    QPointer<QAbstractScrollArea> m_area;
 };
 
 } // namespace
@@ -85,6 +139,13 @@ QWidget *visibleWindow(QWidget *widget)
         }
     }
     return host;
+}
+
+void enableHorizontalWheelScroll(QAbstractScrollArea *area)
+{
+    if (area && area->viewport()) {
+        new HorizontalWheelFilter(area);
+    }
 }
 
 QColor chooseColor(const QColor &initial, const QString &title, QWidget *parent)

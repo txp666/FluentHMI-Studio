@@ -6,6 +6,7 @@
 #include <QtGui/QIcon>
 
 class QAbstractButton;
+class QAbstractScrollArea;
 class QWidget;
 
 namespace FluentQt {
@@ -29,6 +30,10 @@ QColor chooseColor(const QColor &initial, const QString &title, QWidget *parent)
 // Returns the real top-level window for dialogs opened from a runtime widget (unwrapping the
 // QGraphicsProxyWidget host used by the scaled standalone player).
 QWidget *visibleWindow(QWidget *widget);
+
+// Converts Shift+wheel or Ctrl+wheel over a scroll area's viewport into horizontal scrolling,
+// so wide tables (such as the CAN monitor and data tables) can be scrolled sideways with the wheel.
+void enableHorizontalWheelScroll(QAbstractScrollArea *area);
 
 // An image file as an icon, every size an .ico holds included, or a null icon when it cannot be read.
 // QIcon(path) decodes a JPEG at the size asked for, squashing a photo that is not square.

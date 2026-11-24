@@ -52,7 +52,7 @@
         "h": 22
       },
       "properties": {
-        "text": "两张卡都连上时，右上的控件发的报文两张卡各发一次、各自收到对方发的；只连一张卡时，另一端用 PCAN-View 或 ZCANPRO 收发。",
+        "text": "两张卡都连上时，右上的控件由 CAN 1 发送、CAN 2 接收并刷新右侧读数；只连一张卡与外部工具（PCAN-View / ZCANPRO）测试时，连 CAN 1 可发、连 CAN 2 可收，也可在设计器修改目标卡片。",
         "fontSize": 12
       }
     },
@@ -149,7 +149,7 @@
         "value": 0,
         "sendOnChange": true,
         "commandMode": "CAN",
-        "commandTargetId": "@all",
+        "commandTargetId": "can1",
         "canId": "Command",
         "commandTemplate": "Speed={value}"
       }
@@ -184,7 +184,7 @@
         ],
         "sendOnSelect": true,
         "commandMode": "CAN",
-        "commandTargetId": "@all",
+        "commandTargetId": "can1",
         "canId": "Command",
         "commandTemplate": "Mode={value}"
       }
@@ -203,7 +203,7 @@
         "onCommand": "1",
         "offCommand": "0",
         "commandMode": "CAN",
-        "commandTargetId": "@all",
+        "commandTargetId": "can1",
         "canId": "Command",
         "commandTemplate": "Enable={value}"
       }
@@ -237,7 +237,7 @@
         "value": 0,
         "sendOnChange": true,
         "commandMode": "CAN",
-        "commandTargetId": "@all",
+        "commandTargetId": "can1",
         "canId": "ExtCommand",
         "commandTemplate": "Setpoint={value}"
       }
@@ -255,7 +255,7 @@
         "text": "发 CAN FD 报文 0x200",
         "command": "0x1234",
         "commandMode": "CAN",
-        "commandTargetId": "@all",
+        "commandTargetId": "can1",
         "canId": "FdData",
         "commandTemplate": "FdFirst={value}, FdLast=0xC8"
       }
@@ -291,7 +291,7 @@
       },
       "binding": {
         "parseMode": "键值匹配",
-        "sourceCardId": "@all",
+        "sourceCardId": "can2",
         "key": "Command.Speed"
       }
     },
@@ -324,7 +324,7 @@
       },
       "binding": {
         "parseMode": "键值匹配",
-        "sourceCardId": "@all",
+        "sourceCardId": "can2",
         "key": "Command.Mode.text"
       }
     },
@@ -343,7 +343,7 @@
       },
       "binding": {
         "parseMode": "键值匹配",
-        "sourceCardId": "@all",
+        "sourceCardId": "can2",
         "key": "Command.Enable"
       }
     },
@@ -364,7 +364,7 @@
       },
       "binding": {
         "parseMode": "键值匹配",
-        "sourceCardId": "@all",
+        "sourceCardId": "can2",
         "key": "ExtCommand.Setpoint"
       }
     },
@@ -385,7 +385,7 @@
       },
       "binding": {
         "parseMode": "键值匹配",
-        "sourceCardId": "@all",
+        "sourceCardId": "can2",
         "key": "FdData.FdFirst"
       }
     },
@@ -406,7 +406,7 @@
       },
       "binding": {
         "parseMode": "键值匹配",
-        "sourceCardId": "@all",
+        "sourceCardId": "can2",
         "key": "FdData.FdLast"
       }
     },
@@ -447,7 +447,7 @@
         "title": "发原始报文",
         "placeholder": "如 123#11223344",
         "commandMode": "CAN",
-        "commandTargetId": "@all"
+        "commandTargetId": "can1"
       }
     }
   ]

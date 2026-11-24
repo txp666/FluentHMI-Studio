@@ -1282,6 +1282,7 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_view->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     m_view->setWordWrap(true);
     m_view->setContextMenuPolicy(Qt::CustomContextMenu);
+    enableHorizontalWheelScroll(m_view);
     layout->addWidget(m_view, 1);
 
     auto *toolbar = new FluentQt::FlowLayout(0, 6, 4);

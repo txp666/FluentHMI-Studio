@@ -1071,6 +1071,7 @@ DataTableWidget::DataTableWidget(const WidgetMeta &meta, QWidget *parent) : HmiW
     m_table = new FluentQt::TableWidget(this);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    enableHorizontalWheelScroll(m_table);
     layout->addWidget(m_table, 1);
     m_recordHint = new FluentQt::BodyLabel(tr("请在设计器配置逐行记录的源字段和列标题"), this);
     m_recordHint->setAlignment(Qt::AlignCenter);

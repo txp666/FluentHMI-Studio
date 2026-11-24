@@ -210,6 +210,7 @@ AlarmListWidget::AlarmListWidget(const WidgetMeta &meta, QWidget *parent) : HmiW
     m_table = new FluentQt::TableWidget(this);
     m_table->setObjectName(QStringLiteral("alarmTable"));
     m_table->setColumnCount(5);
+    enableHorizontalWheelScroll(m_table);
     m_layout->addWidget(m_table, 1);
     m_table->setHorizontalHeaderLabels({tr("时间"), tr("级别"), tr("名称"), tr("状态"), tr("报警文字")});
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);

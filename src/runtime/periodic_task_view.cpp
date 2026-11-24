@@ -33,6 +33,7 @@ void openPeriodicTasks(PeriodicSender *sender, QWidget *window)
 
     auto *table = new FluentQt::TableWidget(dialog);
     table->setObjectName(QStringLiteral("periodicTasksTable"));
+    enableHorizontalWheelScroll(table);
     table->setColumnCount(6);
     table->setHorizontalHeaderLabels(
         {tr("任务"), tr("发送目标"), tr("间隔(ms)"), tr("状态"), tr("已提交"), tr("跳过")});

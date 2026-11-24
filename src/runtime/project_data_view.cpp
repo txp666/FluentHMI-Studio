@@ -4,6 +4,7 @@
 #include "core/project_logic.h"
 #include "runtime/app_dialog.h"
 #include "runtime/project_data.h"
+#include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/Views/ItemViews.h>
 #include <FluentQtWidgets/Theme.h>
@@ -50,6 +51,7 @@ void openProjectDataMonitor(const QJsonObject &logic, ProjectData *data, QWidget
     QObject::connect(data, &QObject::destroyed, dialog, &QDialog::reject);
     auto *table = new FluentQt::TableWidget(dialog);
     table->setObjectName(QStringLiteral("projectDataReadings"));
+    enableHorizontalWheelScroll(table);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
