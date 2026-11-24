@@ -8,6 +8,7 @@
 #include "runtime/widgets/industrial_widget.h"
 
 #include "runtime/runtime_context.h"
+#include "runtime/ui_helpers.h"
 #include "runtime/widgets/basic_widgets.h"
 #include "runtime/widgets/can_widgets.h"
 #include "runtime/widgets/container_widgets.h"
@@ -71,12 +72,14 @@ void HmiWidget::setBindingProblem(const QString &status, const QString &detail)
     if (!m_bindingBadge) {
         m_bindingBadge = new FluentQt::InfoBadge(this);
         m_bindingBadge->setObjectName(QStringLiteral("bindingQualityBadge"));
-        m_bindingBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_bindingBadge->setAttribute(Qt::WA_TransparentForMouseEvents, false);
         m_bindingBadge->setMargin(3);
         m_bindingBadge->setCustomBackgroundColor(QColor(0x85402B), QColor(0x85402B));
+        fluentToolTip(m_bindingBadge);
     }
     const QString description = detail.isEmpty() ? status : status + QStringLiteral(" · ") + detail;
     m_bindingBadge->setText(status);
+    m_bindingBadge->setToolTip(description);
     m_bindingBadge->setAccessibleDescription(description);
     m_bindingBadge->setVisible(!status.isEmpty());
     if (!status.isEmpty()) {

@@ -12,8 +12,10 @@ class QGraphicsView;
 
 namespace fhmi {
 
+class CanvasItem;
 class DesignScene;
 class PropertyEditor;
+class WidgetOutline;
 class WidgetPalette;
 
 class DesignerPage : public QWidget
@@ -48,8 +50,9 @@ class DesignerPage : public QWidget
     void paste();
 
   signals:
-    // Anything about the design changed; a running preview is now out of date.
-    void projectChanged();
+    // Anything about the design changed; when `keepPreview` is true (e.g. saving a data point from
+    // a running preview), active hardware connections remain open until the user stops preview.
+    void projectChanged(bool keepPreview = false);
     void titleChanged(const QString &title);
     void notify(const QString &title, const QString &content, bool error);
     void warning(const QString &title, const QString &content);
@@ -70,9 +73,11 @@ class DesignerPage : public QWidget
     void zoomBy(qreal factor);
     // Shows the whole page, never larger than 100 %.
     void fitCanvas();
+    void showItemContextMenu(CanvasItem *target, const QPoint &globalPos);
 
     Project m_project;
     bool m_modified = false;
+    bool m_keepPreviewOnNextChange = false;
     // Each undo step remembers the design and the view of its tab containers.
     struct HistoryStep
     {
@@ -93,6 +98,7 @@ class DesignerPage : public QWidget
     DesignScene *m_scene = nullptr;
     QGraphicsView *m_view = nullptr;
     WidgetPalette *m_palette = nullptr;
+    WidgetOutline *m_outline = nullptr;
     PropertyEditor *m_properties = nullptr;
 };
 

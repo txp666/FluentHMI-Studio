@@ -1,13 +1,17 @@
 #include "player/player_window.h"
 
-#include "runtime/runtime_context.h"
 #include "runtime/periodic_task_view.h"
+#include "runtime/project_data_view.h"
+#include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
 #include "runtime/ui_helpers.h"
 
+#include <FluentQtWidgets/FluentIcon.h>
+#include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/InfoBar.h>
 #include <FluentQtWidgets/Window/FluentTitleBar.h>
 
+#include <QtCore/QJsonArray>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPainter>
 #include <QtGui/QScreen>
@@ -15,6 +19,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QGraphicsScene>
 #include <QtWidgets/QGraphicsView>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
@@ -107,8 +112,32 @@ PlayerWindow::PlayerWindow(const Project &project, QWidget *parent, bool startRu
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, titleBar()->height(), 0, 0);
     m_surface = new RuntimeSurface;
-    layout->addWidget(new CanvasView(m_surface, this));
-    layout->addWidget(createPeriodicTasksButton(m_surface->context()->periodicSender(), this), 0, Qt::AlignRight);
+    layout->addWidget(new CanvasView(m_surface, this), 1);
+
+    // Place runtime utility buttons in the title bar beside window controls so they never steal space
+    // from the scaled canvas or trigger a canvas rescale when periodic tasks start/stop.
+    if (auto *barLayout = qobject_cast<QHBoxLayout *>(titleBar()->layout())) {
+        auto *tools = new QWidget(titleBar());
+        auto *toolsLayout = new QHBoxLayout(tools);
+        toolsLayout->setContentsMargins(0, 0, 6, 0);
+        toolsLayout->setSpacing(4);
+        if (!project.logic.value(QStringLiteral("points")).toArray().isEmpty()) {
+            auto *monitor = new FluentQt::TransparentPushButton(FluentQt::icon(FluentQt::FluentIcon::View),
+                                                                tr("工程数据监视"), tools);
+            monitor->setObjectName(QStringLiteral("playerDataMonitorButton"));
+            monitor->setFixedHeight(26);
+            const QJsonObject logic = project.logic;
+            connect(monitor, &QPushButton::clicked, this, [this, logic]() {
+                openProjectDataMonitor(logic, m_surface->context()->projectData(), this);
+            });
+            toolsLayout->addWidget(monitor);
+        }
+        QPushButton *periodic = createPeriodicTasksButton(m_surface->context()->periodicSender(), tools);
+        periodic->setFixedHeight(26);
+        toolsLayout->addWidget(periodic);
+        const int insertAt = std::max(0, barLayout->count() - 1);
+        barLayout->insertWidget(insertAt, tools, 0, Qt::AlignVCenter);
+    }
 
     connect(m_surface, &RuntimeSurface::notificationRequested, this,
             [this](const QString &title, const QString &content, const QString &type, int duration) {

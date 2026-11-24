@@ -228,6 +228,11 @@ void NumericDisplayWidget::applyBoundValue(const QVariant &value, const BindingE
     showValue(value);
 }
 
+void NumericDisplayWidget::bindingStatusChanged(BindingStatus)
+{
+    showValue(m_reading);
+}
+
 void NumericDisplayWidget::showValue(const QVariant &value)
 {
     QString label = value.isValid() ? displayString(value) : QString::fromUtf8("—");
@@ -244,6 +249,10 @@ void NumericDisplayWidget::showValue(const QVariant &value)
             if (QColor(text("unknownColor")).isValid())
                 color = QColor(text("unknownColor"));
         }
+    }
+    const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
+    if (mutedState) {
+        color = isDarkTheme() ? QColor(QStringLiteral("#8a8a8a")) : QColor(QStringLiteral("#909090"));
     }
     m_value->setText(label);
     m_value->setTextColor(color, color);
@@ -443,12 +452,19 @@ void GaugeWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
     }
 }
 
+void GaugeWidget::bindingStatusChanged(BindingStatus)
+{
+    update();
+}
+
 void GaugeWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const bool dark = isDarkTheme();
-    const QColor fg = dark ? QColor(255, 255, 255) : QColor(26, 26, 26);
+    const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
+    const QColor fg = mutedState ? (dark ? QColor(255, 255, 255, 125) : QColor(0, 0, 0, 115))
+                                 : (dark ? QColor(255, 255, 255) : QColor(26, 26, 26));
     const QColor muted = dark ? QColor(255, 255, 255, 150) : QColor(0, 0, 0, 140);
 
     const qreal base = std::min(width(), height());
@@ -467,7 +483,7 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     painter.setPen(track);
     painter.drawArc(arc, startAngle, spanAngle);
     if (ratio > 0) {
-        QPen value(accentColor(), stroke, Qt::SolidLine, Qt::RoundCap);
+        QPen value(mutedState ? muted : accentColor(), stroke, Qt::SolidLine, Qt::RoundCap);
         painter.setPen(value);
         painter.drawArc(arc, startAngle, int(spanAngle * ratio));
     }
@@ -477,8 +493,8 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     font.setPixelSize(std::max(10, int(side / 5.5)));
     painter.setFont(font);
     painter.setPen(fg);
-    // One decimal always, of the value held within the range, as PyQt UI Designer shows it (0.0, 996.0).
-    const QString number = QString::number(std::clamp(m_value, lo, std::max(lo, hi)), 'f', 1);
+    // Keep one decimal place while showing the actual reading (even when out of range).
+    const QString number = QString::number(m_value, 'f', 1);
     painter.drawText(arc, Qt::AlignCenter, number);
 
     font.setBold(false);

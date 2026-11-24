@@ -381,6 +381,12 @@ class CanSignalDialog : public AppDialog
         m_id->setAccessibleName(tr("报文 ID"));
         filter->addWidget(new FluentQt::BodyLabel(tr("报文 ID"), widget()));
         filter->addWidget(m_id, 1);
+        m_search = new FluentQt::SearchLineEdit(widget());
+        m_search->setObjectName(QStringLiteral("canSignalSearch"));
+        m_search->setPlaceholderText(tr("搜索报文 ID / 名称 / 信号"));
+        m_search->setClearButtonEnabled(true);
+        filter->addWidget(m_search, 1);
+        connect(m_search, &QLineEdit::textChanged, this, [this]() { applySearchFilter(); });
         if (editing) {
             auto *textButton = new FluentQt::TransparentPushButton(tr("编辑文本…"), widget());
             filter->addWidget(textButton);
@@ -582,14 +588,14 @@ class CanSignalDialog : public AppDialog
         if (!m_signalSet)
             m_signalSet = CanSignalSet::build(m_dbc, {});
 
-        m_ids.clear();
-        QStringList names;
+        m_allIds.clear();
+        m_allNames.clear();
         const auto addId = [&](const CanId &id, const QString &name) {
-            if (m_ids.contains(id))
+            if (m_allIds.contains(id))
                 return;
-            m_ids.append(id);
-            names.append(name.isEmpty() ? Can::idText(id.id, id.extended)
-                                         : QStringLiteral("%1 · %2").arg(Can::idText(id.id, id.extended), name));
+            m_allIds.append(id);
+            m_allNames.append(name.isEmpty() ? Can::idText(id.id, id.extended)
+                                             : QStringLiteral("%1 · %2").arg(Can::idText(id.id, id.extended), name));
         };
         // An older binding may use the short name. Prefer an exact key; fall back to the first short-name match.
         int keyScore = 0;
@@ -618,6 +624,38 @@ class CanSignalDialog : public AppDialog
         if (m_framePick)
             if (const auto id = Can::parseId(key))
                 preferred = *id;
+        applySearchFilter(preferred, key);
+    }
+
+    bool messageMatchesSearch(const CanId &id, const QString &label, const QString &needle) const
+    {
+        if (needle.isEmpty() || label.contains(needle, Qt::CaseInsensitive))
+            return true;
+        if (const auto *message = m_dbc ? m_dbc->find(id) : nullptr) {
+            for (const auto &sig : message->signalDefs)
+                if (sig.name.contains(needle, Qt::CaseInsensitive))
+                    return true;
+        }
+        for (const auto &entry : std::as_const(m_inline)) {
+            if (entry.id == id && entry.signal.name.contains(needle, Qt::CaseInsensitive))
+                return true;
+        }
+        return false;
+    }
+
+    void applySearchFilter(std::optional<CanId> preferred = {}, const QString &key = {})
+    {
+        const QString needle = m_search ? m_search->text().trimmed() : QString();
+        if (!preferred && m_id->currentIndex() >= 0 && m_id->currentIndex() < m_ids.size())
+            preferred = m_ids.at(m_id->currentIndex());
+        m_ids.clear();
+        QStringList names;
+        for (int i = 0; i < m_allIds.size(); ++i) {
+            if (messageMatchesSearch(m_allIds.at(i), m_allNames.at(i), needle)) {
+                m_ids.append(m_allIds.at(i));
+                names.append(m_allNames.at(i));
+            }
+        }
         {
             const QSignalBlocker blocker(m_id);
             m_id->clear();
@@ -628,7 +666,8 @@ class CanSignalDialog : public AppDialog
         }
         const QString problem = m_inlineError.isEmpty() ? m_dbcError : m_inlineError;
         m_definitionStatus->setText(!problem.isEmpty() ? problem
-                                    : m_ids.isEmpty() ? tr("请先加载 DBC 或定义 CAN 信号") : QString());
+                                    : m_allIds.isEmpty() ? tr("请先加载 DBC 或定义 CAN 信号")
+                                    : m_ids.isEmpty() ? tr("没有匹配的报文或信号") : QString());
         m_definitionStatus->setVisible(!m_definitionStatus->text().isEmpty());
         showMessage(key);
     }
@@ -637,13 +676,18 @@ class CanSignalDialog : public AppDialog
     {
         m_rows.clear();
         const auto id = currentId();
+        const QString needle = m_search ? m_search->text().trimmed() : QString();
+        const QString currentLabel = m_id->currentIndex() >= 0 ? m_id->currentText() : QString();
+        const bool messageMatched = needle.isEmpty() || currentLabel.contains(needle, Qt::CaseInsensitive);
         if (m_id->currentIndex() >= 0) {
             if (const auto *message = m_dbc ? m_dbc->find(id) : nullptr) {
-                for (const auto &signal : message->signalDefs)
-                    m_rows.append({signal, message->name + QLatin1Char('.') + signal.name});
+                for (const auto &signal : message->signalDefs) {
+                    if (messageMatched || signal.name.contains(needle, Qt::CaseInsensitive))
+                        m_rows.append({signal, message->name + QLatin1Char('.') + signal.name});
+                }
             }
             for (const auto &entry : std::as_const(m_inline)) {
-                if (entry.id == id)
+                if (entry.id == id && (messageMatched || entry.signal.name.contains(needle, Qt::CaseInsensitive)))
                     m_rows.append({entry.signal, inlineSignalKey(id, entry.signal.name), entry.line});
             }
         }
@@ -814,6 +858,8 @@ class CanSignalDialog : public AppDialog
     std::shared_ptr<const CanDatabase> m_dbc;
     std::optional<CanSignalSet> m_signalSet;
     QList<InlineSignal> m_inline;
+    QList<CanId> m_allIds;
+    QStringList m_allNames;
     QList<CanId> m_ids;
     QList<Row> m_rows;
     const int m_capacity;
@@ -825,6 +871,7 @@ class CanSignalDialog : public AppDialog
     QString m_dbcError;
     FluentQt::ComboBox *m_connection = nullptr;
     FluentQt::ComboBox *m_id;
+    FluentQt::SearchLineEdit *m_search = nullptr;
     FluentQt::LineEdit *m_sample;
     FluentQt::CaptionLabel *m_definitionStatus;
     FluentQt::CaptionLabel *m_frameStatus;

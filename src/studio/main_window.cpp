@@ -42,8 +42,10 @@ MainWindow::MainWindow(QWidget *parent) : FluentQt::FluentWindow(parent)
     connect(FluentQt::FluentConfig::instance(), &FluentQt::FluentConfig::micaEnabledChanged, this,
             &MainWindow::setMicaEffectEnabled);
 
-    connect(m_designer, &DesignerPage::projectChanged, this, [this]() {
-        m_preview->invalidate();
+    connect(m_designer, &DesignerPage::projectChanged, this, [this](bool keepPreview) {
+        if (!keepPreview) {
+            m_preview->invalidate();
+        }
         m_preview->setProject(m_designer->snapshot());
     });
     connect(m_designer, &DesignerPage::titleChanged, this, &MainWindow::updateTitle);

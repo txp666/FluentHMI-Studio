@@ -635,6 +635,167 @@ void replaceChoices(FluentQt::ComboBox *box, const QStringList &options, const Q
         box->setCurrentIndex(options.isEmpty() ? -1 : 0);
 }
 
+int countNonEmptyLines(const QString &text)
+{
+    int count = 0;
+    for (const QString &line : text.split(QLatin1Char('\n'))) {
+        if (!line.trimmed().isEmpty()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int countSlaveInitEntries(const QString &text)
+{
+    int count = 0;
+    const QStringList parts = text.split(QRegularExpression(QStringLiteral("[,;\\n]+")), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        if (!part.trimmed().isEmpty()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+QString s7ButtonSummary(const QString &areaKey, int dbNumber, int byteOffset, int bit, const S7::DataType &type)
+{
+    if (areaKey == QLatin1String("DB")) {
+        if (type.isBool())
+            return QStringLiteral("DB%1.DBX%2.%3").arg(dbNumber).arg(byteOffset).arg(bit);
+        const QChar width = type.byteCount == 1 ? QLatin1Char('B') : type.byteCount == 2 ? QLatin1Char('W') : QLatin1Char('D');
+        return QStringLiteral("DB%1.DB%2%3").arg(dbNumber).arg(width).arg(byteOffset);
+    }
+    if (type.isBool())
+        return QStringLiteral("%1%2.%3").arg(areaKey).arg(byteOffset).arg(bit);
+    const QChar width = type.byteCount == 1 ? QLatin1Char('B') : type.byteCount == 2 ? QLatin1Char('W') : QLatin1Char('D');
+    return QStringLiteral("%1%2%3").arg(areaKey).arg(width).arg(byteOffset);
+}
+
+void openS7AddressBuilder(QWidget *parent, const QString &currentAddress, const QString &currentType, bool writeOnly,
+                          const std::function<void(const QString &, const QString &)> &apply)
+{
+    AppDialog dialog(QCoreApplication::translate("fhmi", "S7 地址构建器"), parent);
+    dialog.setObjectName(QStringLiteral("s7AddressBuilderDialog"));
+    dialog.setPreferredSize({430, 340});
+    auto *form = new QFormLayout;
+    form->setHorizontalSpacing(10);
+    form->setVerticalSpacing(8);
+
+    auto *area = new FluentQt::ComboBox(dialog.widget());
+    area->addItem(QCoreApplication::translate("fhmi", "DB · 数据块"), {}, QStringLiteral("DB"));
+    area->addItem(QCoreApplication::translate("fhmi", "M · 标志位"), {}, QStringLiteral("M"));
+    area->addItem(QCoreApplication::translate("fhmi", "Q · 输出区"), {}, QStringLiteral("Q"));
+    if (!writeOnly) {
+        area->addItem(QCoreApplication::translate("fhmi", "I · 输入区（只读）"), {}, QStringLiteral("I"));
+    }
+
+    auto *dbNum = new FluentQt::SpinBox(dialog.widget());
+    dbNum->setRange(1, 65535);
+    dbNum->setValue(1);
+
+    auto *typeBox = new FluentQt::ComboBox(dialog.widget());
+    for (const QString &t : S7::dataTypes()) {
+        typeBox->addItem(t, {}, t);
+    }
+    selectValue(typeBox, currentType.isEmpty() ? QStringLiteral("REAL") : currentType);
+
+    auto *byteOffset = new FluentQt::SpinBox(dialog.widget());
+    byteOffset->setRange(0, 65535);
+    byteOffset->setValue(0);
+
+    auto *bitSpin = new FluentQt::SpinBox(dialog.widget());
+    bitSpin->setRange(0, 7);
+    bitSpin->setValue(0);
+
+    S7::Address parsed;
+    if (S7::parseAddress(currentAddress, &parsed)) {
+        const QString key = parsed.areaKey();
+        if (!selectValue(area, key)) {
+            area->setCurrentIndex(0);
+        }
+        if (parsed.area == S7::MemoryArea::DataBlock && parsed.dbNumber > 0) {
+            dbNum->setValue(parsed.dbNumber);
+        }
+        byteOffset->setValue(parsed.byteOffset);
+        if (parsed.bit >= 0) {
+            bitSpin->setValue(parsed.bit);
+        }
+    }
+
+    auto *dbLabel = new FluentQt::BodyLabel(QCoreApplication::translate("fhmi", "DB 编号"), dialog.widget());
+    auto *bitLabel = new FluentQt::BodyLabel(QCoreApplication::translate("fhmi", "位号 (0–7)"), dialog.widget());
+    form->addRow(QCoreApplication::translate("fhmi", "存储区"), area);
+    form->addRow(dbLabel, dbNum);
+    form->addRow(QCoreApplication::translate("fhmi", "数据类型"), typeBox);
+    form->addRow(QCoreApplication::translate("fhmi", "字节偏移"), byteOffset);
+    form->addRow(bitLabel, bitSpin);
+    dialog.viewLayout()->addLayout(form);
+
+    auto *preview = new FluentQt::StrongBodyLabel(dialog.widget());
+    preview->setWordWrap(true);
+    dialog.viewLayout()->addWidget(preview);
+
+    const auto currentResult = [&]() -> QPair<QString, QString> {
+        const QString typeName = selectedValue(typeBox);
+        S7::DataType dt;
+        if (!S7::parseDataType(typeName, &dt)) {
+            dt = {};
+        }
+        return {s7ButtonSummary(selectedValue(area), dbNum->value(), byteOffset->value(), bitSpin->value(), dt),
+                dt.name};
+    };
+    const auto updatePreview = [&]() {
+        const bool isDb = selectedValue(area) == QLatin1String("DB");
+        dbLabel->setVisible(isDb);
+        dbNum->setVisible(isDb);
+        S7::DataType dt;
+        S7::parseDataType(selectedValue(typeBox), &dt);
+        bitLabel->setVisible(dt.isBool());
+        bitSpin->setVisible(dt.isBool());
+        const auto [addr, typeName] = currentResult();
+        preview->setText(QCoreApplication::translate("fhmi", "地址预览：%1（%2 · %3 字节）")
+                             .arg(addr, typeName)
+                             .arg(dt.byteCount));
+    };
+    QObject::connect(area, &FluentQt::ComboBox::currentIndexChanged, &dialog, updatePreview);
+    QObject::connect(typeBox, &FluentQt::ComboBox::currentIndexChanged, &dialog, updatePreview);
+    QObject::connect(dbNum, qOverload<int>(&QSpinBox::valueChanged), &dialog, updatePreview);
+    QObject::connect(byteOffset, qOverload<int>(&QSpinBox::valueChanged), &dialog, updatePreview);
+    QObject::connect(bitSpin, qOverload<int>(&QSpinBox::valueChanged), &dialog, updatePreview);
+    updatePreview();
+
+    if (dialog.exec() == QDialog::Accepted) {
+        const auto [addr, typeName] = currentResult();
+        apply(addr, typeName);
+    }
+}
+
+FluentQt::ComboBox *makeModbusFcCombo(QWidget *parent, int current)
+{
+    auto *box = new FluentQt::ComboBox(parent);
+    const QList<QPair<int, QString>> choices = {
+        {-1, QCoreApplication::translate("fhmi", "不限功能码")},
+        {1, QCoreApplication::translate("fhmi", "01 读线圈")},
+        {2, QCoreApplication::translate("fhmi", "02 读离散输入")},
+        {3, QCoreApplication::translate("fhmi", "03 读保持寄存器")},
+        {4, QCoreApplication::translate("fhmi", "04 读输入寄存器")},
+    };
+    int selected = -1;
+    for (int i = 0; i < choices.size(); ++i) {
+        box->addItem(choices.at(i).second, {}, choices.at(i).first);
+        if (choices.at(i).first == current) {
+            selected = i;
+        }
+    }
+    if (selected < 0) {
+        box->addItem(QCoreApplication::translate("fhmi", "功能码 %1").arg(current), {}, current);
+        selected = box->count() - 1;
+    }
+    box->setCurrentIndex(selected);
+    return box;
+}
+
 } // namespace
 
 PropertyEditor::PropertyEditor(QWidget *parent) : FluentQt::ScrollArea(parent)
@@ -1380,7 +1541,12 @@ void PropertyEditor::buildProjectForm()
     addRow(general, QString(), tr("网格大小"),
            spin("gridSize", 1, 100, m_project->gridSize, [this](int v) { m_project->gridSize = v; }));
 
-    auto *logic = new FluentQt::PushButton(tr("工程数据与报警…"), m_content);
+    const int pointCount = int(m_project->logic.value(QStringLiteral("points")).toArray().size());
+    const int alarmCount = int(m_project->logic.value(QStringLiteral("alarms")).toArray().size());
+    const QString logicLabel = (pointCount > 0 || alarmCount > 0)
+                                   ? tr("工程数据与报警（%1 点 · %2 报警）…").arg(pointCount).arg(alarmCount)
+                                   : tr("工程数据与报警…");
+    auto *logic = new FluentQt::PushButton(logicLabel, m_content);
     addRow(general, QStringLiteral("logic"), tr("数据与报警"), logic, QStringLiteral("project.logic"));
     connect(logic, &QPushButton::clicked, this, &PropertyEditor::editProjectLogic);
     buildBitProfilesForm();
@@ -2690,21 +2856,38 @@ void PropertyEditor::addItemProperties(QFormLayout *form, const QList<const Prop
             });
         } else if (name == u"canTxInitialState" || name == u"canFilter") {
             const bool mapping = name == u"canTxInitialState";
-            auto *edit = new FluentQt::PushButton(mapping ? tr("编辑初值映射…") : tr("编辑接收过滤…"), m_content);
+            const auto summaryLabel = [mapping](const QString &val) {
+                if (mapping) {
+                    const int n = countNonEmptyLines(val);
+                    return n > 0 ? tr("编辑初值映射（%1 条）…").arg(n) : tr("编辑初值映射…");
+                }
+                const QString trimmed = val.trimmed();
+                if (trimmed.isEmpty())
+                    return tr("编辑接收过滤…");
+                const QString brief = trimmed.size() > 14 ? trimmed.left(13) + QChar(0x2026) : trimmed;
+                return tr("编辑接收过滤 · %1").arg(brief);
+            };
+            auto *edit = new FluentQt::PushButton(summaryLabel(itemValue(*def).toString()), m_content);
             edit->setObjectName(mapping ? QStringLiteral("editCanInitialMapping") : QStringLiteral("editCanReceiveFilter"));
             addRow(form, name, translated(def->label), edit, def->helpKey);
-            connect(edit, &QPushButton::clicked, this, [this, name, mapping] {
+            connect(edit, &QPushButton::clicked, this, [this, name, mapping, edit, summaryLabel] {
                 const QPointer<CanvasItem> item = m_item;
                 const auto result = mapping ? editCanInitialMapping(m_project, item->toJson(), window())
                                             : editCanReceiveFilter(m_project, item->toJson(), window());
-                if (item && item == m_item && result)
+                if (item && item == m_item && result) {
                     commitProperty(name, *result);
+                    edit->setText(summaryLabel(*result));
+                }
             });
         } else if (name == u"slaveInit") {
-            auto *edit = new FluentQt::PushButton(tr("编辑寄存器初始值…"), m_content);
+            const auto slaveInitLabel = [](const QString &val) {
+                const int n = countSlaveInitEntries(val);
+                return n > 0 ? tr("编辑寄存器初始值（%1 项）…").arg(n) : tr("编辑寄存器初始值…");
+            };
+            auto *edit = new FluentQt::PushButton(slaveInitLabel(itemValue(*def).toString()), m_content);
             edit->setObjectName(QStringLiteral("editSlaveInitialValues"));
             addRow(form, name, translated(def->label), edit, def->helpKey);
-            connect(edit, &QPushButton::clicked, this, [this, name] {
+            connect(edit, &QPushButton::clicked, this, [this, name, edit, slaveInitLabel] {
                 const QPointer<CanvasItem> item = m_item;
                 const auto properties = item->properties();
                 AppDialog dialog(tr("Modbus 从站初始值"), window());
@@ -2727,8 +2910,11 @@ void PropertyEditor::addItemProperties(QFormLayout *form, const QList<const Prop
                 table->showDesign(&properties, false, true);
                 connect(area, &FluentQt::ComboBox::currentIndexChanged, &dialog, update);
                 dialog.viewLayout()->addWidget(table, 1);
-                if (dialog.exec() == QDialog::Accepted && item && item == m_item)
-                    commitProperty(name, table->initialValues());
+                if (dialog.exec() == QDialog::Accepted && item && item == m_item) {
+                    const QString values = table->initialValues();
+                    commitProperty(name, values);
+                    edit->setText(slaveInitLabel(values));
+                }
             });
         } else if (name == QLatin1String("commandInputs")) {
             auto *edit = new FluentQt::PushButton(tr("编辑发送配置"), m_content);
@@ -3080,6 +3266,9 @@ void PropertyEditor::addS7Rows(QFormLayout *form, const PropDef &def)
         fields.append({QStringLiteral("onValue"), tr("开启写入值"), PropType::String, QStringLiteral("1"), {}, std::nullopt, std::nullopt, false, {}});
         fields.append({QStringLiteral("offValue"), tr("关闭写入值"), PropType::String, QStringLiteral("0"), {}, std::nullopt, std::nullopt, false, {}});
     }
+    QLineEdit *addressEdit = nullptr;
+    FluentQt::ComboBox *typeCombo = nullptr;
+    QWidget *addressRow = nullptr;
     for (const PropDef &field : fields) {
         const auto current = object.value(field.name);
         auto *editor = createEditor(field, current.isUndefined() ? field.defaultValue : current,
@@ -3090,7 +3279,42 @@ void PropertyEditor::addS7Rows(QFormLayout *form, const PropDef &def)
             settings.insert(name, value);
             commitProperty(root, settings, name);
         });
+        if (field.name == QLatin1String("period")) {
+            if (auto *spin = qobject_cast<QSpinBox *>(editor)) {
+                spin->setSpecialValueText(tr("默认周期"));
+            }
+        }
+        if (field.name == QLatin1String("address")) {
+            addressEdit = qobject_cast<QLineEdit *>(editor);
+            auto *row = new QWidget(m_content);
+            auto *box = new QHBoxLayout(row);
+            box->setContentsMargins(0, 0, 0, 0);
+            box->setSpacing(4);
+            box->addWidget(editor, 1);
+            auto *build = new FluentQt::TransparentToolButton(FluentQt::icon(FluentQt::FluentIcon::Edit), row);
+            build->setObjectName(QStringLiteral("s7AddressBuilderButton_%1").arg(def.name));
+            keepSquareBeside(build, editor);
+            fluentToolTip(build, tr("可视化构建 S7 地址"));
+            box->addWidget(build);
+            addressRow = row;
+            addRow(form, def.name + QLatin1Char('.') + field.name, field.label, row, field.helpKey);
+            continue;
+        }
+        if (field.name == QLatin1String("dataType")) {
+            typeCombo = qobject_cast<FluentQt::ComboBox *>(editor);
+        }
         addRow(form, def.name + QLatin1Char('.') + field.name, field.label, editor, field.helpKey);
+    }
+    if (addressRow && addressEdit && typeCombo) {
+        auto *build = addressRow->findChild<QToolButton *>();
+        const bool writeOnly = def.name == QLatin1String("s7Command");
+        connect(build, &QToolButton::clicked, this, [this, addressEdit, typeCombo, writeOnly]() {
+            openS7AddressBuilder(window(), addressEdit->text(), selectedValue(typeCombo), writeOnly,
+                                 [addressEdit, typeCombo](const QString &addr, const QString &type) {
+                                     addressEdit->setText(addr);
+                                     selectValue(typeCombo, type);
+                                 });
+        });
     }
 }
 
@@ -3165,9 +3389,34 @@ void PropertyEditor::buildBindingForm(QFormLayout *form)
     add("sourceCardId", tr("来源连接"), source, QStringLiteral("data.routing"));
     add("sourceEndpoint", tr("来源子通道"), line(value("sourceEndpoint", QString()).toString(), {}));
     addReceiveEditorRow(form, QStringLiteral("binding.receiveFormat"), ReceiveTarget::Binding);
-    add("s7Address",tr("S7 地址"),line(s7.value(QStringLiteral("address")).toString(QStringLiteral("DB1.DBD4")),QStringLiteral("DB1.DBD4")),QStringLiteral("s7.addressing"));
-    add("s7DataType",tr("S7 数据类型"),combo(S7::dataTypes(),s7.value(QStringLiteral("dataType")).toString(QStringLiteral("REAL"))));
-    add("s7Period",tr("S7 采集周期(ms)"),spin(0,60000,s7.value(QStringLiteral("period")).toInt(0)));
+    auto *s7AddressEdit = line(s7.value(QStringLiteral("address")).toString(QStringLiteral("DB1.DBD4")),
+                               QStringLiteral("DB1.DBD4"));
+    auto *s7AddressRow = new QWidget(m_content);
+    auto *s7AddressLayout = new QHBoxLayout(s7AddressRow);
+    s7AddressLayout->setContentsMargins(0, 0, 0, 0);
+    s7AddressLayout->setSpacing(4);
+    auto *s7BuildBtn = new FluentQt::TransparentToolButton(FluentQt::icon(FluentQt::FluentIcon::Edit), s7AddressRow);
+    s7BuildBtn->setObjectName(QStringLiteral("s7AddressBuilderButton"));
+    keepSquareBeside(s7BuildBtn, s7AddressEdit);
+    fluentToolTip(s7BuildBtn, tr("可视化构建 S7 地址"));
+    s7AddressLayout->addWidget(s7AddressEdit, 1);
+    s7AddressLayout->addWidget(s7BuildBtn);
+    m_bindingEditors.insert(QStringLiteral("s7Address"), s7AddressEdit);
+    addRow(form, QStringLiteral("binding.s7Address"), tr("S7 地址"), s7AddressRow, QStringLiteral("s7.addressing"));
+    connect(s7AddressEdit, &QLineEdit::textChanged, this, [this]() { commitBinding(QStringLiteral("s7Address")); });
+
+    auto *s7TypeCombo = combo(S7::dataTypes(), s7.value(QStringLiteral("dataType")).toString(QStringLiteral("REAL")));
+    add("s7DataType", tr("S7 数据类型"), s7TypeCombo);
+    connect(s7BuildBtn, &QToolButton::clicked, this, [this, s7AddressEdit, s7TypeCombo]() {
+        openS7AddressBuilder(window(), s7AddressEdit->text(), selectedValue(s7TypeCombo), false,
+                             [s7AddressEdit, s7TypeCombo](const QString &addr, const QString &type) {
+                                 s7AddressEdit->setText(addr);
+                                 selectValue(s7TypeCombo, type);
+                             });
+    });
+    auto *s7Period = spin(0, 60000, s7.value(QStringLiteral("period")).toInt(0));
+    s7Period->setSpecialValueText(tr("默认周期"));
+    add("s7Period", tr("S7 采集周期(ms)"), s7Period);
     const QString example = industrialCapabilities(m_item->typeName()).inputExample;
     if (!example.isEmpty()) {
         auto *hint = new FluentQt::CaptionLabel(tr("接收值示例 %1").arg(example), m_content);
@@ -3212,11 +3461,15 @@ void PropertyEditor::buildBindingForm(QFormLayout *form)
         combo({QStringLiteral("uint16"), QStringLiteral("int16"), QStringLiteral("uint32"), QStringLiteral("int32"),
                QStringLiteral("float32")},
               value("mbDataType", QStringLiteral("uint16")).toString()));
+    auto *mbSpan = new FluentQt::CaptionLabel(m_content);
+    mbSpan->setObjectName(QStringLiteral("modbusRegisterSpanHint"));
+    mbSpan->setWordWrap(true);
+    addRow(form, QStringLiteral("binding.mbSpan"), {}, mbSpan);
     add("mbRegOrder", tr("寄存器序"),
         combo({QStringLiteral("大端(AB CD)"), QStringLiteral("小端(CD AB)")},  // i18n: value
               value("mbRegOrder", QStringLiteral("大端(AB CD)")).toString())); // i18n: value
-    auto *function = spin(-1, 255, value("mbFcFilter", -1).toInt());
-    function->setSpecialValueText(tr("不限功能码"));
+    auto *function = makeModbusFcCombo(m_content, value("mbFcFilter", -1).toInt());
+    function->setObjectName(QStringLiteral("bindingMbFcFilter"));
     add("mbFcFilter", tr("功能码过滤"), function);
     auto *station = spin(-1, 247, value("mbSlaveFilter", -1).toInt());
     station->setSpecialValueText(tr("连接默认从站"));
@@ -3255,8 +3508,14 @@ void PropertyEditor::commitBinding(const QString &field)
         return QString();
     };
     const auto intOf = [this](const char *key) {
-        auto *spin = qobject_cast<QSpinBox *>(m_bindingEditors.value(QLatin1String(key)));
-        return spin ? spin->value() : 0;
+        QWidget *editor = m_bindingEditors.value(QLatin1String(key));
+        if (auto *spin = qobject_cast<QSpinBox *>(editor)) {
+            return spin->value();
+        }
+        if (auto *box = qobject_cast<FluentQt::ComboBox *>(editor)) {
+            return box->currentData().toInt();
+        }
+        return 0;
     };
     // Visual CAN settings live in the binding, alongside the fields in this form.
     auto binding = m_item->binding();
@@ -3739,6 +3998,20 @@ void PropertyEditor::updateVisibility()
         const bool visualValues = updateReceiveTemplateRow(
             QStringLiteral("binding.receiveFormat.template"), ReceiveTarget::Binding, usesFreeFrame(mode));
         setRowVisible(QStringLiteral("binding.receiveFormat"), visualValues);
+        if (visualValues) {
+            if (auto *editBtn = qobject_cast<QPushButton *>(m_rows.value(QStringLiteral("binding.receiveFormat")).second)) {
+                QStringList parts;
+                if (mode == ParseMode::HexBytes) {
+                    parts.append(QStringLiteral("B%1").arg(binding.value(QStringLiteral("byteOffset")).toInt(0)));
+                }
+                const QString expr = binding.value(QStringLiteral("expression")).toString().trimmed();
+                if (!expr.isEmpty()) {
+                    parts.append(expr.size() > 14 ? expr.left(13) + QChar(0x2026) : expr);
+                }
+                editBtn->setText(parts.isEmpty() ? tr("可视化取值…")
+                                                 : tr("可视化取值 · %1").arg(parts.join(QStringLiteral(" · "))));
+            }
+        }
         for (const char *field : {"byteOffset", "dataType", "byteOrder", "frameHeader", "frameTail"}) {
             setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::HexBytes && !visualValues);
         }
@@ -3750,9 +4023,23 @@ void PropertyEditor::updateVisibility()
              {"mbArea", "mbRegIndex", "mbBit", "mbDataType", "mbRegOrder", "mbFcFilter", "mbSlaveFilter", "mbPeriod"}) {
             setRowVisible(QStringLiteral("binding.") + QLatin1String(field), mode == ParseMode::Modbus);
         }
-        if (mode == ParseMode::Modbus)
+        bool showMbSpan = false;
+        if (mode == ParseMode::Modbus) {
             setModbusReadFields(m_item->binding(), QStringLiteral("binding.mbBit"), QStringLiteral("binding.mbDataType"),
                                 QStringLiteral("binding.mbRegOrder"));
+            const QString table = ModbusArea::prefix(binding.value(QStringLiteral("mbArea")).toString(ModbusArea::HoldingRegisters));
+            const bool registers = table == QLatin1String("hr") || table == QLatin1String("ir");
+            const int bit = binding.value(QStringLiteral("mbBit")).toInt(CommandEncoder::WholeRegister);
+            const QString dataType = binding.value(QStringLiteral("mbDataType")).toString(QStringLiteral("uint16"));
+            showMbSpan = registers && (bit < 0 || bit > 15) && CommandEncoder::usesRegisterOrder(dataType);
+            if (showMbSpan) {
+                const int reg = binding.value(QStringLiteral("mbRegIndex")).toInt(0);
+                if (auto *span = qobject_cast<QLabel *>(m_rows.value(QStringLiteral("binding.mbSpan")).second)) {
+                    span->setText(tr("占用 2 个寄存器：%1–%2").arg(reg).arg(reg + 1));
+                }
+            }
+        }
+        setRowVisible(QStringLiteral("binding.mbSpan"), showMbSpan);
         setRowVisible(QStringLiteral("binding.savePoint"), usesSource && BindingEntry::fromWidget(m_item->toJson()).has_value());
         setRowVisible(QStringLiteral("binding.example"), mode != ParseMode::None);
         if (m_rows.contains(QStringLiteral("binding.localWrite"))) {
@@ -3765,7 +4052,11 @@ void PropertyEditor::updateVisibility()
         QString problem;
         if (mode == ParseMode::CanSignal)
             problem = canSignalProblem(binding);
-        else if ((mode == ParseMode::KeyValue || mode == ParseMode::DataPoint || mode == ParseMode::CanField) &&
+        else if (mode == ParseMode::S7) {
+            QString s7Error;
+            if (!S7::point(binding.value(QStringLiteral("s7")).toObject(), &s7Error))
+                problem = s7Error;
+        } else if ((mode == ParseMode::KeyValue || mode == ParseMode::DataPoint || mode == ParseMode::CanField) &&
                  binding.value(QStringLiteral("key")).toString().isEmpty())
             problem = usesTemplateField ? tr("选择模板字段")
                 : mode == ParseMode::CanField ? tr("选择 CAN 信号")

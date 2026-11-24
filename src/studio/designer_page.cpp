@@ -5,12 +5,14 @@
 #include "designer/design_scene.h"
 #include "designer/property_editor.h"
 #include "designer/project_frame_templates.h"
+#include "designer/widget_outline.h"
 #include "designer/widget_palette.h"
 #include "runtime/hmi_widget.h"
 #include "core/s7.h"
 
 #include <FluentQtWidgets/Dialogs/Dialog.h>
 #include <FluentQtWidgets/FluentIcon.h>
+#include <FluentQtWidgets/Navigation/SegmentedWidget.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/CommandBar.h>
 #include <FluentQtWidgets/Widgets/Menu.h>
@@ -37,6 +39,7 @@
 #include <QtWidgets/QGraphicsView>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSplitter>
+#include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
@@ -54,6 +57,7 @@ class DesignView : public QGraphicsView
 {
   public:
     using QGraphicsView::QGraphicsView;
+    std::function<void(const QPoint &, const QPointF &)> onContextMenu;
 
   protected:
     // A middle press is taken here, before the scene sees it, so it never selects, moves, rubber-bands or reaches a
@@ -122,6 +126,11 @@ class DesignView : public QGraphicsView
     void contextMenuEvent(QContextMenuEvent *event) override
     {
         if (m_panning) {
+            event->accept();
+            return;
+        }
+        if (onContextMenu) {
+            onContextMenu(event->globalPos(), mapToScene(event->pos()));
             event->accept();
             return;
         }
@@ -307,10 +316,35 @@ void DesignerPage::buildUi()
 {
     m_scene = new DesignScene(this);
     m_palette = new WidgetPalette(this);
+    m_outline = new WidgetOutline(this);
+    m_outline->setScene(m_scene);
     m_properties = new PropertyEditor(this);
     m_properties->setScene(m_scene);
 
-    m_view = new DesignView(m_scene, this);
+    auto *leftPanel = new QWidget(this);
+    leftPanel->setObjectName(QStringLiteral("designerLeftPanel"));
+    auto *leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 6, 0, 0);
+    leftLayout->setSpacing(4);
+    auto *leftTabs = new FluentQt::SegmentedWidget(leftPanel);
+    leftTabs->setObjectName(QStringLiteral("leftPanelTabs"));
+    leftTabs->addItem(QStringLiteral("palette"), tr("控件库"));
+    leftTabs->addItem(QStringLiteral("outline"), tr("层级"));
+    leftTabs->setCurrentItem(QStringLiteral("palette"));
+    auto *leftStack = new QStackedWidget(leftPanel);
+    leftStack->addWidget(m_palette);
+    leftStack->addWidget(m_outline);
+    connect(leftTabs, &FluentQt::SegmentedWidget::currentItemChanged, leftStack, [leftStack](const QString &key) {
+        leftStack->setCurrentIndex(key == QLatin1String("outline") ? 1 : 0);
+    });
+    auto *tabsRow = new QHBoxLayout;
+    tabsRow->setContentsMargins(8, 0, 4, 0);
+    tabsRow->addWidget(leftTabs);
+    leftLayout->addLayout(tabsRow);
+    leftLayout->addWidget(leftStack, 1);
+
+    auto *designView = new DesignView(m_scene, this);
+    m_view = designView;
     m_view->setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
     m_view->setDragMode(QGraphicsView::RubberBandDrag);
     m_view->setAlignment(Qt::AlignCenter);
@@ -319,6 +353,20 @@ void DesignerPage::buildUi()
     m_view->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
     // Fluent overlay scroll bars instead of the platform ones; Ctrl+wheel still zooms.
     new FluentQt::SmoothScrollDelegate(m_view);
+    designView->onContextMenu = [this](const QPoint &globalPos, const QPointF &scenePos) {
+        CanvasItem *hit = nullptr;
+        for (QGraphicsItem *item : m_scene->items(scenePos)) {
+            if (item->type() == CanvasItem::Type && item->isVisible()) {
+                hit = static_cast<CanvasItem *>(item);
+                break;
+            }
+        }
+        if (hit && !hit->isSelected()) {
+            m_scene->clearSelection();
+            hit->setSelected(true);
+        }
+        showItemContextMenu(hit, globalPos);
+    };
 
     // The same buttons in the same order as PyQt UI Designer's; icons only, the tooltip names each and its keys.
     auto *bar = new FluentQt::CommandBar(this);
@@ -349,7 +397,7 @@ void DesignerPage::buildUi()
             a->setToolTip(a->text());
         });
     };
-    panelSwitch(m_palette, tr("控件库"), QStringLiteral("panel_left"));
+    panelSwitch(leftPanel, tr("控件库"), QStringLiteral("panel_left"));
     bar->addSeparator();
     action(FluentIcon::Add, tr("新建"), QKeySequence::New, [this]() { newProject(); });
     action(FluentIcon::Folder, tr("打开"), QKeySequence::Open, [this]() { openProject(); });
@@ -406,13 +454,13 @@ void DesignerPage::buildUi()
     centerLayout->addWidget(m_view, 1);
 
     auto *splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->addWidget(m_palette);
+    splitter->addWidget(leftPanel);
     splitter->addWidget(center);
     splitter->addWidget(m_properties);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({210, 760, 330});
+    splitter->setSizes({216, 754, 330});
     splitter->setChildrenCollapsible(false);
-    m_palette->setMinimumWidth(170);
+    leftPanel->setMinimumWidth(180);
     m_properties->setMinimumWidth(280);
 
     auto *layout = new QVBoxLayout(this);
@@ -428,8 +476,10 @@ void DesignerPage::buildUi()
     connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]() {
         const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
         m_properties->showItem(selected.size() == 1 ? selected.first() : nullptr);
+        m_outline->syncSelection();
         updateEditActions();
     });
+    connect(m_outline, &WidgetOutline::itemContextMenuRequested, this, &DesignerPage::showItemContextMenu);
     connect(m_scene, &DesignScene::itemPropertiesChanged, this, [this](CanvasItem *item) {
         if (m_properties->currentItem() == item) {
             m_properties->refreshGeometry();
@@ -514,8 +564,98 @@ void DesignerPage::setModified(bool modified)
     m_modified = modified;
     emit titleChanged(displayName());
     if (modified) {
-        emit projectChanged();
+        const bool keepPreview = m_keepPreviewOnNextChange;
+        m_keepPreviewOnNextChange = false;
+        emit projectChanged(keepPreview);
     }
+}
+
+void DesignerPage::showItemContextMenu(CanvasItem *target, const QPoint &globalPos)
+{
+    auto *menu = new FluentQt::RoundMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
+    CanvasItem *single = selected.size() == 1 ? selected.first() : target;
+
+    if (!selected.isEmpty()) {
+        connect(menu->addAction(FluentQt::icon(FluentIcon::Copy), tr("复制")), &QAction::triggered, this,
+                &DesignerPage::copy);
+    }
+    connect(menu->addAction(FluentQt::icon(FluentIcon::Paste), tr("粘贴")), &QAction::triggered, this,
+            &DesignerPage::paste);
+    if (!selected.isEmpty()) {
+        connect(menu->addAction(FluentQt::icon(FluentIcon::Delete), tr("删除")), &QAction::triggered, m_scene,
+                &DesignScene::deleteSelected);
+    }
+
+    if (single && selected.size() == 1) {
+        if (CanvasItem *parent = single->containerParent()) {
+            menu->addSeparator();
+            connect(menu->addAction(FluentQt::icon(FluentIcon::Return), tr("移出容器")), &QAction::triggered, this,
+                    [this, single, parent]() {
+                        parent->removeChild(single);
+                        single->snapToGrid();
+                        emit m_scene->itemPropertiesChanged(single);
+                        emit m_scene->modified();
+                    });
+            const bool tabs = parent->typeName() == QLatin1String("TabWidget");
+            QList<CanvasItem *> siblings;
+            for (CanvasItem *c : parent->containerChildren()) {
+                if (!tabs || c->tabIndex() == single->tabIndex()) {
+                    siblings.append(c);
+                }
+            }
+            const int idx = int(siblings.indexOf(single));
+            if (idx > 0) {
+                connect(menu->addAction(FluentQt::icon(FluentIcon::Up), tr("在容器内上移")), &QAction::triggered, this,
+                        [this, single, parent]() {
+                            if (parent->moveChildBy(single, -1)) {
+                                emit m_scene->modified();
+                            }
+                        });
+            }
+            if (idx >= 0 && idx + 1 < siblings.size()) {
+                connect(menu->addAction(FluentQt::icon(FluentIcon::Down), tr("在容器内下移")), &QAction::triggered,
+                        this, [this, single, parent]() {
+                            if (parent->moveChildBy(single, 1)) {
+                                emit m_scene->modified();
+                            }
+                        });
+            }
+            if (tabs) {
+                const QStringList pages = parent->tabPageNames();
+                if (pages.size() > 1) {
+                    auto *sub = new FluentQt::RoundMenu(tr("移动到分页"), menu);
+                    for (int i = 0; i < pages.size(); ++i) {
+                        QAction *a = sub->addAction(pages.at(i));
+                        a->setEnabled(i != single->tabIndex());
+                        connect(a, &QAction::triggered, this, [this, single, parent, i]() {
+                            if (parent->moveChildToTab(single, i)) {
+                                emit m_scene->modified();
+                            }
+                        });
+                    }
+                    menu->addMenu(sub);
+                }
+            }
+            connect(menu->addAction(tr("选中父容器")), &QAction::triggered, this, [this, parent]() {
+                m_scene->clearSelection();
+                parent->setSelected(true);
+            });
+        }
+        if (single->isContainer() && !single->containerChildren().isEmpty()) {
+            menu->addSeparator();
+            connect(menu->addAction(tr("选中子控件")), &QAction::triggered, this, [this, single]() {
+                m_scene->clearSelection();
+                for (CanvasItem *c : single->containerChildren()) {
+                    if (c->isVisible()) {
+                        c->setSelected(true);
+                    }
+                }
+            });
+        }
+    }
+    menu->exec(globalPos, true);
 }
 
 void DesignerPage::rememberEndpoint(const QString &connectionId, const QString &endpoint)
@@ -537,7 +677,9 @@ void DesignerPage::rememberTextSample(const QString &connectionId, const Message
 
 void DesignerPage::addPointFromPreview(const QJsonObject &binding, const QString &name)
 {
+    m_keepPreviewOnNextChange = true;
     m_properties->addDataPoint(binding, name);
+    m_keepPreviewOnNextChange = false;
 }
 
 void DesignerPage::load(const Project &project)
@@ -552,6 +694,7 @@ void DesignerPage::load(const Project &project)
     m_properties->showItem(nullptr);
     m_properties->setProject(&m_project);
     applyProjectSettings();
+    m_outline->rebuild();
     // Once the view has its size: a page larger than the view opens fitted.
     QTimer::singleShot(0, this, [this]() { fitCanvas(); });
     resetHistory();
@@ -599,6 +742,7 @@ void DesignerPage::recordChange(const QString &mergeKey)
         }
     }
     m_lastMergeKey = mergeKey;
+    m_outline->rebuild();
     setModified(m_historyIndex != m_savedIndex);
     updateEditActions();
 }
@@ -658,6 +802,7 @@ void DesignerPage::restore(int index)
         }
     }
     m_scene->selectIds(selected);
+    m_outline->rebuild();
     const bool modified = m_historyIndex != m_savedIndex;
     setModified(modified);
     if (!modified) {

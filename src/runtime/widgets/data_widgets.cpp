@@ -554,6 +554,13 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
     m_mode->setMinimumWidth(1); // a long message is cut short rather than widening the chart
     toolbar->addWidget(m_mode);
     toolbar->addStretch();
+    m_pause = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Pause), this);
+    m_pause->setObjectName(QStringLiteral("chartPause"));
+    m_pause->setCheckable(true);
+    fluentToolTip(m_pause, tr("暂停刷新"));
+    auto *clearBtn = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Delete), this);
+    clearBtn->setObjectName(QStringLiteral("chartClear"));
+    fluentToolTip(clearBtn, tr("清空曲线"));
     auto *save = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Save), this);
     fluentToolTip(save, tr("保存完整曲线数据"));
     auto *load = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Folder), this);
@@ -561,6 +568,8 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
     m_clearReference = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Broom), this);
     fluentToolTip(m_clearReference, tr("清除对比"));
     m_clearReference->hide();
+    toolbar->addWidget(m_pause);
+    toolbar->addWidget(clearBtn);
     toolbar->addWidget(save);
     toolbar->addWidget(load);
     toolbar->addWidget(m_clearReference);
@@ -571,6 +580,23 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
     m_refreshTimer->setSingleShot(true);
     connect(m_refreshTimer, &QTimer::timeout, this, &RealtimeChartWidget::refresh);
 
+    connect(m_pause, &QToolButton::toggled, this, [this](bool paused) {
+        m_paused = paused;
+        m_pause->setIcon(FluentQt::icon(paused ? FluentQt::FluentIcon::Play : FluentQt::FluentIcon::Pause));
+        m_pause->setToolTip(paused ? tr("恢复实时") : tr("暂停刷新"));
+        if (!m_cursorMode) {
+            m_mode->setText(paused ? tr("已暂停") : tr("实时"));
+        }
+    });
+    connect(clearBtn, &QToolButton::clicked, this, [this]() {
+        for (const auto &history : m_histories) {
+            history->clear();
+        }
+        m_cursorMode = false;
+        m_plot->hideCursor();
+        m_mode->setText(m_paused ? tr("已暂停") : tr("实时"));
+        refresh();
+    });
     connect(m_displayEdit, &QLineEdit::editingFinished, this, [this]() {
         bool ok = false;
         const int typed = m_displayEdit->text().trimmed().toInt(&ok);
@@ -580,9 +606,13 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
         refresh();
     });
     connect(save, &QToolButton::clicked, this, [this]() {
-        const QString path = QFileDialog::getSaveFileName(visibleWindow(this), tr("保存完整曲线数据"), QString(),
-                                                          tr("CSV文件 (*.csv);;JSON文件 (*.json)"));
+        QString filter;
+        QString path = QFileDialog::getSaveFileName(visibleWindow(this), tr("保存完整曲线数据"), QString(),
+                                                    tr("CSV文件 (*.csv);;JSON文件 (*.json)"), &filter);
         if (!path.isEmpty()) {
+            if (QFileInfo(path).suffix().isEmpty()) {
+                path += filter.contains(QLatin1String("*.json")) ? QStringLiteral(".json") : QStringLiteral(".csv");
+            }
             saveHistory(path);
         }
     });
@@ -604,7 +634,7 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
     };
     m_plot->cursorCleared = [this]() {
         m_cursorMode = false;
-        m_mode->setText(tr("实时"));
+        m_mode->setText(m_paused ? tr("已暂停") : tr("实时"));
         showLiveValues();
     };
     connect(FluentQt::ThemeManager::instance(), &FluentQt::ThemeManager::effectiveThemeChanged, this,
@@ -675,7 +705,7 @@ void RealtimeChartWidget::applyTheme()
 
 void RealtimeChartWidget::appendSample(int curve, double value)
 {
-    if (curve < 0 || curve >= int(m_histories.size())) {
+    if (m_paused || curve < 0 || curve >= int(m_histories.size())) {
         return;
     }
     QString error;
@@ -1012,15 +1042,49 @@ DataTableWidget::DataTableWidget(const WidgetMeta &meta, QWidget *parent) : HmiW
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(2, 2, 2, 2);
+    layout->setSpacing(2);
+
+    m_toolbar = new QWidget(this);
+    auto *bar = new QHBoxLayout(m_toolbar);
+    bar->setContentsMargins(2, 0, 2, 0);
+    bar->setSpacing(4);
+    bar->addStretch(1);
+    m_pause = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Pause), m_toolbar);
+    m_pause->setObjectName(QStringLiteral("tablePause"));
+    m_pause->setCheckable(true);
+    m_pause->setFixedSize(26, 26);
+    fluentToolTip(m_pause, tr("暂停刷新"));
+    auto *clearBtn = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Delete), m_toolbar);
+    clearBtn->setObjectName(QStringLiteral("tableClear"));
+    clearBtn->setFixedSize(26, 26);
+    fluentToolTip(clearBtn, tr("清空表格"));
+    auto *exportBtn = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Save), m_toolbar);
+    exportBtn->setObjectName(QStringLiteral("tableExport"));
+    exportBtn->setFixedSize(26, 26);
+    fluentToolTip(exportBtn, tr("导出表格 (CSV)"));
+    bar->addWidget(m_pause);
+    bar->addWidget(clearBtn);
+    bar->addWidget(exportBtn);
+    m_toolbar->hide();
+    layout->addWidget(m_toolbar);
+
     m_table = new FluentQt::TableWidget(this);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    layout->addWidget(m_table);
+    layout->addWidget(m_table, 1);
     m_recordHint = new FluentQt::BodyLabel(tr("请在设计器配置逐行记录的源字段和列标题"), this);
     m_recordHint->setAlignment(Qt::AlignCenter);
     m_recordHint->setWordWrap(true);
     layout->addWidget(m_recordHint, 1);
     m_recordTimer = new QTimer(this);
+
+    connect(m_pause, &QToolButton::toggled, this, [this](bool paused) {
+        m_paused = paused;
+        m_pause->setIcon(FluentQt::icon(paused ? FluentQt::FluentIcon::Play : FluentQt::FluentIcon::Pause));
+        m_pause->setToolTip(paused ? tr("恢复刷新") : tr("暂停刷新"));
+    });
+    connect(clearBtn, &QToolButton::clicked, this, [this]() { m_table->setRowCount(0); });
+    connect(exportBtn, &QToolButton::clicked, this, &DataTableWidget::exportCsv);
 }
 
 bool DataTableWidget::logging() const
@@ -1068,6 +1132,11 @@ void DataTableWidget::apply()
 
 void DataTableWidget::onAttached()
 {
+    m_paused = false;
+    if (m_pause)
+        m_pause->setChecked(false);
+    if (m_toolbar)
+        m_toolbar->setVisible(true);
     if (loggingPoints()) {
         auto *data = context()->projectData();
         const int interval = integer("recordIntervalMs");
@@ -1096,11 +1165,51 @@ void DataTableWidget::onAttached()
 void DataTableWidget::onDetached()
 {
     m_recordTimer->stop();
+    if (m_toolbar)
+        m_toolbar->hide();
+}
+
+void DataTableWidget::exportCsv()
+{
+    QString path = QFileDialog::getSaveFileName(visibleWindow(this), tr("导出表格 (CSV)"), QStringLiteral("table.csv"),
+                                                tr("CSV文件 (*.csv)"));
+    if (path.isEmpty())
+        return;
+    if (!path.endsWith(QLatin1String(".csv"), Qt::CaseInsensitive))
+        path += QStringLiteral(".csv");
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        if (context())
+            context()->notify(tr("保存失败"), file.errorString(), NotifyType::Error);
+        return;
+    }
+    const auto escape = [](QString cell) {
+        if (cell.contains(QLatin1Char(',')) || cell.contains(QLatin1Char('"')) || cell.contains(QLatin1Char('\n'))) {
+            cell.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+            return QLatin1Char('"') + cell + QLatin1Char('"');
+        }
+        return cell;
+    };
+    file.write("\xEF\xBB\xBF");
+    QStringList headers;
+    for (int c = 0; c < m_table->columnCount(); ++c) {
+        const auto *item = m_table->horizontalHeaderItem(c);
+        headers.append(escape(item ? item->text() : QString()));
+    }
+    file.write(headers.join(QLatin1Char(',')).toUtf8() + "\r\n");
+    for (int r = 0; r < m_table->rowCount(); ++r) {
+        QStringList cells;
+        for (int c = 0; c < m_table->columnCount(); ++c) {
+            const auto *item = m_table->item(r, c);
+            cells.append(escape(item ? item->text() : QString()));
+        }
+        file.write(cells.join(QLatin1Char(',')).toUtf8() + "\r\n");
+    }
 }
 
 void DataTableWidget::appendRecord(const Message &values)
 {
-    if (m_recordFields.isEmpty() || !m_recordHint->isHidden())
+    if (m_paused || m_recordFields.isEmpty() || !m_recordHint->isHidden())
         return;
     if (m_table->rowCount() >= std::max(10, integer("maxRows")))
         m_table->removeRow(0);
@@ -1118,7 +1227,7 @@ void DataTableWidget::appendRecord(const Message &values)
 
 void DataTableWidget::onMessage(const Message &message, const DataSource &source)
 {
-    if (!context() || !context()->isActive() || !receiveRoute().accepts(source)) {
+    if (m_paused || !context() || !context()->isActive() || !receiveRoute().accepts(source)) {
         return;
     }
     if (logging()) {
@@ -1129,6 +1238,28 @@ void DataTableWidget::onMessage(const Message &message, const DataSource &source
             return;
         }
         appendRecord(message);
+        return;
+    }
+    bool sameKeys = m_table->rowCount() == message.size();
+    if (sameKeys) {
+        int row = 0;
+        for (auto it = message.constBegin(); it != message.constEnd(); ++it, ++row) {
+            const auto *keyItem = m_table->item(row, 0);
+            if (!keyItem || keyItem->text() != it.key()) {
+                sameKeys = false;
+                break;
+            }
+        }
+    }
+    if (sameKeys) {
+        int row = 0;
+        for (auto it = message.constBegin(); it != message.constEnd(); ++it, ++row) {
+            if (auto *valItem = m_table->item(row, 1)) {
+                valItem->setText(displayString(it.value()));
+            } else {
+                m_table->setItem(row, 1, new QTableWidgetItem(displayString(it.value())));
+            }
+        }
         return;
     }
     m_table->setRowCount(0);
@@ -1358,8 +1489,36 @@ LogBoxWidget::LogBoxWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(2);
+
+    m_toolbar = new QWidget(this);
+    auto *bar = new QHBoxLayout(m_toolbar);
+    bar->setContentsMargins(2, 0, 2, 0);
+    bar->setSpacing(4);
+    bar->addStretch(1);
+    m_pause = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Pause), m_toolbar);
+    m_pause->setObjectName(QStringLiteral("logPause"));
+    m_pause->setCheckable(true);
+    m_pause->setFixedSize(24, 24);
+    fluentToolTip(m_pause, tr("暂停日志"));
+    auto *clearBtn = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Delete), m_toolbar);
+    clearBtn->setObjectName(QStringLiteral("logClear"));
+    clearBtn->setFixedSize(24, 24);
+    fluentToolTip(clearBtn, tr("清空日志"));
+    bar->addWidget(m_pause);
+    bar->addWidget(clearBtn);
+    m_toolbar->hide();
+    layout->addWidget(m_toolbar);
+
     m_output = createTerminal(this);
-    layout->addWidget(m_output);
+    layout->addWidget(m_output, 1);
+
+    connect(m_pause, &QToolButton::toggled, this, [this](bool paused) {
+        m_paused = paused;
+        m_pause->setIcon(FluentQt::icon(paused ? FluentQt::FluentIcon::Play : FluentQt::FluentIcon::Pause));
+        m_pause->setToolTip(paused ? tr("恢复日志") : tr("暂停日志"));
+    });
+    connect(clearBtn, &QToolButton::clicked, this, [this]() { m_output->clear(); });
 }
 
 void LogBoxWidget::apply()
@@ -1369,6 +1528,9 @@ void LogBoxWidget::apply()
 
 void LogBoxWidget::appendLog(const QString &text, const QString &level)
 {
+    if (m_paused) {
+        return;
+    }
     const QString color = logColors().value(level, logColors().value(QStringLiteral("info")));
     const QString stamp = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
     m_output->append(QStringLiteral("<span style=\"color:#9399b2\">[%1]</span> <span style=\"color:%2\">%3</span>")
@@ -1377,6 +1539,11 @@ void LogBoxWidget::appendLog(const QString &text, const QString &level)
 
 void LogBoxWidget::onAttached()
 {
+    m_paused = false;
+    if (m_pause)
+        m_pause->setChecked(false);
+    if (m_toolbar)
+        m_toolbar->setVisible(true);
     CommHub *hub = context()->hub();
     const auto event = [this](const QString &message, const QString &level, const DataSource &source) {
         if (acceptsEvent(receiveRoute(), source))
@@ -1408,6 +1575,12 @@ void LogBoxWidget::onAttached()
         }
     }));
     live(connect(hub, &CommHub::slaveLog, this, event));
+}
+
+void LogBoxWidget::onDetached()
+{
+    if (m_toolbar)
+        m_toolbar->hide();
 }
 
 // ---------------------------------------------------------------------------
@@ -1637,18 +1810,33 @@ void DataRecvCardWidget::showReceiveSample()
     const auto sample = record ? *record : *m_recentSample;
     const auto &settings = sample.format.settings;
     QWidget *host = visibleWindow(this);
+    SaveReceivedField saveField;
+    if (auto saveBinding = context()->receivePointAction()) {
+        const DataSource src = sample.source;
+        saveField = [saveBinding, src](const QString &field, bool jsonPath) {
+            QJsonObject b;
+            b.insert(QStringLiteral("parseMode"), jsonPath ? ParseMode::JsonPath : ParseMode::KeyValue);
+            b.insert(jsonPath ? QStringLiteral("jsonPath") : QStringLiteral("key"), field);
+            if (!src.connectionId.isEmpty())
+                b.insert(QStringLiteral("sourceCardId"), src.connectionId);
+            if (!src.endpoint.isEmpty())
+                b.insert(QStringLiteral("sourceEndpoint"), src.endpoint);
+            saveBinding(b, field);
+        };
+    }
     if (sample.can)
         openCanPacketPreview(*sample.can, sample.canDefinitions, sample.source, host, context()->receivePointAction());
     else if (isModbusParser(sample.format.type))
         openModbusPacketPreview(sample.bytes, sample.format.type, sample.request, sample.decoded, sample.source, host,
                                 context()->receivePointAction());
     else if (sample.format.type == LinkParser::HexGroup)
-        openReceiveGroupPreview(settings, host, {}, sample.bytes);
+        openReceiveGroupPreview(settings, host, saveField, sample.bytes);
     else if (sample.format.type == QLatin1String("hex"))
-        openReceiveFramePreview(settings, host, sample.bytes);
+        openReceiveFramePreview(settings, host, sample.bytes, saveField);
     else if (sample.format.type == QLatin1String("line"))
         openReceiveTextPreview(settings, host,
-                               LineParser::decode(sample.bytes, settings.value(QStringLiteral("encoding")).toString()));
+                               LineParser::decode(sample.bytes, settings.value(QStringLiteral("encoding")).toString()),
+                               saveField);
 }
 
 QString DataRecvCardWidget::packetText(const PacketRecord &packet, QStringView mode) const

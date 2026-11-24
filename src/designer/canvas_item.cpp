@@ -673,6 +673,50 @@ void CanvasItem::removeChild(CanvasItem *child)
     relayoutChildren();
 }
 
+bool CanvasItem::moveChildBy(CanvasItem *child, int delta)
+{
+    if (!child || child->m_containerParent != this || delta == 0) {
+        return false;
+    }
+    const bool tabs = typeName() == QLatin1String("TabWidget");
+    QList<int> indices;
+    for (int i = 0; i < m_children.size(); ++i) {
+        if (!tabs || m_children.at(i)->m_tabIndex == child->m_tabIndex) {
+            indices.append(i);
+        }
+    }
+    const int pos = int(indices.indexOf(int(m_children.indexOf(child))));
+    const int nextPos = pos + (delta < 0 ? -1 : 1);
+    if (pos < 0 || nextPos < 0 || nextPos >= indices.size()) {
+        return false;
+    }
+    m_children.swapItemsAt(indices.at(pos), indices.at(nextPos));
+    relayoutChildren();
+    return true;
+}
+
+bool CanvasItem::moveChildToTab(CanvasItem *child, int tabIndex)
+{
+    if (!child || child->m_containerParent != this || typeName() != QLatin1String("TabWidget")) {
+        return false;
+    }
+    const int pages = int(tabPageNames().size());
+    const int clamped = clampTabIndex(tabIndex, pages);
+    if (child->m_tabIndex == clamped) {
+        return false;
+    }
+    child->m_tabIndex = clamped;
+    setEditorPage(clamped);
+    relayoutPages();
+    return true;
+}
+
+QStringList CanvasItem::tabPageNames() const
+{
+    return typeName() == QLatin1String("TabWidget") ? tabNames(propertyValue(QStringLiteral("tabNames")).toString())
+                                                    : QStringList();
+}
+
 QString CanvasItem::layoutMode(int page) const
 {
     const QString type = typeName();

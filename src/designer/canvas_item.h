@@ -83,6 +83,12 @@ class CanvasItem : public QGraphicsObject
     void addChild(CanvasItem *child, int tabIndex = -1, const QPointF *localPos = nullptr);
     // Releases `child` to the scene's top level at its current scene position.
     void removeChild(CanvasItem *child);
+    // Moves `child` by `delta` (-1 up, +1 down) among siblings on the same page; returns whether order changed.
+    bool moveChildBy(CanvasItem *child, int delta);
+    // Moves `child` to another tab page of a TabWidget and switches the editor view to that page.
+    bool moveChildToTab(CanvasItem *child, int tabIndex);
+    // Tab page titles for a TabWidget container (empty for other widgets).
+    QStringList tabPageNames() const;
     // Re-arranges children for layout containers and shows only the current tab page.
     void relayoutChildren();
     bool isFreeLayout() const;

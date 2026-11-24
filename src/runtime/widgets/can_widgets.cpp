@@ -1307,6 +1307,21 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     m_autoScroll = new FluentQt::CheckBox(tr("自动滚动"), this);
     m_autoScroll->setObjectName(QStringLiteral("canAutoScroll"));
     toolbar->addWidget(m_autoScroll);
+    m_pause = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Pause), this);
+    m_pause->setObjectName(QStringLiteral("canPause"));
+    m_pause->setCheckable(true);
+    fluentToolTip(m_pause, tr("暂停显示"));
+    toolbar->addWidget(m_pause);
+    connect(m_pause, &QToolButton::toggled, this, [this](bool paused) {
+        m_paused = paused;
+        m_pause->setIcon(FluentQt::icon(paused ? FluentQt::FluentIcon::Play : FluentQt::FluentIcon::Pause));
+        m_pause->setToolTip(paused ? tr("恢复显示") : tr("暂停显示"));
+    });
+    auto *clearBtn = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Delete), this);
+    clearBtn->setObjectName(QStringLiteral("canClear"));
+    fluentToolTip(clearBtn, tr("清空报文"));
+    toolbar->addWidget(clearBtn);
+    connect(clearBtn, &QToolButton::clicked, this, [this]() { m_model->clear(); });
     auto *inspect = new FluentQt::ToolButton(FluentQt::icon(FluentQt::FluentIcon::Search), this);
     inspect->setObjectName(QStringLiteral("inspectCanPacket"));
     fluentToolTip(inspect, tr("试解析所选"));
@@ -1715,7 +1730,8 @@ void CanMonitorWidget::onAttached()
                 [this](CanLink *link, const QList<CanFrame> &frames, bool sent, const DataSource &source) {
                     if (!receiveRoute().accepts(source)) return;
                     m_recorder->append(frames, sent, source, link ? link->description() : QString(), link ? link->signalSet() : nullptr);
-                    m_model->add(link, frames, sent, source);
+                    if (!m_paused)
+                        m_model->add(link, frames, sent, source);
                 }));
     live(connect(context()->hub(), &CommHub::linkDisconnected, this, [this] {
         if (context()->hub()->connectedCanLinks(receiveRoute()).isEmpty()) m_recorder->stop();

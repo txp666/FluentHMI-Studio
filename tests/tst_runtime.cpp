@@ -43,6 +43,7 @@
 #include "runtime/widgets/industrial_widget.h"
 #include "studio/designer_page.h"
 #include "studio/export_service.h"
+#include <FluentQtWidgets/Window/FluentTitleBar.h>
 #include <QtCore/QThread>
 
 #include <FluentQtWidgets/Config.h>
@@ -6165,6 +6166,127 @@ class TestRuntime : public QObject
         QCoreApplication::sendEvent(&scene, &rightKey);
         QCOMPARE(card->scenePos(), cardBefore + QPointF(1, 0));
         QCOMPARE(btn->scenePos(), btnBefore + QPointF(1, 0));
+    }
+
+    // Batch 2 UX & visualization regressions: container reorder/tab-move/outline, PropertyEditor S7/Modbus
+    // enhancements, binding error badge tooltip, PlayerWindow monitor button, and runtime pause/clear controls.
+    void batch2OutlinePropertyAndRuntimeToolbars()
+    {
+        // 1. CanvasItem child reordering & cross-tab move
+        DesignScene scene;
+        CanvasItem *vbox = scene.createItem(QStringLiteral("VBoxLayout"), QPointF(20, 20));
+        QVERIFY(vbox);
+        vbox->setSize(QSizeF(300, 260));
+        CanvasItem *b1 = scene.createItem(QStringLiteral("PushButton"), QPointF(40, 40));
+        CanvasItem *b2 = scene.createItem(QStringLiteral("PushButton"), QPointF(40, 80));
+        QCOMPARE(b1->containerParent(), vbox);
+        QCOMPARE(b2->containerParent(), vbox);
+        QCOMPARE(vbox->containerChildren().first(), b1);
+        QVERIFY(vbox->moveChildBy(b2, -1));
+        QCOMPARE(vbox->containerChildren().first(), b2);
+        vbox->removeChild(b2);
+        QVERIFY(!b2->containerParent());
+
+        CanvasItem *tabs = scene.createItem(QStringLiteral("TabWidget"), QPointF(400, 20));
+        QVERIFY(tabs);
+        tabs->setSize(QSizeF(300, 220));
+        CanvasItem *tChild = scene.createItem(QStringLiteral("Label"), QPointF(430, 80));
+        QCOMPARE(tChild->containerParent(), tabs);
+        QCOMPARE(tChild->tabIndex(), 0);
+        QVERIFY(tabs->moveChildToTab(tChild, 1));
+        QCOMPARE(tChild->tabIndex(), 1);
+        QCOMPARE(tabs->editorPage(), 1);
+
+        // 2. PropertyEditor Modbus FC dropdown, 32-bit span hint, and S7 address builder button
+        Project modbusProj;
+        const QDir root(QStringLiteral(FHMI_EXAMPLES_DIR));
+        {
+            DesignerPage page;
+            QVERIFY(page.openProject(root.filePath(QStringLiteral("tutorials/10-PLC恒压供水.uidp"))));
+            auto *pgScene = page.findChild<DesignScene *>();
+            QVERIFY(pgScene);
+            for (CanvasItem *item : pgScene->allItems()) {
+                if (item->widgetId() == QLatin1String("pressure"))
+                    item->setSelected(true);
+            }
+            auto *fcBox = page.findChild<FluentQt::ComboBox *>(QStringLiteral("bindingMbFcFilter"));
+            auto *span = page.findChild<QLabel *>(QStringLiteral("modbusRegisterSpanHint"));
+            QVERIFY(fcBox);
+            QVERIFY(span && !span->isHidden());
+            QVERIFY(span->text().contains(QStringLiteral("100")));
+            QVERIFY(span->text().contains(QStringLiteral("101")));
+        }
+        {
+            DesignerPage page;
+            QVERIFY(page.openProject(root.filePath(QStringLiteral("s7-demo.uidp"))));
+            auto *pgScene = page.findChild<DesignScene *>();
+            QVERIFY(pgScene);
+            for (CanvasItem *item : pgScene->allItems()) {
+                if (item->widgetId() == QLatin1String("temperature"))
+                    item->setSelected(true);
+            }
+            QVERIFY(page.findChild<QToolButton *>(QStringLiteral("s7AddressBuilderButton")));
+        }
+
+        // 3. PlayerWindow places Project Data Monitor and Periodic Tasks buttons in its title bar (never outside canvas)
+        {
+            Project alarmProj;
+            QString err;
+            QVERIFY2(Project::load(root.filePath(QStringLiteral("tutorials/14-工程数据与报警.uidp")), &alarmProj, &err),
+                     qPrintable(err));
+            PlayerWindow player(alarmProj, nullptr, false);
+            QVERIFY(player.titleBar()->findChild<QPushButton *>(QStringLiteral("playerDataMonitorButton")));
+            QVERIFY(player.titleBar()->findChild<QPushButton *>(QStringLiteral("openPeriodicTasks")));
+        }
+
+        // 4. Binding error badge exposes tooltip and runtime data widgets support pause/clear
+        Project rtProj;
+        rtProj.widgets = QJsonArray{
+            QJsonObject{{"id", "disp"}, {"type", "NumericDisplay"},
+                        {"binding", QJsonObject{{"parseMode", "键值匹配"}, {"key", "v"}, {"expression", "value / 0"}}}},
+            QJsonObject{{"id", "log"}, {"type", "LogBox"}},
+            QJsonObject{{"id", "tbl"}, {"type", "DataTable"}},
+            QJsonObject{{"id", "chart"}, {"type", "RealtimeChart"},
+                        {"properties", QJsonObject{{"curveCount", 1}, {"_curve_0_key", "v"}}}}};
+        RuntimeSurface surface;
+        surface.build(rtProj);
+        surface.context()->setActive(true);
+        const auto byId = [&](const char *id) -> HmiWidget * {
+            for (HmiWidget *w : surface.widgets())
+                if (w->property("fhmiWidgetId").toString() == QLatin1String(id))
+                    return w;
+            return nullptr;
+        };
+        HmiWidget *disp = byId("disp");
+        HmiWidget *logW = byId("log");
+        HmiWidget *tblW = byId("tbl");
+        HmiWidget *chartW = byId("chart");
+        QVERIFY(disp && logW && tblW && chartW);
+        emit surface.context()->hub()->unitReceived({}, Message{{"v", 42}}, DataSource{});
+        auto *badge = disp->findChild<QWidget *>(QStringLiteral("bindingQualityBadge"));
+        QVERIFY(badge && !badge->isHidden());
+        QVERIFY(badge->toolTip().contains(QStringLiteral("value / 0")));
+        QVERIFY(!badge->testAttribute(Qt::WA_TransparentForMouseEvents));
+
+        auto *logPause = logW->findChild<QToolButton *>(QStringLiteral("logPause"));
+        auto *logClear = logW->findChild<QToolButton *>(QStringLiteral("logClear"));
+        auto *logEdit = logW->findChild<QTextEdit *>();
+        QVERIFY(logPause && logClear && logEdit);
+        logPause->setChecked(true);
+        const QString beforePaused = logEdit->toPlainText();
+        static_cast<LogBoxWidget *>(logW)->appendLog(QStringLiteral("ignored-while-paused"));
+        QCOMPARE(logEdit->toPlainText(), beforePaused);
+        logPause->setChecked(false);
+        static_cast<LogBoxWidget *>(logW)->appendLog(QStringLiteral("visible-after-resume"));
+        QVERIFY(logEdit->toPlainText().contains(QStringLiteral("visible-after-resume")));
+        logClear->click();
+        QVERIFY(logEdit->toPlainText().isEmpty());
+
+        auto *tblPause = tblW->findChild<QToolButton *>(QStringLiteral("tablePause"));
+        auto *tblClear = tblW->findChild<QToolButton *>(QStringLiteral("tableClear"));
+        auto *chartPause = chartW->findChild<QToolButton *>(QStringLiteral("chartPause"));
+        auto *chartClear = chartW->findChild<QToolButton *>(QStringLiteral("chartClear"));
+        QVERIFY(tblPause && tblClear && chartPause && chartClear);
     }
 };
 

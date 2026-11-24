@@ -95,6 +95,7 @@ class RealtimeChartWidget : public HmiWidget
     ChartPlot *m_plot = nullptr;
     FluentQt::CaptionLabel *m_mode = nullptr;
     FluentQt::LineEdit *m_displayEdit = nullptr;
+    FluentQt::ToolButton *m_pause = nullptr;
     FluentQt::ToolButton *m_clearReference = nullptr;
     QTimer *m_refreshTimer = nullptr;
     std::vector<Curve> m_curves;
@@ -102,6 +103,7 @@ class RealtimeChartWidget : public HmiWidget
     std::vector<std::unique_ptr<ChartHistory>> m_histories;
     QList<Reference> m_references;
     int m_displayPoints = 200;
+    bool m_paused = false;
     bool m_cursorMode = false;
     double m_cursorX = 0;
 };
@@ -119,13 +121,17 @@ class DataTableWidget : public HmiWidget
   private:
     void onMessage(const Message &message, const DataSource &source);
     void appendRecord(const Message &values);
+    void exportCsv();
     bool logging() const;
     bool loggingPoints() const;
 
+    QWidget *m_toolbar = nullptr;
+    FluentQt::ToolButton *m_pause = nullptr;
     FluentQt::TableWidget *m_table = nullptr;
     FluentQt::BodyLabel *m_recordHint = nullptr;
     QTimer *m_recordTimer = nullptr;
     QStringList m_recordFields;
+    bool m_paused = false;
 };
 
 // One area of a single Modbus slave's data table. In a live project, double-clicking edits that slave.
@@ -173,9 +179,13 @@ class LogBoxWidget : public HmiWidget
   protected:
     void apply() override;
     void onAttached() override;
+    void onDetached() override;
 
   private:
+    QWidget *m_toolbar = nullptr;
+    FluentQt::ToolButton *m_pause = nullptr;
     QTextEdit *m_output = nullptr;
+    bool m_paused = false;
 };
 
 // Raw received bytes (text or HEX), what was sent, and link events.

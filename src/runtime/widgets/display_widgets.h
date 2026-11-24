@@ -46,6 +46,7 @@ class NumericDisplayWidget : public HmiWidget
 
   protected:
     void apply() override;
+    void bindingStatusChanged(BindingStatus status) override;
     void paintEvent(QPaintEvent *event) override;
 
   private:
@@ -118,6 +119,7 @@ class GaugeWidget : public HmiWidget
 
   protected:
     void apply() override;
+    void bindingStatusChanged(BindingStatus status) override;
     void paintEvent(QPaintEvent *event) override;
 
   private:

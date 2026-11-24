@@ -282,6 +282,8 @@ add_library(fhmi_designer STATIC
     src/designer/property_editor.h
     src/designer/can_signal_editor.cpp
     src/designer/can_signal_editor.h
+    src/designer/widget_outline.cpp
+    src/designer/widget_outline.h
     src/designer/widget_palette.cpp
     src/designer/widget_palette.h
 )

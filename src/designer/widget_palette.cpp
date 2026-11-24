@@ -44,9 +44,8 @@ class PaletteTree : public FluentQt::TreeWidget
 WidgetPalette::WidgetPalette(QWidget *parent) : QWidget(parent)
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 8, 4, 8);
-    layout->setSpacing(8);
-    auto *title = new FluentQt::StrongBodyLabel(tr("控件"), this);
+    layout->setContentsMargins(8, 4, 4, 8);
+    layout->setSpacing(6);
     m_search = new FluentQt::SearchLineEdit(this);
     m_search->setPlaceholderText(tr("搜索控件"));
     m_tree = new PaletteTree(this);
@@ -70,7 +69,6 @@ WidgetPalette::WidgetPalette(QWidget *parent) : QWidget(parent)
         group->setExpanded(true);
     }
 
-    layout->addWidget(title);
     layout->addWidget(m_search);
     layout->addWidget(m_tree, 1);
 

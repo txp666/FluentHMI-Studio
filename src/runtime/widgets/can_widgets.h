@@ -133,6 +133,7 @@ class CanMonitorWidget : public HmiWidget
     FluentQt::ComboBox *m_displayMode = nullptr;
     FluentQt::SpinBox *m_maxMessages = nullptr;
     FluentQt::CheckBox *m_autoScroll = nullptr;
+    FluentQt::ToolButton *m_pause = nullptr;
     FluentQt::TableView *m_view = nullptr;
     CanRecorder *m_recorder = nullptr;
     FluentQt::CheckBox *m_autoSave = nullptr;
@@ -143,6 +144,7 @@ class CanMonitorWidget : public HmiWidget
     QPointer<QFileDialog> m_captureDialog;
     CanMonitorModel *m_model = nullptr;
     CanMonitorProxy *m_sorted = nullptr;
+    bool m_paused = false;
     bool m_viewLayoutPending = false;
     bool m_viewLayoutRunning = false;
     bool m_followLogTail = true;
