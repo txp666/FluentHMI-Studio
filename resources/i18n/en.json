@@ -1550,7 +1550,7 @@
   "第 %1 行格式错误": "Line %1 is malformed",
   "等于指定值": "Equals specified value",
   "等待连接": "Waiting for connection",
-  "筛选 ID，如 100-1FF, 18FF50E5": "Filter by ID, e.g. 100-1FF, 18FF50E5",
+  "筛选 ID / 范围 / 名称，如 18FF, 100-1FF, Motor": "Filter by ID, range, or name, e.g. 18FF, 100-1FF, Motor",
   "简洁": "Compact",
   "管径": "Pipe width",
   "管道布局": "Pipe layout",

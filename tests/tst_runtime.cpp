@@ -6045,6 +6045,73 @@ class TestRuntime : public QObject
         QTRY_VERIFY(dialog.isNull());
         QCOMPARE(btnManual->propertyValue(QStringLiteral("mbBit")).toInt(), 3);
     }
+
+    // CanMonitor filter accepts hex ID prefixes/substrings (e.g. "18FF" -> 0x18FF50E5), ranges, and DBC/inline
+    // message names (case-insensitive), while rejecting inverted ranges without dumping every row.
+    void canMonitorFuzzyIdAndNameFilter()
+    {
+        RuntimeContext context;
+        context.setActive(true);
+        std::unique_ptr<HmiWidget> widget(createHmiWidget("CanMonitor", {}));
+        auto *monitor = dynamic_cast<CanMonitorWidget *>(widget.get());
+        QVERIFY(monitor);
+        monitor->attach(&context);
+        auto *view = monitor->findChild<QTableView *>("canMessages");
+        auto *filter = monitor->findChild<FluentQt::LineEdit *>("canIdFilter");
+        QVERIFY(view && filter);
+
+        QTemporaryDir dir;
+        const QString dbcPath = dir.filePath(QStringLiteral("motor.dbc"));
+        QFile dbc(dbcPath);
+        QVERIFY(dbc.open(QIODevice::WriteOnly));
+        dbc.write("BO_ 2566869221 MotorStatus: 8 ECU\n SG_ Speed : 0|16@1+ (1,0) [0|65535] \"rpm\" Vector__XXX\n");
+        dbc.close();
+
+        CanLink link;
+        CanSettings settings;
+        settings.adapter = CanAdapter::Virtual;
+        settings.channel = QStringLiteral("fuzzy-filter");
+        QString error;
+        QVERIFY2(link.open(settings, dbcPath, {}, {}, &error), qPrintable(error));
+
+        CanFrame ext;
+        ext.id = 0x18FF50E5;
+        ext.extended = true;
+        ext.data = QByteArray(8, char(0x11));
+        ext.timestampMs = 1700000000001LL;
+        CanFrame std102;
+        std102.id = 0x102;
+        std102.data = QByteArray(2, char(0x22));
+        std102.timestampMs = 1700000000002LL;
+        CanFrame std200;
+        std200.id = 0x200;
+        std200.data = QByteArray(2, char(0x33));
+        std200.timestampMs = 1700000000003LL;
+        emit context.hub()->canFrames(&link, {ext, std102, std200}, false);
+        QTRY_COMPARE(view->model()->rowCount(), 3);
+
+        filter->setText(QStringLiteral("18FF"));
+        QCOMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 2).data().toString(), QStringLiteral("0x18FF50E5"));
+        QVERIFY(filter->toolTip().isEmpty());
+
+        filter->setText(QStringLiteral("50e5"));
+        QCOMPARE(view->model()->rowCount(), 1);
+
+        filter->setText(QStringLiteral("motor"));
+        QCOMPARE(view->model()->rowCount(), 1);
+        QCOMPARE(view->model()->index(0, 2).data().toString(), QStringLiteral("0x18FF50E5"));
+        QVERIFY(filter->toolTip().isEmpty());
+
+        filter->setText(QStringLiteral("100-1FF, motor"));
+        QCOMPARE(view->model()->rowCount(), 2);
+
+        filter->setText(QStringLiteral("1FF-100"));
+        QCOMPARE(view->model()->rowCount(), 0);
+        QVERIFY(!filter->toolTip().isEmpty());
+
+        link.close();
+    }
 };
 
 QTEST_MAIN(TestRuntime)

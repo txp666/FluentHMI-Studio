@@ -629,6 +629,71 @@ void CanConfigCardWidget::showConnection()
 // CanMonitor
 // ---------------------------------------------------------------------------
 
+// Live search query for the monitor table: comma/space-separated terms (OR). Valid "first-last" hex ranges
+// match numerically; other terms match substring against the formatted ID (e.g. "18FF" -> "0x18FF50E5"), exact
+// parsed ID, or DBC/inline message name (case-insensitive).
+struct MonitorQuery
+{
+    struct Term
+    {
+        std::optional<CanFilter> range;
+        std::optional<CanId> exactId;
+        QString text;
+    };
+
+    QList<Term> terms;
+
+    static MonitorQuery parse(const QString &input, QString *error = nullptr)
+    {
+        MonitorQuery query;
+        QString normalized = input;
+        normalized.replace(QStringLiteral("，"), QStringLiteral(",")); // i18n: ignore
+        for (const QString &part : normalized.split(QRegularExpression(QStringLiteral("[,;\\s]+")), Qt::SkipEmptyParts)) {
+            Term term;
+            term.text = part;
+            const qsizetype dash = part.indexOf(QLatin1Char('-'));
+            if (dash > 0 && dash + 1 < part.size()) {
+                const auto first = Can::parseId(QStringView(part).left(dash));
+                const auto last = Can::parseId(QStringView(part).mid(dash + 1));
+                if (first && last) {
+                    QString rangeError;
+                    if (const auto parsed = CanFilter::parse(part, &rangeError)) {
+                        term.range = *parsed;
+                    } else {
+                        if (error && error->isEmpty())
+                            *error = rangeError;
+                        term.text.clear();
+                    }
+                }
+            } else {
+                term.exactId = Can::parseId(part);
+            }
+            query.terms.append(std::move(term));
+        }
+        return query;
+    }
+
+    bool accepts(const CanId &id, const QString &name) const
+    {
+        if (terms.isEmpty())
+            return true;
+        const QString idText = Can::idText(id);
+        for (const Term &term : terms) {
+            if (term.range) {
+                if (term.range->accepts(id.id, id.extended))
+                    return true;
+                continue;
+            }
+            if (term.exactId && term.exactId->id == id.id && term.exactId->extended == id.extended)
+                return true;
+            if (!term.text.isEmpty() &&
+                (idText.contains(term.text, Qt::CaseInsensitive) || name.contains(term.text, Qt::CaseInsensitive)))
+                return true;
+        }
+        return false;
+    }
+};
+
 // The rows of the monitor. Frames only update the rows' data; the view hears of it in refresh(), at most every
 // 100 ms, so a busy bus costs a hash lookup per frame and no relayout.
 class CanMonitorModel : public QAbstractTableModel
@@ -672,14 +737,14 @@ class CanMonitorModel : public QAbstractTableModel
         }
     }
 
-    // Whether row `row` passes the filter row; an empty ID filter takes every ID.
-    bool matches(int row, const CanFilter &idFilter, TypeFilter type) const
+    // Whether row `row` passes the filter row; an empty query takes every row.
+    bool matches(int row, const MonitorQuery &query, TypeFilter type) const
     {
         if (row < 0 || row >= m_rows.size()) {
             return false;
         }
         const Row &r = m_rows.at(row);
-        if (!idFilter.accepts(r.id.id, r.id.extended)) {
+        if (!query.accepts(r.id, r.name)) {
             return false;
         }
         switch (type) {
@@ -1159,10 +1224,10 @@ class CanMonitorProxy : public QSortFilterProxyModel
   public:
     using QSortFilterProxyModel::QSortFilterProxyModel;
 
-    void setFilter(const CanFilter &idFilter, CanMonitorModel::TypeFilter type)
+    void setFilter(const MonitorQuery &query, CanMonitorModel::TypeFilter type)
     {
         beginFilterChange();
-        m_idFilter = idFilter;
+        m_query = query;
         m_type = type;
         endFilterChange();
     }
@@ -1173,11 +1238,11 @@ class CanMonitorProxy : public QSortFilterProxyModel
         if (sourceParent.isValid()) {
             return false;
         }
-        return static_cast<const CanMonitorModel *>(sourceModel())->matches(sourceRow, m_idFilter, m_type);
+        return static_cast<const CanMonitorModel *>(sourceModel())->matches(sourceRow, m_query, m_type);
     }
 
   private:
-    CanFilter m_idFilter; // empty: every ID
+    MonitorQuery m_query; // empty: every row
     CanMonitorModel::TypeFilter m_type = CanMonitorModel::TypeFilter::All;
 };
 
@@ -1190,7 +1255,7 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     filterLayout->setContentsMargins(0, 0, 0, 0);
     m_idFilter = new FluentQt::LineEdit(m_filterRow);
     m_idFilter->setObjectName(QStringLiteral("canIdFilter"));
-    m_idFilter->setPlaceholderText(tr("筛选 ID，如 100-1FF, 18FF50E5"));
+    m_idFilter->setPlaceholderText(tr("筛选 ID / 范围 / 名称，如 18FF, 100-1FF, Motor"));
     m_idFilter->setClearButtonEnabled(true);
     fluentToolTip(m_idFilter);
     m_typeFilter = new FluentQt::ComboBox(m_filterRow);
@@ -1467,11 +1532,11 @@ void CanMonitorWidget::chooseExportFile()
 void CanMonitorWidget::updateFilter()
 {
     QString error;
-    const std::optional<CanFilter> parsed = CanFilter::parse(m_idFilter->text(), &error);
-    m_idFilter->setError(!parsed);
-    m_idFilter->setToolTip(parsed ? QString() : error);
+    const MonitorQuery query = MonitorQuery::parse(m_idFilter->text(), &error);
+    m_idFilter->setError(!error.isEmpty());
+    m_idFilter->setToolTip(error);
     // Filtered rows change the set of row heights just like an insertion or removal.
-    m_sorted->setFilter(parsed.value_or(CanFilter()), CanMonitorModel::TypeFilter(m_typeFilter->currentIndex()));
+    m_sorted->setFilter(query, CanMonitorModel::TypeFilter(m_typeFilter->currentIndex()));
 }
 
 void CanMonitorWidget::showEvent(QShowEvent *event)
