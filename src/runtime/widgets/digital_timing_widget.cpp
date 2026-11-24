@@ -901,7 +901,7 @@ void DigitalTimingChartWidget::setWindowSeconds(int seconds)
 
 void DigitalTimingChartWidget::editWindow()
 {
-    AppDialog dialog(tr("自定义时间窗"), window());
+    AppDialog dialog(tr("自定义时间窗"), visibleWindow(this));
     dialog.setPreferredSize(QSize(390, 205));
     auto *seconds = new FluentQt::SpinBox(&dialog);
     seconds->setObjectName(QStringLiteral("timingWindowSeconds"));
@@ -955,7 +955,7 @@ bool DigitalTimingChartWidget::loadHistory(const QString &path, QString *error)
 
 void DigitalTimingChartWidget::openRecording()
 {
-    const QString path = QFileDialog::getOpenFileName(this, tr("导入时序数据"), {},
+    const QString path = QFileDialog::getOpenFileName(visibleWindow(this), tr("导入时序数据"), {},
                                                        tr("时序文件 (*.csv *.json);;CSV文件 (*.csv);;JSON文件 (*.json)"));
     if (path.isEmpty())
         return;
@@ -985,7 +985,7 @@ void DigitalTimingChartWidget::showExportMenu()
     const auto *action = menu.execAndWait(m_export->mapToGlobal(QPoint(0, m_export->height())), true);
     if (action == save) {
         QString filter;
-        QString path = QFileDialog::getSaveFileName(this, tr("导出时序数据"), QString(),
+        QString path = QFileDialog::getSaveFileName(visibleWindow(this), tr("导出时序数据"), QString(),
                                                     tr("CSV文件 (*.csv);;JSON文件 (*.json)"), &filter);
         if (path.isEmpty())
             return;
@@ -1000,7 +1000,8 @@ void DigitalTimingChartWidget::showExportMenu()
             saveViewPreference(QStringLiteral("timingAutoExport"), false);
             stopAutoExport();
         } else {
-            const QString path = QFileDialog::getExistingDirectory(this, tr("选择时序自动导出目录"), m_exportDirectory);
+            const QString path =
+                QFileDialog::getExistingDirectory(visibleWindow(this), tr("选择时序自动导出目录"), m_exportDirectory);
             if (path.isEmpty())
                 return;
             m_exportDirectory = path;

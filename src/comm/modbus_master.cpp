@@ -177,6 +177,18 @@ QByteArray ModbusMaster::enqueue(const ModbusRequest &request, int timeoutMs, Pr
         }
         return bytes;
     }
+    constexpr qsizetype kMaxQueuedRequests = 256;
+    if (m_queue.size() >= kMaxQueuedRequests) {
+        if (priority == Priority::Read) {
+            return {};
+        }
+        const auto lastRead = std::find_if(m_queue.rbegin(), m_queue.rend(),
+                                           [](const Entry &queued) { return queued.priority == Priority::Read; });
+        if (lastRead == m_queue.rend()) {
+            return {};
+        }
+        m_queue.erase(std::next(lastRead).base());
+    }
     if (priority == Priority::Write) {
         // Ahead of every queued read; writes keep the order they were made in.
         const auto firstRead = std::find_if(m_queue.begin(), m_queue.end(),
@@ -287,8 +299,8 @@ void ModbusMaster::finish(ModbusResult result)
     const Entry entry = std::move(*m_onLine);
     m_onLine.reset();
     m_timer->stop();
-    if (result.timedOut && entry.framedFor == QLatin1String("modbus_tcp"))
-        m_link->requestsFor(entry.destination)->expireTcpRequest(entry.frame);
+    if (result.timedOut)
+        m_link->requestsFor(entry.destination)->expireRequest(entry.frame, entry.framedFor);
     result.master = this;
     const QPointer<ModbusMaster> self(this);
     if (entry.done) {

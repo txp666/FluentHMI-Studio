@@ -2474,5 +2474,13 @@
   "整个寄存器": "Whole register",
   "置位": "Set",
   "读取保持寄存器 %1 失败": "Failed to read holding register %1",
-  "更新已完成，部分原有文件已保留到备份目录": "Update completed; some existing files were kept in a backup folder"
+  "更新已完成，部分原有文件已保留到备份目录": "Update completed; some existing files were kept in a backup folder",
+  "MQTT 发布确认超时": "MQTT publish acknowledgement timed out",
+  "MQTT 文本字段不能超过 65535 字节": "MQTT text fields cannot exceed 65535 bytes",
+  "MQTT 连接超时": "MQTT connection timed out",
+  "S7 读取 %1 失败：%2": "S7 read of %1 failed: %2",
+  "为导出的 macOS 应用签名失败": "Failed to sign the exported macOS app",
+  "为导出的 macOS 应用签名失败: %1": "Failed to sign the exported macOS app: %1",
+  "写入 %1 失败: %2": "Failed to write %1: %2",
+  "未找到 codesign，无法为导出的 macOS 应用签名": "codesign was not found; cannot sign the exported macOS app"
 }

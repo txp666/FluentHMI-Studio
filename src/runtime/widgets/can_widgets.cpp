@@ -451,7 +451,7 @@ void CanConfigCardWidget::refreshChannels(bool announce)
             if (!result->models.isEmpty()) {
                 QString model = result->models.first();
                 if (result->models.size() > 1) {
-                    AppDialog dialog(tr("选择 CAN 设备"), window());
+                    AppDialog dialog(tr("选择 CAN 设备"), visibleWindow(this));
                     dialog.setObjectName(QStringLiteral("canDevicePicker"));
                     dialog.setPreferredSize(QSize(420, 240));
                     dialog.viewLayout()->addWidget(new FluentQt::BodyLabel(tr("检测到的型号"), &dialog));
@@ -497,7 +497,7 @@ void CanConfigCardWidget::showTimingCalculator()
         (m_link && m_link->isConnected())) {
         return;
     }
-    auto *dialog = new CanTimingDialog(current, window());
+    auto *dialog = new CanTimingDialog(current, visibleWindow(this));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     connect(this, &QObject::destroyed, dialog, &QObject::deleteLater);
     connect(dialog, &QDialog::accepted, this, [this, dialog, current]() {
@@ -1313,7 +1313,7 @@ CanMonitorWidget::CanMonitorWidget(const WidgetMeta &meta, QWidget *parent) : Hm
     inspect->setEnabled(false);
     toolbar->addWidget(inspect);
     const auto inspectRow = [this](const QModelIndex &index) {
-        m_model->inspect(m_sorted->mapToSource(index).row(), window(), context() ? context()->receivePointAction()
+        m_model->inspect(m_sorted->mapToSource(index).row(), visibleWindow(this), context() ? context()->receivePointAction()
                                                                                 : SaveReceivedBinding{});
     };
     connect(inspect, &QToolButton::clicked, this, [this, inspectRow] { inspectRow(m_view->currentIndex()); });
@@ -1429,8 +1429,9 @@ void CanMonitorWidget::chooseRecordingDirectory(bool change)
 {
     if (!context() || !m_autoSave->isChecked() || m_captureDialog || (!change && !m_captureDirectory.isEmpty()))
         return;
-    auto *dialog = new QFileDialog(this, tr("选择 CAN 自动保存目录"), recordingDirectory());
+    auto *dialog = new QFileDialog(visibleWindow(this), tr("选择 CAN 自动保存目录"), recordingDirectory());
     m_captureDialog = dialog;
+    connect(this, &QObject::destroyed, dialog, &QObject::deleteLater);
     dialog->setFileMode(QFileDialog::Directory);
     dialog->setOption(QFileDialog::ShowDirsOnly);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1515,8 +1516,8 @@ bool CanMonitorWidget::saveCsv(const QString &path, QString *error)
 
 void CanMonitorWidget::chooseExportFile()
 {
-    QString path =
-        QFileDialog::getSaveFileName(this, tr("导出报文"), QStringLiteral("can-messages.csv"), tr("CSV文件 (*.csv)"));
+    QString path = QFileDialog::getSaveFileName(visibleWindow(this), tr("导出报文"), QStringLiteral("can-messages.csv"),
+                                                tr("CSV文件 (*.csv)"));
     if (path.isEmpty()) {
         return;
     }

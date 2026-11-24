@@ -1371,6 +1371,30 @@ void ModbusRequests::rememberTcp(int transaction, const Read &read)
     }
 }
 
+void ModbusRequests::expireRequest(const QByteArray &frame, const QString &parserType)
+{
+    if (parserType == QLatin1String("modbus_tcp")) {
+        if (frame.size() >= 2) {
+            expireTcpRequest(frame);
+        }
+        return;
+    }
+    QByteArray body;
+    if (parserType == QLatin1String("modbus") && frame.size() > 2 && modbusCrc(frame.chopped(2)) == frame.right(2)) {
+        body = frame.chopped(2);
+    } else if (parserType == QLatin1String("modbus_ascii")) {
+        body = modbusAsciiBody(frame).value_or(QByteArray());
+    }
+    if (body.size() < 6) {
+        return;
+    }
+    const int key = quint8(body.at(0)) << 8 | quint8(body.at(1));
+    const auto found = m_latest.find(key);
+    if (found != m_latest.end() && found->address == be16(body, 2) && found->count == be16(body, 4)) {
+        m_latest.erase(found);
+    }
+}
+
 void ModbusRequests::expireTcpRequest(const QByteArray &frame)
 {
     rememberTcp(be16(frame, 0), {0, 0, 0, 0, true});

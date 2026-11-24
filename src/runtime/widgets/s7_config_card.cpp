@@ -178,6 +178,10 @@ void S7ConfigCardWidget::toggle()
 }
 void S7ConfigCardWidget::showFailure(const QString &reason)
 {
+    if (!flag("autoReconnect")) {
+        m_open = false;
+        refresh();
+    }
     m_status->setText(tr("连接失败"));
     m_status->setToolTip(reason);
     if (context() && m_errorNotice.shouldShow(reason, 4000))

@@ -142,10 +142,6 @@ bool Link::send(const QByteArray &bytes, const QString &endpoint)
     }
     // Each peer owns a request book; unrelated replies must never consume its pending read.
     const auto targets = endpoint.isEmpty() ? sendEndpoints() : QStringList{endpoint};
-    if (parsesModbus()) {
-        for (const QString &target : targets)
-            requestsFor(target)->noteFrame(bytes, m_parserType);
-    }
     const qint64 written = writeTo(bytes, endpoint);
     if (written == WriteFailureReported) {
         return false;
@@ -154,6 +150,10 @@ bool Link::send(const QByteArray &bytes, const QString &endpoint)
         emit errorOccurred(written < 0 ? tr("写入失败") : tr("只写入了 %1/%2 字节").arg(written).arg(bytes.size()),
                            endpoint);
         return false;
+    }
+    if (parsesModbus()) {
+        for (const QString &target : targets)
+            requestsFor(target)->noteFrame(bytes, m_parserType);
     }
     for (const auto &target : targets) {
         auto source = dataSource();

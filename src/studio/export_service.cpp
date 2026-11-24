@@ -794,11 +794,22 @@ QString ExportService::exportApplication(const Project &project, const QString &
 #ifdef Q_OS_MACOS
     // Editing the bundle invalidates its signature; re-sign ad hoc so it still launches.
     const QString codesign = QStandardPaths::findExecutable(QStringLiteral("codesign"));
-    if (!codesign.isEmpty()) {
+    if (codesign.isEmpty()) {
+        fail(error, QCoreApplication::translate("fhmi", "未找到 codesign，无法为导出的 macOS 应用签名"));
+        return abort(QString());
+    }
+    {
         QProcess sign;
+        sign.setProcessChannelMode(QProcess::MergedChannels);
         sign.start(codesign, {QStringLiteral("--force"), QStringLiteral("--deep"), QStringLiteral("--sign"),
                               QStringLiteral("-"), staging});
-        sign.waitForFinished(60000);
+        if (!sign.waitForFinished(60000) || sign.exitStatus() != QProcess::NormalExit || sign.exitCode() != 0) {
+            const QString detail = QString::fromLocal8Bit(sign.readAll()).trimmed();
+            fail(error, detail.isEmpty()
+                            ? QCoreApplication::translate("fhmi", "为导出的 macOS 应用签名失败")
+                            : QCoreApplication::translate("fhmi", "为导出的 macOS 应用签名失败: %1").arg(detail));
+            return abort(QString());
+        }
     }
 #endif
 #ifdef Q_OS_LINUX

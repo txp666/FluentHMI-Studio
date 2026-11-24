@@ -93,7 +93,7 @@ class CanvasItem : public QGraphicsObject
 
   signals:
     // The user moved or resized the item, or a property changed.
-    void changed(fhmi::CanvasItem *item);
+    void changed(fhmi::CanvasItem *item, bool resized = false);
     void editorPageChanged();
 
   protected:

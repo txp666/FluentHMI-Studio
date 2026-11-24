@@ -80,17 +80,7 @@ QString commandDetails(const EncodedCommand &command, const QString &mode, const
     return details.join(QStringLiteral("\n\n"));
 }
 
-QWidget *commandDialogHost(HmiWidget *sender)
-{
-    auto *host = sender->window();
-    // The standalone player embeds the runtime canvas in a graphics view.
-    if (const auto *proxy = host->graphicsProxyWidget()) {
-        const auto views = proxy->scene()->views();
-        if (!views.isEmpty())
-            return views.first()->window();
-    }
-    return host;
-}
+QWidget *commandDialogHost(HmiWidget *sender) { return visibleWindow(sender); }
 
 } // namespace
 
@@ -971,15 +961,28 @@ void RuntimeContext::applyWidgetSample(const BindingEntry &binding, const DataPo
         }
         const auto &raw = sample.value;
         widget->setBindingStatus(HmiWidget::BindingStatus::Live);
+        const QString type = widget->typeName();
+        const bool structured = (type == QLatin1String("BmsCellMatrix") || type == QLatin1String("DcPowerSupply")) &&
+                                (raw.typeId() == QMetaType::QVariantMap || raw.typeId() == QMetaType::QVariantList);
+        QVariant value = raw;
+        if (!structured && !binding.expression.trimmed().isEmpty()) {
+            value = binding.evaluateStrict(raw);
+            if (!value.isValid()) {
+                widget->setBindingProblem(dataQualityText(DataQuality::ConversionFailed), binding.expression);
+                widget->applyBoundValue({}, binding);
+                return;
+            }
+        }
         widget->setBindingProblem({});
-        const QString type=widget->typeName();
-        if(type==QLatin1String("BmsCellMatrix")||type==QLatin1String("DcPowerSupply")||type==QLatin1String("StatusWordPanel")||type==QLatin1String("DigitalTimingChart")||type==QLatin1String("RotaryEncoder")) {
-            widget->applyBoundValue(binding.evaluate(raw),binding);
+        if (type == QLatin1String("BmsCellMatrix") || type == QLatin1String("DcPowerSupply") ||
+            type == QLatin1String("StatusWordPanel") || type == QLatin1String("DigitalTimingChart") ||
+            type == QLatin1String("RotaryEncoder")) {
+            widget->applyBoundValue(value, binding);
         } else if (isIndustrialCategory(widget->meta().category)) {
-            const auto value = binding.chartSample(raw);
-            widget->applyBoundValue(value ? QVariant(*value) : QVariant(), binding);
+            const auto numeric = bindingFloat(value);
+            widget->applyBoundValue(numeric ? QVariant(*numeric) : QVariant(), binding);
         } else {
-            widget->applyBoundValue(binding.formatValue(binding.evaluate(raw)), binding);
+            widget->applyBoundValue(binding.formatValue(value), binding);
         }
     }
 }

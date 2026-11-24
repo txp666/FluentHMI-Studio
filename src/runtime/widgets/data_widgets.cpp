@@ -580,15 +580,15 @@ RealtimeChartWidget::RealtimeChartWidget(const WidgetMeta &meta, QWidget *parent
         refresh();
     });
     connect(save, &QToolButton::clicked, this, [this]() {
-        const QString path = QFileDialog::getSaveFileName(this, tr("保存完整曲线数据"), QString(),
+        const QString path = QFileDialog::getSaveFileName(visibleWindow(this), tr("保存完整曲线数据"), QString(),
                                                           tr("CSV文件 (*.csv);;JSON文件 (*.json)"));
         if (!path.isEmpty()) {
             saveHistory(path);
         }
     });
     connect(load, &QToolButton::clicked, this, [this]() {
-        const QString path =
-            QFileDialog::getOpenFileName(this, tr("加载对比曲线"), QString(), tr("CSV文件 (*.csv);;JSON文件 (*.json)"));
+        const QString path = QFileDialog::getOpenFileName(visibleWindow(this), tr("加载对比曲线"), QString(),
+                                                          tr("CSV文件 (*.csv);;JSON文件 (*.json)"));
         if (!path.isEmpty()) {
             loadReference(path);
         }
@@ -1636,17 +1636,18 @@ void DataRecvCardWidget::showReceiveSample()
         return;
     const auto sample = record ? *record : *m_recentSample;
     const auto &settings = sample.format.settings;
+    QWidget *host = visibleWindow(this);
     if (sample.can)
-        openCanPacketPreview(*sample.can, sample.canDefinitions, sample.source, window(), context()->receivePointAction());
+        openCanPacketPreview(*sample.can, sample.canDefinitions, sample.source, host, context()->receivePointAction());
     else if (isModbusParser(sample.format.type))
-        openModbusPacketPreview(sample.bytes, sample.format.type, sample.request, sample.decoded, sample.source, window(),
+        openModbusPacketPreview(sample.bytes, sample.format.type, sample.request, sample.decoded, sample.source, host,
                                 context()->receivePointAction());
     else if (sample.format.type == LinkParser::HexGroup)
-        openReceiveGroupPreview(settings, window(), {}, sample.bytes);
+        openReceiveGroupPreview(settings, host, {}, sample.bytes);
     else if (sample.format.type == QLatin1String("hex"))
-        openReceiveFramePreview(settings, window(), sample.bytes);
+        openReceiveFramePreview(settings, host, sample.bytes);
     else if (sample.format.type == QLatin1String("line"))
-        openReceiveTextPreview(settings, window(),
+        openReceiveTextPreview(settings, host,
                                LineParser::decode(sample.bytes, settings.value(QStringLiteral("encoding")).toString()));
 }
 
@@ -1982,7 +1983,7 @@ void DataSendCardWidget::sendFields()
     const bool running = isPeriodicSending();
     const auto action = running ? SendFrameAction::ApplyPeriodic
                                 : interval > 0 ? SendFrameAction::StartPeriodic : SendFrameAction::Send;
-    const auto values = editSendFrameFields(props, frameTemplates(), m_fieldValues, window(), action);
+    const auto values = editSendFrameFields(props, frameTemplates(), m_fieldValues, visibleWindow(this), action);
     if (!values || !card || !context())
         return;
     m_fieldValues = *values;

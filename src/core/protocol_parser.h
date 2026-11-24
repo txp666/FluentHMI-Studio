@@ -311,7 +311,8 @@ class ModbusRequests
     void note(int slave, int fc, int address, int count, int transaction = -1);
     // The read in an outgoing request frame, framed the way the link parses replies.
     void noteFrame(const QByteArray &frame, const QString &parserType);
-    // Late TCP replies to timed-out transactions must not update the current data.
+    // Late replies to timed-out requests must not update current data (TCP transaction or RTU/ASCII latest read).
+    void expireRequest(const QByteArray &frame, const QString &parserType);
     void expireTcpRequest(const QByteArray &frame);
     bool expiredTcpReply(int transaction) const;
     // {address, count} of the read this response answers. `answered` is the calling parser's

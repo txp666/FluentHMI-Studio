@@ -15,8 +15,9 @@ void appendU16(QByteArray &out, quint16 value)
 
 void appendString(QByteArray &out, const QByteArray &utf8)
 {
-    appendU16(out, quint16(utf8.size()));
-    out.append(utf8);
+    const QByteArray clipped = utf8.size() > 0xFFFF ? utf8.left(0xFFFF) : utf8;
+    appendU16(out, quint16(clipped.size()));
+    out.append(clipped);
 }
 
 QByteArray remainingLength(int length)
@@ -174,6 +175,12 @@ QList<Packet> StreamDecoder::feed(const QByteArray &data)
                 m_error = true; // more than four length bytes
                 m_buf.clear();
             }
+            break;
+        }
+        constexpr int kMaxPacketBodyBytes = 4 * 1024 * 1024;
+        if (length > kMaxPacketBodyBytes) {
+            m_error = true;
+            m_buf.clear();
             break;
         }
         if (m_buf.size() < index + length) {

@@ -575,6 +575,32 @@ class TestModbus : public QObject
         hub.removeLink(&plc);
         hub.removeLink(&lines);
     }
+
+    // Timed-out RTU reads expire their pending slot so late replies cannot attach to a stale request,
+    // and continuous noise does not grow the RTU slave request buffer without bound.
+    void rtuTimeoutExpiresPendingAndSlaveNoiseIsBounded()
+    {
+        FakeLink link;
+        QVERIFY(link.setParser(QStringLiteral("modbus"), {}));
+        ModbusMaster master(&link);
+        Results results;
+        QVERIFY(!master.enqueue(request(1, 3, 100, 1), 30, ModbusMaster::Priority::Read, results.done()).isEmpty());
+        QTRY_COMPARE(results.list.size(), 1);
+        QVERIFY(results.list.first().timedOut);
+
+        QSignalSpy messages(&link, &Link::messageReceived);
+        link.inject(rtu("0103021234"));
+        QCOMPARE(messages.size(), 1);
+        QVERIFY(!messages.first().first().value<Message>().contains(QStringLiteral("hr100")));
+
+        ModbusRtuRequestFramer framer;
+        const QByteArray noise(4096, char(0xFF));
+        QVERIFY(framer.frames(noise).isEmpty());
+        const QByteArray validRead = rtu("0103000a0001");
+        const auto decoded = framer.frames(validRead);
+        QCOMPARE(decoded.size(), 1);
+        QCOMPARE(decoded.first(), validRead);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestModbus)

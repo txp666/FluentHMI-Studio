@@ -64,8 +64,9 @@ signals:
     void state(quint64 life, quint64 epoch, bool connected, const QString &message, bool error = false);
     void sample(quint64 life, const fhmi::S7::Sample &sample);
     void written(quint64 life, bool success, const QString &error);
+    void readProblem(quint64 life, const QString &message);
 private:
-    struct Read { S7::Point point; qint64 due=0; };
+    struct Read { S7::Point point; qint64 due=0; int lastError=0; };
     bool cancelled() const { return m_activeLife->load() != m_life; }
     void disconnectNative() {
         if(m_native) { Cli_Disconnect(m_native); Cli_Destroy(&m_native); }
@@ -100,7 +101,7 @@ private:
             if(cancelled()) { disconnectNative(); return; }
             if(code) { lost(code); if(m_config.autoReconnect) m_timer->start(m_config.reconnectInterval); return; }
             m_connected=true; ++m_epoch;
-            for(auto it=m_reads.begin();it!=m_reads.end();++it) it->due=0;
+            for(auto it=m_reads.begin();it!=m_reads.end();++it) { it->due=0; it->lastError=0; }
             emit state(m_life,m_epoch,true,tr("S7 已连接"));
         }
         if(!m_writes.isEmpty()) {
@@ -125,6 +126,14 @@ private:
                 const int code=Cli_ReadArea(m_native,area(point.address),point.address.dbNumber,point.address.byteOffset,
                                             point.type.byteCount,S7WLByte,bytes.data());
                 if(cancelled()) return;
+                if(code) {
+                    if(read.lastError!=code) {
+                        read.lastError=code;
+                        emit readProblem(m_life,tr("S7 读取 %1 失败：%2").arg(point.address.canonical,problem(code)));
+                    }
+                } else {
+                    read.lastError=0;
+                }
                 publish(point,code?QVariant():S7::decodeValue(bytes.constData(),bytes.size(),point.type,point.type.isBool()?point.address.bit:0),
                         code?QStringLiteral("bad"):QStringLiteral("good"));
                 if(code && networkError(code)) lost(code);
@@ -154,16 +163,20 @@ struct S7Client::Impl {
     struct Session {
         S7::Config config;
         QList<S7::Point> points;
-        QThread thread;
+        QThread *thread=nullptr;
         S7Worker *worker=nullptr;
         std::shared_ptr<std::atomic<quint64>> activeLife=std::make_shared<std::atomic<quint64>>(0);
         quint64 life=0,epoch=0;
         bool connected=false;
         ~Session() {
             activeLife->store(0);
-            if(thread.isRunning()) {
-                QMetaObject::invokeMethod(worker,[this]{worker->shutdown();},Qt::BlockingQueuedConnection);
-                thread.quit();thread.wait();
+            if(worker && thread && thread->isRunning()) {
+                S7Worker *w=worker;
+                QThread *t=thread;
+                QMetaObject::invokeMethod(w,[w,t]{ w->shutdown(); t->quit(); },Qt::QueuedConnection);
+            } else {
+                if(worker) worker->deleteLater();
+                if(thread) thread->deleteLater();
             }
         }
     };
@@ -177,8 +190,17 @@ void S7Client::configure(const QString &id,const QJsonObject &properties) {
     QString error; const auto config=S7::config(properties,&error);
     if(!config) { emit statusChanged(id,false,error);emit errorOccurred(id,error);return; }
     auto session=std::make_unique<Impl::Session>();auto *s=session.get();s->config=*config;
-    s->worker=new S7Worker(s->activeLife,*config);s->worker->moveToThread(&s->thread);
-    connect(&s->thread,&QThread::finished,s->worker,&QObject::deleteLater);
+    s->thread=new QThread;
+    s->worker=new S7Worker(s->activeLife,*config);s->worker->moveToThread(s->thread);
+    if(qApp) {
+        connect(qApp,&QCoreApplication::aboutToQuit,s->thread,[thread=s->thread,activeLife=s->activeLife]{
+            activeLife->store(0);
+            thread->quit();
+            thread->wait();
+        });
+    }
+    connect(s->thread,&QThread::finished,s->worker,&QObject::deleteLater);
+    connect(s->thread,&QThread::finished,s->thread,&QObject::deleteLater);
     connect(s->worker,&S7Worker::state,this,[this,id](quint64 life,quint64 epoch,bool connected,const QString &message,bool error) {
         const auto it=d->sessions.find(id);if(it==d->sessions.end()||life!=it->second->life)return;
         auto *s=it->second.get();s->epoch=epoch;s->connected=connected;emit statusChanged(id,connected,message);emit logMessage(id+QStringLiteral(": ")+message);
@@ -190,26 +212,32 @@ void S7Client::configure(const QString &id,const QJsonObject &properties) {
     connect(s->worker,&S7Worker::written,this,[this,id](quint64 life,bool ok,const QString &error) {
         const auto it=d->sessions.find(id);if(it!=d->sessions.end()&&life==it->second->life)emit writeFinished(id,ok,error);
     });
-    s->thread.start();d->sessions.emplace(id,std::move(session));
+    connect(s->worker,&S7Worker::readProblem,this,[this,id](quint64 life,const QString &message) {
+        const auto it=d->sessions.find(id);if(it!=d->sessions.end()&&life==it->second->life)emit logMessage(id+QStringLiteral(": ")+message);
+    });
+    s->thread->start();d->sessions.emplace(id,std::move(session));
     if(config->autoConnect) open(id);
 }
 void S7Client::open(const QString &id) {
     const auto found=d->sessions.find(id);if(found==d->sessions.end())return;auto *s=found->second.get();
     s->life=++d->nextLife;s->activeLife->store(s->life);s->connected=false;
-    QMetaObject::invokeMethod(s->worker,[s,id,life=s->life]{s->worker->start(id,s->config,life);},Qt::QueuedConnection);
+    S7Worker *worker=s->worker;
+    const S7::Config config=s->config;
+    QMetaObject::invokeMethod(worker,[worker,id,config,life=s->life]{worker->start(id,config,life);},Qt::QueuedConnection);
 }
 void S7Client::close(const QString &id) {
     const auto found=d->sessions.find(id);if(found==d->sessions.end())return;auto *s=found->second.get();
     s->life=++d->nextLife;s->activeLife->store(s->life);s->connected=false;
     s->epoch=s->life<<32;
-    QMetaObject::invokeMethod(s->worker,[s]{s->worker->shutdown();},Qt::QueuedConnection);
+    S7Worker *worker=s->worker;
+    QMetaObject::invokeMethod(worker,[worker]{worker->shutdown();},Qt::QueuedConnection);
     for(const auto &point:s->points)
         emit sampleReceived(S7::Sample{id,point.address.canonical,point.type.name,{},QStringLiteral("disconnected"),QDateTime::currentDateTimeUtc(),s->epoch});
     emit statusChanged(id,false,tr("S7 未连接"));
 }
 void S7Client::remove(const QString &id) {
     auto it=d->sessions.find(id);if(it==d->sessions.end())return;
-    // Remove queued signal deliveries before Session's captured pointer expires.
+    // Remove queued signal deliveries before retiring the session asynchronously.
     it->second->worker->disconnect(this);d->sessions.erase(it);
 }
 void S7Client::clear() { while(!d->sessions.empty()) remove(d->sessions.begin()->first); }
@@ -222,7 +250,9 @@ void S7Client::setNeeds(const QList<S7::Need> &needs) {
     for(const auto &entry:d->sessions) {
         QList<S7::Point> points;
         for(const auto &need:needs) if(need.sourceCardId==entry.first)points.append(need.point);
-        auto *s=entry.second.get();s->points=points;QMetaObject::invokeMethod(s->worker,[s,points]{s->worker->needs(points);},Qt::QueuedConnection);
+        auto *s=entry.second.get();s->points=points;
+        S7Worker *worker=s->worker;
+        QMetaObject::invokeMethod(worker,[worker,points]{worker->needs(points);},Qt::QueuedConnection);
     }
 }
 bool S7Client::write(const S7::Command &command,QString *error) {
@@ -232,7 +262,8 @@ bool S7Client::write(const S7::Command &command,QString *error) {
     const auto it=d->sessions.find(command.targetId);
     if(it==d->sessions.end()||!it->second->connected) { if(error)*error=tr("S7 未连接，写入未发送");return false; }
     auto *s=it->second.get();
-    QMetaObject::invokeMethod(s->worker,[s,command,life=s->life,epoch=s->epoch]{s->worker->write(command,life,epoch);},Qt::QueuedConnection);
+    S7Worker *worker=s->worker;
+    QMetaObject::invokeMethod(worker,[worker,command,life=s->life,epoch=s->epoch]{worker->write(command,life,epoch);},Qt::QueuedConnection);
     return true;
 }
 } // namespace fhmi

@@ -98,6 +98,7 @@ class DesignScene : public QGraphicsScene
   private:
     CanvasItem *insertItem(const WidgetMeta &meta, const QJsonObject &properties, const QPointF &scenePos);
     void adopt(CanvasItem *item);
+    QList<CanvasItem *> movableTopSelection() const;
     // The innermost container under `scenePos`, ignoring `exclude` and its descendants.
     CanvasItem *containerAt(const QPointF &scenePos, const CanvasItem *exclude = nullptr) const;
     void highlightDropTarget(CanvasItem *target);

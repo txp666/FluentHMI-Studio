@@ -467,6 +467,24 @@ class TestMqtt : public QObject
         QCOMPARE(bursts.at(0).first().toByteArray(), QByteArray::fromHex("7E0102"));
         QCOMPARE(bursts.at(1).first().toByteArray(), QByteArray::fromHex("7E05"));
     }
+
+    void rejectsOversizedPacketsAndUtf8Fields()
+    {
+        // Remaining length = 0x80 0x80 0x80 0x04 = 8 MiB (> 4 MiB cap): decoder must flag error immediately.
+        Mqtt::StreamDecoder decoder;
+        const QByteArray hugeHeader = QByteArray::fromHex("3080808004");
+        QVERIFY(decoder.feed(hugeHeader).isEmpty());
+        QVERIFY(decoder.hasError());
+
+        MqttLink link;
+        MqttSettings settings;
+        settings.host = QStringLiteral("127.0.0.1");
+        settings.port = 1883;
+        settings.publishTopic = QString(70000, QLatin1Char('a'));
+        QString error;
+        QVERIFY(!link.connectTo(settings, &error));
+        QVERIFY(!error.isEmpty());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestMqtt)

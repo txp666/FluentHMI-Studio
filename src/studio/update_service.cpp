@@ -123,8 +123,16 @@ void UpdateService::fetchPackage(const QByteArray &expectedDigest)
     QNetworkReply *reply = get(m_release.package.url, DownloadStallMs);
     connect(reply, &QNetworkReply::readyRead, this, [this, reply]() {
         const QByteArray chunk = reply->readAll();
+        if (chunk.isEmpty()) {
+            return;
+        }
         m_hash.addData(chunk);
-        m_partial.write(chunk);
+        if (m_partial.write(chunk) != chunk.size()) {
+            const QString err = tr("写入 %1 失败: %2")
+                                    .arg(QDir::toNativeSeparators(m_partial.fileName()), m_partial.errorString());
+            abort();
+            emit failed(err);
+        }
     });
     connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {
         emit progress(received, total > 0 ? total : m_release.package.size);
@@ -143,8 +151,23 @@ void UpdateService::finishPackage(QNetworkReply *reply, const QByteArray &expect
         return;
     }
     const QByteArray rest = reply->readAll();
-    m_hash.addData(rest);
-    m_partial.write(rest);
+    if (!rest.isEmpty()) {
+        m_hash.addData(rest);
+        if (m_partial.write(rest) != rest.size()) {
+            const QString err = tr("写入 %1 失败: %2")
+                                    .arg(QDir::toNativeSeparators(m_partial.fileName()), m_partial.errorString());
+            discardPartial();
+            emit failed(err);
+            return;
+        }
+    }
+    if (!m_partial.flush()) {
+        const QString err = tr("写入 %1 失败: %2")
+                                .arg(QDir::toNativeSeparators(m_partial.fileName()), m_partial.errorString());
+        discardPartial();
+        emit failed(err);
+        return;
+    }
     const qint64 size = m_partial.size();
     m_partial.close();
     if (m_release.package.size > 0 && size != m_release.package.size) {

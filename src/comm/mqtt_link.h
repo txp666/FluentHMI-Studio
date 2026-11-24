@@ -76,8 +76,17 @@ class MqttLink : public Link
     void connectionLost(const QString &reason);
     void giveUp(const QString &message);
     void scheduleReconnect();
+    void checkOutboundAcks();
     bool sendPacket(const QByteArray &packet);
     quint16 nextPacketId();
+
+    struct OutboundPacket
+    {
+        Mqtt::PacketType awaiting = Mqtt::PubAck;
+        QByteArray wire;
+        qint64 sentAtMs = 0;
+        int retries = 0;
+    };
 
     QSslSocket m_socket;
     Mqtt::StreamDecoder m_decoder;
@@ -87,11 +96,14 @@ class MqttLink : public Link
     bool m_everUp = false; // reached the broker since connectTo()
     quint16 m_lastPacketId = 0;
     QHash<quint16, QStringList> m_pendingSubscriptions;
-    QSet<quint16> m_inboundQos2; // delivered, waiting for PUBREL
-    QHash<quint16, Mqtt::PacketType> m_outbound; // response awaited for each QoS 1/2 publish
+    QSet<quint16> m_inboundQos2;           // delivered, waiting for PUBREL
+    QHash<quint16, OutboundPacket> m_outbound; // response awaited for each QoS 1/2 publish
     QHash<QString, std::shared_ptr<Parser>> m_parsers;
+    QTimer m_handshakeTimer;
+    QTimer m_ackTimer;
     QTimer m_pingTimer;
     QTimer m_reconnectTimer;
+    QElapsedTimer m_clock;
     QElapsedTimer m_sinceReceived;
     int m_reconnectDelayMs = 1000;
 };

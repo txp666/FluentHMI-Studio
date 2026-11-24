@@ -249,15 +249,58 @@ void DesignScene::adopt(CanvasItem *item)
 {
     item->setGridSize(m_gridSize);
     applyBitProfiles(item, m_bitProfiles);
-    connect(item, &CanvasItem::changed, this, [this](CanvasItem *changed) {
-        reparentAfterMove(changed);
-        emit itemPropertiesChanged(changed);
-        emit modified();
+    connect(item, &CanvasItem::changed, this, [this](CanvasItem *changed, bool resized) {
+        if (resized) {
+            emit itemPropertiesChanged(changed);
+            emit modified();
+            return;
+        }
+        QList<CanvasItem *> moved = movableTopSelection();
+        if (!moved.contains(changed) && (changed->flags() & QGraphicsItem::ItemIsMovable)) {
+            moved.prepend(changed);
+        }
+        for (CanvasItem *entry : std::as_const(moved)) {
+            CanvasItem *oldParent = entry->containerParent();
+            reparentAfterMove(entry);
+            if (oldParent && oldParent != entry->containerParent()) {
+                oldParent->relayoutChildren();
+            }
+            if (entry->containerParent()) {
+                entry->containerParent()->relayoutChildren();
+            }
+            emit itemPropertiesChanged(entry);
+        }
+        if (!moved.isEmpty()) {
+            emit modified();
+        }
     });
     connect(item, &CanvasItem::editorPageChanged, this, [this, item] { emit editorPageChanged(item); });
     for (CanvasItem *child : item->containerChildren()) {
         adopt(child);
     }
+}
+
+QList<CanvasItem *> DesignScene::movableTopSelection() const
+{
+    const QList<CanvasItem *> selected = selectedCanvasItems();
+    const QSet<const CanvasItem *> set(selected.begin(), selected.end());
+    QList<CanvasItem *> out;
+    for (CanvasItem *item : selected) {
+        if (!(item->flags() & QGraphicsItem::ItemIsMovable)) {
+            continue;
+        }
+        bool ancestorSelected = false;
+        for (CanvasItem *parent = item->containerParent(); parent; parent = parent->containerParent()) {
+            if (set.contains(parent) && (parent->flags() & QGraphicsItem::ItemIsMovable)) {
+                ancestorSelected = true;
+                break;
+            }
+        }
+        if (!ancestorSelected) {
+            out.append(item);
+        }
+    }
+    return out;
 }
 
 bool DesignScene::loadWidgets(const QJsonArray &widgets, QString *error)
@@ -604,7 +647,7 @@ void DesignScene::clearAll()
 
 void DesignScene::align(Alignment alignment)
 {
-    const QList<CanvasItem *> items = selectedCanvasItems();
+    const QList<CanvasItem *> items = movableTopSelection();
     if (items.size() < 2) {
         return;
     }
@@ -808,16 +851,14 @@ void DesignScene::keyPressEvent(QKeyEvent *event)
         QGraphicsScene::keyPressEvent(event);
         return;
     }
-    const QList<CanvasItem *> items = selectedCanvasItems();
+    const QList<CanvasItem *> items = movableTopSelection();
     QStringList ids;
     for (CanvasItem *item : items) {
         ids.append(item->widgetId());
-        if (item->flags() & QGraphicsItem::ItemIsMovable) {
-            item->setPos(item->pos() + delta);
-            emit itemPropertiesChanged(item);
-        }
+        item->setPos(item->pos() + delta);
+        emit itemPropertiesChanged(item);
     }
-    if (!items.isEmpty()) {
+    if (!ids.isEmpty()) {
         ids.sort();
         emit modified(QStringLiteral("nudge:") + ids.join(QLatin1Char('\n')));
     }

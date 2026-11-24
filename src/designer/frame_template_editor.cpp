@@ -1144,8 +1144,15 @@ class FrameTemplateEditor : public AppDialog
         connect(up, &QToolButton::clicked, this, [this] { moveField(-1); });
         connect(down, &QToolButton::clicked, this, [this] { moveField(1); });
         connect(remove, &QToolButton::clicked, this, [this, updateActions] {
-            if (m_table->currentRow() >= 0)
-                m_table->removeRow(m_table->currentRow());
+            const int row = m_table->currentRow();
+            if (row >= 0) {
+                auto list = fields();
+                list.removeAt(row);
+                showFields(list);
+                if (!list.isEmpty()) {
+                    m_table->setCurrentCell(std::min(row, int(list.size()) - 1), sourceColumn());
+                }
+            }
             updateActions();
             refreshPreview();
         });

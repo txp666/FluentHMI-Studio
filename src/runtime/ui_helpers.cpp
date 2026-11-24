@@ -15,6 +15,9 @@
 #include <QtGui/QImageReader>
 #include <QtGui/QPixmap>
 #include <QtWidgets/QAbstractButton>
+#include <QtWidgets/QGraphicsProxyWidget>
+#include <QtWidgets/QGraphicsScene>
+#include <QtWidgets/QGraphicsView>
 
 #include <algorithm>
 
@@ -65,9 +68,28 @@ void fluentToolTip(QWidget *widget, const QString &text)
         widget->installEventFilter(new FluentQt::ToolTipFilter(widget));
 }
 
+QWidget *visibleWindow(QWidget *widget)
+{
+    if (!widget) {
+        return nullptr;
+    }
+    QWidget *host = widget->window();
+    if (!host) {
+        return widget;
+    }
+    // The standalone player embeds the runtime canvas inside a QGraphicsProxyWidget.
+    if (const auto *proxy = host->graphicsProxyWidget(); proxy && proxy->scene()) {
+        const auto views = proxy->scene()->views();
+        if (!views.isEmpty()) {
+            return views.first()->window();
+        }
+    }
+    return host;
+}
+
 QColor chooseColor(const QColor &initial, const QString &title, QWidget *parent)
 {
-    FluentQt::ColorDialog dialog(initial.isValid() ? initial : QColor(Qt::white), title, parent);
+    FluentQt::ColorDialog dialog(initial.isValid() ? initial : QColor(Qt::white), title, visibleWindow(parent));
     dialog.yesButton()->setText(QCoreApplication::translate("fhmi", "确定"));
     dialog.yesButton()->setDefault(true);
     dialog.yesButton()->setFocus();

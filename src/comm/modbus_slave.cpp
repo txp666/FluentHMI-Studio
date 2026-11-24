@@ -473,7 +473,12 @@ bool ModbusRtuRequestFramer::wholeAt(int from) const
 
 QList<QByteArray> ModbusRtuRequestFramer::frames(const QByteArray &data)
 {
+    constexpr qsizetype kMaxRtuBufferBytes = 1024;
+    constexpr qsizetype kMaxRtuFrameBytes = 256;
     m_buf += data;
+    if (m_buf.size() > kMaxRtuBufferBytes) {
+        m_buf.remove(0, m_buf.size() - kMaxRtuBufferBytes);
+    }
     QList<QByteArray> out;
     while (m_buf.size() >= 2) {
         const int need = knownLength(0);
@@ -505,6 +510,9 @@ QList<QByteArray> ModbusRtuRequestFramer::frames(const QByteArray &data)
         } else {
             m_buf.remove(0, 1);
         }
+    }
+    if (m_buf.size() > kMaxRtuFrameBytes) {
+        m_buf.remove(0, m_buf.size() - kMaxRtuFrameBytes);
     }
     return out;
 }

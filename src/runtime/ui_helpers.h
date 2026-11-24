@@ -26,6 +26,10 @@ void fluentToolTip(QWidget *widget, const QString &text = QString());
 // Uses the same Fluent picker as the settings page. Cancelling returns an invalid color.
 QColor chooseColor(const QColor &initial, const QString &title, QWidget *parent);
 
+// Returns the real top-level window for dialogs opened from a runtime widget (unwrapping the
+// QGraphicsProxyWidget host used by the scaled standalone player).
+QWidget *visibleWindow(QWidget *widget);
+
 // An image file as an icon, every size an .ico holds included, or a null icon when it cannot be read.
 // QIcon(path) decodes a JPEG at the size asked for, squashing a photo that is not square.
 QIcon iconFromFile(const QString &path);

@@ -11,6 +11,11 @@ namespace {
 constexpr qsizetype PublishWindow = 8;
 constexpr qint64 PublishBufferLimit = 256 * 1024;
 constexpr int kMaxReconnectDelayMs = 30000;
+constexpr int kHandshakeTimeoutMs = 15000;
+constexpr int kAckCheckIntervalMs = 2000;
+constexpr qint64 kAckTimeoutMs = 10000;
+constexpr int kMaxAckRetries = 2;
+constexpr qsizetype kMaxMqttUtf8Bytes = 65535;
 // Wildcard subscriptions can fan out widely; parsers beyond this are dropped and rebuilt.
 constexpr int kMaxTopicParsers = 256;
 
@@ -18,6 +23,10 @@ constexpr int kMaxTopicParsers = 256;
 
 MqttLink::MqttLink(QObject *parent) : Link(parent)
 {
+    m_clock.start();
+    m_handshakeTimer.setSingleShot(true);
+    m_ackTimer.setSingleShot(false);
+    m_ackTimer.setInterval(kAckCheckIntervalMs);
     m_pingTimer.setSingleShot(false);
     m_reconnectTimer.setSingleShot(true);
     connect(&m_socket, &QSslSocket::connected, this, [this]() {
@@ -29,6 +38,20 @@ MqttLink::MqttLink(QObject *parent) : Link(parent)
     connect(&m_socket, &QSslSocket::readyRead, this, &MqttLink::onReadyRead);
     connect(&m_socket, &QSslSocket::errorOccurred, this, &MqttLink::onSocketError);
     connect(&m_socket, &QSslSocket::disconnected, this, &MqttLink::onSocketDisconnected);
+    connect(&m_handshakeTimer, &QTimer::timeout, this, [this]() {
+        if (!m_wanted || m_up) {
+            return;
+        }
+        m_socket.blockSignals(true);
+        m_socket.abort();
+        m_socket.blockSignals(false);
+        if (m_everUp) {
+            scheduleReconnect();
+        } else {
+            giveUp(tr("MQTT 连接超时"));
+        }
+    });
+    connect(&m_ackTimer, &QTimer::timeout, this, &MqttLink::checkOutboundAcks);
     connect(&m_pingTimer, &QTimer::timeout, this, [this]() {
         // No packet for one and a half keep-alive periods: the broker is gone.
         if (m_sinceReceived.isValid() && m_sinceReceived.elapsed() > m_settings.keepAlive * 1500) {
@@ -74,6 +97,11 @@ bool MqttLink::connectTo(const MqttSettings &requested, QString *error)
     if (settings.clientId.trimmed().isEmpty()) {
         settings.clientId = QStringLiteral("fluenthmi-") + QUuid::createUuid().toString(QUuid::Id128).left(8);
     }
+    const auto tooLong = [](const QString &value) { return value.toUtf8().size() > kMaxMqttUtf8Bytes; };
+    if (tooLong(settings.clientId) || tooLong(settings.username) || tooLong(settings.password) ||
+        tooLong(settings.publishTopic) || std::any_of(settings.topics.cbegin(), settings.topics.cend(), tooLong)) {
+        return fail(tr("MQTT 文本字段不能超过 65535 字节"));
+    }
 
     close();
     m_settings = settings;
@@ -91,6 +119,7 @@ void MqttLink::openSocket()
     }
     m_socket.abort();
     m_decoder.reset();
+    m_handshakeTimer.start(kHandshakeTimeoutMs);
     if (m_settings.tls) {
         // The system's trust store decides, including certificates the user added to it.
         m_socket.connectToHostEncrypted(m_settings.host, quint16(m_settings.port));
@@ -114,6 +143,8 @@ void MqttLink::close()
 {
     const bool wasActive = m_wanted || m_up;
     m_wanted = false;
+    m_handshakeTimer.stop();
+    m_ackTimer.stop();
     m_reconnectTimer.stop();
     m_pingTimer.stop();
     if (m_up) {
@@ -194,6 +225,10 @@ qint64 MqttLink::writeTo(const QByteArray &bytes, const QString &endpoint)
     }
     Mqtt::PublishMessage message;
     message.topic = Mqtt::expandTopicSession(topic, m_settings.topicSession);
+    if (message.topic.toUtf8().size() > kMaxMqttUtf8Bytes) {
+        emit errorOccurred(tr("MQTT 文本字段不能超过 65535 字节"), topic);
+        return WriteFailureReported;
+    }
     message.payload = bytes;
     message.qos = m_settings.qos;
     if (message.qos > 0) {
@@ -203,10 +238,16 @@ qint64 MqttLink::writeTo(const QByteArray &bytes, const QString &endpoint)
             return WriteFailureReported;
         }
     }
-    if (!sendPacket(Mqtt::encodePublish(message)))
+    const QByteArray wire = Mqtt::encodePublish(message);
+    if (!sendPacket(wire))
         return -1;
-    if (message.packetId)
-        m_outbound.insert(message.packetId, message.qos == 1 ? Mqtt::PubAck : Mqtt::PubRec);
+    if (message.packetId) {
+        m_outbound.insert(message.packetId,
+                          OutboundPacket{message.qos == 1 ? Mqtt::PubAck : Mqtt::PubRec, wire, m_clock.elapsed(), 0});
+        if (!m_ackTimer.isActive()) {
+            m_ackTimer.start();
+        }
+    }
     return bytes.size();
 }
 
@@ -229,6 +270,7 @@ void MqttLink::handlePacket(const Mqtt::Packet &packet)
 {
     switch (packet.type) {
     case Mqtt::ConnAck: {
+        m_handshakeTimer.stop();
         const int code = packet.body.size() >= 2 ? quint8(packet.body.at(1)) : -1;
         if (code != 0) {
             giveUp(tr("MQTT 连接失败: %1").arg(Mqtt::connAckText(code)));
@@ -285,9 +327,13 @@ void MqttLink::handlePacket(const Mqtt::Packet &packet)
     case Mqtt::PubRec:
         if (const auto id = Mqtt::packetId(packet)) {
             auto awaited = m_outbound.find(*id);
-            if (awaited != m_outbound.end() && (*awaited == Mqtt::PubRec || *awaited == Mqtt::PubComp)) {
-                *awaited = Mqtt::PubComp;
-                if (!sendPacket(Mqtt::encodeAck(Mqtt::PubRel, *id)))
+            if (awaited != m_outbound.end() &&
+                (awaited->awaiting == Mqtt::PubRec || awaited->awaiting == Mqtt::PubComp)) {
+                awaited->awaiting = Mqtt::PubComp;
+                awaited->wire = Mqtt::encodeAck(Mqtt::PubRel, *id);
+                awaited->sentAtMs = m_clock.elapsed();
+                awaited->retries = 0;
+                if (!sendPacket(awaited->wire))
                     connectionLost(tr("MQTT 发布确认失败"));
             }
         }
@@ -295,8 +341,13 @@ void MqttLink::handlePacket(const Mqtt::Packet &packet)
     case Mqtt::PubAck:
     case Mqtt::PubComp:
         if (const auto id = Mqtt::packetId(packet)) {
-            if (m_outbound.value(*id, Mqtt::Connect) == packet.type)
-                m_outbound.remove(*id);
+            auto awaited = m_outbound.find(*id);
+            if (awaited != m_outbound.end() && awaited->awaiting == packet.type) {
+                m_outbound.erase(awaited);
+                if (m_outbound.isEmpty()) {
+                    m_ackTimer.stop();
+                }
+            }
         }
         break;
     default:
@@ -369,6 +420,8 @@ void MqttLink::connectionLost(const QString &reason)
         return;
     }
     m_up = false;
+    m_handshakeTimer.stop();
+    m_ackTimer.stop();
     m_pingTimer.stop();
     dropParsers();
     m_pendingSubscriptions.clear();
@@ -380,6 +433,34 @@ void MqttLink::connectionLost(const QString &reason)
     emit errorOccurred(tr("MQTT 连接断开，正在重连") + (reason.isEmpty() ? QString() : QStringLiteral(": ") + reason));
     emit connectedChanged(false);
     scheduleReconnect();
+}
+
+void MqttLink::checkOutboundAcks()
+{
+    if (!m_up || m_outbound.isEmpty()) {
+        m_ackTimer.stop();
+        return;
+    }
+    const qint64 now = m_clock.elapsed();
+    for (auto it = m_outbound.begin(); it != m_outbound.end(); ++it) {
+        if (now - it->sentAtMs < kAckTimeoutMs) {
+            continue;
+        }
+        if (it->retries >= kMaxAckRetries) {
+            connectionLost(tr("MQTT 发布确认超时"));
+            return;
+        }
+        ++it->retries;
+        it->sentAtMs = now;
+        // Set the MQTT DUP flag when resending a PUBLISH packet (not PUBREL).
+        if (it->awaiting != Mqtt::PubComp && !it->wire.isEmpty()) {
+            it->wire[0] = char(quint8(it->wire.at(0)) | 0x08);
+        }
+        if (!sendPacket(it->wire)) {
+            connectionLost(tr("MQTT 发布确认失败"));
+            return;
+        }
+    }
 }
 
 void MqttLink::giveUp(const QString &message)

@@ -579,7 +579,7 @@ void CanvasItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
         if (m_containerParent) {
             m_containerParent->relayoutChildren();
         }
-        emit changed(this);
+        emit changed(this, wasResizing);
     } else if (!wasResizing && event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier &&
                typeName() == QLatin1String("TabWidget")) {
         const int page = static_cast<TabContainerWidget *>(m_widget)->navigationPageAt(event->pos().toPoint());

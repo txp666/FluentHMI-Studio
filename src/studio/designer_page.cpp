@@ -266,20 +266,28 @@ QString rebasedPath(const QString &path, const QDir &from, const QDir &to)
     return path.isEmpty() || !QDir::isRelativePath(path) ? path : to.relativeFilePath(from.absoluteFilePath(path));
 }
 
-QJsonArray rebasedImages(QJsonArray widgets, const QDir &from, const QDir &to)
+QJsonArray rebasedAssets(QJsonArray widgets, const QDir &from, const QDir &to)
 {
     for (qsizetype i = 0; i < widgets.size(); ++i) {
         QJsonObject widget = widgets.at(i).toObject();
         QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
-        if (widget.value(QStringLiteral("type")).toString() == QLatin1String("ImageDisplay") &&
-            props.contains(QStringLiteral("imagePath"))) {
+        const QString type = widget.value(QStringLiteral("type")).toString();
+        bool changed = false;
+        if (type == QLatin1String("ImageDisplay") && props.contains(QStringLiteral("imagePath"))) {
             props.insert(QStringLiteral("imagePath"),
                          rebasedPath(props.value(QStringLiteral("imagePath")).toString(), from, to));
+            changed = true;
+        } else if (type == QLatin1String("CanConfigCard") && props.contains(QStringLiteral("dbcFile"))) {
+            props.insert(QStringLiteral("dbcFile"),
+                         rebasedPath(props.value(QStringLiteral("dbcFile")).toString(), from, to));
+            changed = true;
+        }
+        if (changed) {
             widget.insert(QStringLiteral("properties"), props);
         }
         if (widget.contains(QStringLiteral("children"))) {
             widget.insert(QStringLiteral("children"),
-                          rebasedImages(widget.value(QStringLiteral("children")).toArray(), from, to));
+                          rebasedAssets(widget.value(QStringLiteral("children")).toArray(), from, to));
         }
         widgets[i] = widget;
     }
@@ -813,37 +821,54 @@ bool DesignerPage::saveAs()
 
 bool DesignerPage::saveTo(const QString &path)
 {
-    // Relative image and icon paths follow the project to its new folder.
+    // Relative image, DBC, and icon paths follow the project to its new folder. Rebase on the
+    // staged copy first so a failed save never mutates the live session.
     const QDir oldBase(m_project.assetBaseDir());
     const QDir newBase(QFileInfo(path).absolutePath());
     const bool moved = oldBase.absolutePath() != newBase.absolutePath();
-    if (moved) {
-        for (CanvasItem *item : m_scene->allItems()) {
-            const QString image = item->propertyValue(QStringLiteral("imagePath")).toString();
-            if (item->typeName() == QLatin1String("ImageDisplay") && !image.isEmpty() && QDir::isRelativePath(image)) {
-                item->setPropertyValue(QStringLiteral("imagePath"), rebasedPath(image, oldBase, newBase));
-            }
-        }
-        m_project.icon = rebasedPath(m_project.icon, oldBase, newBase);
-    }
     Project project = snapshot();
+    if (moved) {
+        project.widgets = rebasedAssets(project.widgets, oldBase, newBase);
+        project.icon = rebasedPath(project.icon, oldBase, newBase);
+    }
     QString error;
     if (!project.save(path, &error)) {
         emit notify(tr("保存失败"), error, true);
         return false;
     }
     m_project.filePath = QFileInfo(path).absoluteFilePath();
+    if (moved) {
+        m_project.icon = project.icon;
+        for (CanvasItem *item : m_scene->allItems()) {
+            const auto rebase = [&](const QString &key) {
+                const QString value = item->propertyValue(key).toString();
+                if (!value.isEmpty() && QDir::isRelativePath(value)) {
+                    item->setPropertyValue(key, rebasedPath(value, oldBase, newBase));
+                }
+            };
+            if (item->typeName() == QLatin1String("ImageDisplay")) {
+                rebase(QStringLiteral("imagePath"));
+            } else if (item->typeName() == QLatin1String("CanConfigCard")) {
+                rebase(QStringLiteral("dbcFile"));
+            }
+        }
+    }
     m_scene->setAssetBaseDir(m_project.assetBaseDir());
-    // The undo steps follow too, so undoing past the save still finds the images.
+    // The undo steps follow too, so undoing past the save still finds images and DBC files.
     if (moved) {
         for (HistoryStep &step : m_history) {
             QJsonObject &state = step.project;
             state.insert(QStringLiteral("widgets"),
-                         rebasedImages(state.value(QStringLiteral("widgets")).toArray(), oldBase, newBase));
+                         rebasedAssets(state.value(QStringLiteral("widgets")).toArray(), oldBase, newBase));
             const QString icon = rebasedPath(state.value(QStringLiteral("icon")).toString(), oldBase, newBase);
             if (!icon.isEmpty()) {
                 state.insert(QStringLiteral("icon"), icon);
             }
+        }
+        const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
+        m_properties->showItem(nullptr);
+        if (selected.size() == 1) {
+            m_properties->showItem(selected.first());
         }
     }
     m_history[m_historyIndex].project = project.toJson();

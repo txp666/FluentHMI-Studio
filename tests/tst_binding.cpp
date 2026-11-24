@@ -60,11 +60,15 @@ class TestBinding : public QObject
                 QVERIFY(!entry.chartSample(raw));
             }
         }
-        for (const QString &expression :
-             {QString(), QStringLiteral(" "), QStringLiteral("value / 0"), QStringLiteral("unknown(value)"),
-              QStringLiteral("'bad'"), QStringLiteral("1e308 * 1e308")}) {
+        for (const QString &expression : {QString(), QStringLiteral(" ")}) {
             entry.expression = expression;
             QCOMPARE(entry.chartSample(QStringLiteral("12.5")), std::optional<double>(12.5));
+        }
+        // Broken conversion expressions must not silently plot raw unscaled readings.
+        for (const QString &expression : {QStringLiteral("value / 0"), QStringLiteral("unknown(value)"),
+                                          QStringLiteral("'bad'"), QStringLiteral("1e308 * 1e308")}) {
+            entry.expression = expression;
+            QVERIFY(!entry.chartSample(QStringLiteral("12.5")));
         }
         entry.expression = "value * 2 + 1";
         QCOMPARE(entry.chartSample(QStringLiteral("12.5")), std::optional<double>(26.0));

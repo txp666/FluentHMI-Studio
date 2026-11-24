@@ -714,9 +714,9 @@ std::optional<double> BindingEntry::chartSample(const QVariant &raw) const
         return source;
     }
     // Preserve evaluate's bool/int/float semantics, including numeric strings. Only a valid source
-    // reaches the expression: a constant expression must never turn a missing/invalid reading into a point.
-    const auto result = bindingFloat(evaluate(raw));
-    return result ? result : source;
+    // reaches the expression: a constant expression must never turn a missing/invalid reading into a point,
+    // and a failing expression must not silently plot the raw unscaled value.
+    return bindingFloat(evaluateStrict(raw));
 }
 
 QVariant BindingEntry::formatValue(const QVariant &value) const

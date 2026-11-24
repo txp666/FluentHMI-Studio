@@ -65,19 +65,6 @@ QList<QWidget *> controls(HmiWidget *host, QLayout *bar)
     });
     return {ack, mute};
 }
-
-QWidget *visibleWindow(QWidget *widget)
-{
-    QWidget *window = widget->window();
-    // The exported canvas is scaled within a graphics view. Give the native dialog
-    // its real window so it uses screen coordinates and its pickers behave normally.
-    if (auto *proxy = window->graphicsProxyWidget(); proxy && proxy->scene()) {
-        const auto views = proxy->scene()->views();
-        if (!views.isEmpty())
-            window = views.first()->window();
-    }
-    return window;
-}
 } // namespace
 AlarmBannerWidget::AlarmBannerWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, parent)
 {

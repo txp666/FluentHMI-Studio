@@ -1,6 +1,7 @@
 #include "runtime/field_help.h"
 
 #include "runtime/app_dialog.h"
+#include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/StyleSheet.h>
@@ -417,7 +418,7 @@ QToolButton *createFieldHelpButton(FieldHelpTopic topic, QWidget *parent)
     button->setAccessibleName(tr("查看%1的帮助").arg(contentFor(topic).title));
     // The window owns the help, so rebuilding the property panel cannot leave a dangling callback.
     QObject::connect(button, &QToolButton::clicked, button,
-                     [button, topic]() { showHelp(contentFor(topic), button->window()); });
+                     [button, topic]() { showHelp(contentFor(topic), visibleWindow(button)); });
     return button;
 }
 

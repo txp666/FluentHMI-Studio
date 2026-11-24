@@ -33,6 +33,7 @@
 #include "runtime/receive_frame_preview.h"
 #include "runtime/runtime_context.h"
 #include "runtime/runtime_surface.h"
+#include "runtime/ui_helpers.h"
 #include "runtime/widgets/can_timing_dialog.h"
 #include "runtime/widgets/can_widgets.h"
 #include "runtime/widgets/container_widgets.h"
@@ -6111,6 +6112,59 @@ class TestRuntime : public QObject
         QVERIFY(!filter->toolTip().isEmpty());
 
         link.close();
+    }
+
+    // Regression checks for P0 fixes: visibleWindow unwrapping, strict widget expression errors,
+    // and DesignScene parent+child nudge deduplication.
+    void p0VisibleWindowExpressionAndSceneNudge()
+    {
+        // 1. visibleWindow unwraps a QGraphicsProxyWidget to the hosting QGraphicsView's top-level window.
+        QWidget hostWindow;
+        QGraphicsScene proxyScene;
+        QGraphicsView view(&proxyScene, &hostWindow);
+        auto *embedded = new QWidget;
+        auto *child = new QWidget(embedded);
+        proxyScene.addWidget(embedded);
+        QCOMPARE(visibleWindow(child), &hostWindow);
+
+        // 2. Direct binding with a broken conversion expression flags ConversionFailed instead of showing raw value.
+        Project project;
+        project.widgets = QJsonArray{
+            QJsonObject{{"id", "disp"}, {"type", "NumericDisplay"},
+                        {"properties", QJsonObject{{"decimals", 1}}},
+                        {"binding", QJsonObject{{"parseMode", "键值匹配"}, {"key", "raw"},
+                                                {"expression", "value / 0"}}}}};
+        RuntimeSurface surface;
+        surface.build(project);
+        surface.context()->setActive(true);
+        HmiWidget *disp = nullptr;
+        for (HmiWidget *w : surface.widgets()) {
+            if (w->property("fhmiWidgetId").toString() == QLatin1String("disp"))
+                disp = w;
+        }
+        QVERIFY(disp);
+        emit surface.context()->hub()->unitReceived({}, Message{{"raw", 4095}}, DataSource{});
+        for (const QLabel *label : disp->findChildren<QLabel *>()) {
+            QVERIFY(!label->text().contains(QStringLiteral("4095")));
+        }
+        auto *badge = disp->findChild<QWidget *>("bindingQualityBadge");
+        QVERIFY(badge && !badge->isHidden());
+        QVERIFY(badge->accessibleDescription().contains(QStringLiteral("value / 0")));
+
+        // 3. Arrow-key nudge on selected parent+child moves the child once, not twice.
+        DesignScene scene;
+        CanvasItem *card = scene.createItem(QStringLiteral("CardContainer"), QPointF(40, 40));
+        CanvasItem *btn = scene.createItem(QStringLiteral("PushButton"), QPointF(60, 60));
+        QVERIFY(card && btn);
+        QCOMPARE(btn->containerParent(), card);
+        card->setSelected(true);
+        btn->setSelected(true);
+        const QPointF cardBefore = card->scenePos();
+        const QPointF btnBefore = btn->scenePos();
+        QKeyEvent rightKey(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+        QCoreApplication::sendEvent(&scene, &rightKey);
+        QCOMPARE(card->scenePos(), cardBefore + QPointF(1, 0));
+        QCOMPARE(btn->scenePos(), btnBefore + QPointF(1, 0));
     }
 };
 

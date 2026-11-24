@@ -709,7 +709,8 @@ class CanSignalDialog : public AppDialog
             } else if (m_id->currentIndex() >= 0) {
                 m_payload = m_parsedSample.bytes;
                 m_haveSample = true;
-                status = tr("%1 · 样例 %2 字节 · 定义 %3 字节").arg(frameType).arg(m_payload.size()).arg(target->length);
+                const int definedLength = target ? target->length : 0;
+                status = tr("%1 · 样例 %2 字节 · 定义 %3 字节").arg(frameType).arg(m_payload.size()).arg(definedLength);
             }
         }
         m_byteCount = std::max(target ? target->length : 0, int(m_payload.size()));

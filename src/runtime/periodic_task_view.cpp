@@ -2,6 +2,7 @@
 
 #include "runtime/app_dialog.h"
 #include "runtime/periodic_sender.h"
+#include "runtime/ui_helpers.h"
 
 #include <FluentQtWidgets/Views/ItemViews.h>
 #include <FluentQtWidgets/Widgets/Button.h>
@@ -159,7 +160,7 @@ QPushButton *createPeriodicTasksButton(PeriodicSender *sender, QWidget *parent)
         button->setVisible(count > 0);
     };
     QObject::connect(sender, &PeriodicSender::changed, button, refresh);
-    QObject::connect(button, &QPushButton::clicked, sender, [button, sender] { openPeriodicTasks(sender, button->window()); });
+    QObject::connect(button, &QPushButton::clicked, sender, [button, sender] { openPeriodicTasks(sender, visibleWindow(button)); });
     refresh();
     return button;
 }
