@@ -21,6 +21,10 @@ struct Point {
     DataType type;
     int period = 0;
     QString key() const { return address.canonical + QLatin1Char(':') + type.name; }
+    bool operator==(const Point &other) const
+    {
+        return address.canonical == other.address.canonical && type.name == other.type.name && period == other.period;
+    }
 };
 
 struct Need { QString sourceCardId; Point point; };

@@ -115,27 +115,55 @@ QImage squared(const QImage &image, int side)
 }
 #endif
 
+struct BundledAssetKind
+{
+    const char *type;
+    const char *property;
+    const char *unreadable;
+    const char *uncopyable;
+};
+
+constexpr BundledAssetKind kBundledAssetKinds[] = {
+    {"ImageDisplay", "imagePath", QT_TRANSLATE_NOOP("fhmi", "图片不存在或不可读: %1"),
+     QT_TRANSLATE_NOOP("fhmi", "无法复制图片: %1")},
+    {"CanConfigCard", "dbcFile", QT_TRANSLATE_NOOP("fhmi", "DBC 文件不存在或不可读: %1"),
+     QT_TRANSLATE_NOOP("fhmi", "无法复制 DBC 文件: %1")},
+};
+
+// Verifies every referenced asset exists and is readable before copying the runtime.
+bool validateAssets(const QJsonArray &widgets, const QDir &base, QString *error)
+{
+    for (int i = 0; i < widgets.size(); ++i) {
+        const QJsonObject widget = widgets.at(i).toObject();
+        const QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
+        const QString type = widget.value(QStringLiteral("type")).toString();
+        for (const BundledAssetKind &kind : kBundledAssetKinds) {
+            const QString file = props.value(QLatin1String(kind.property)).toString();
+            if (type != QLatin1String(kind.type) || file.isEmpty()) {
+                continue;
+            }
+            const QString source = QDir::isRelativePath(file) ? base.absoluteFilePath(file) : file;
+            if (!QFileInfo(source).isReadable()) {
+                return fail(error, QCoreApplication::translate("fhmi", kind.unreadable)
+                                       .arg(QDir::toNativeSeparators(source)));
+            }
+        }
+        const QJsonArray children = widget.value(QStringLiteral("children")).toArray();
+        if (!children.isEmpty() && !validateAssets(children, base, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Copies every file the project's widgets use (an ImageDisplay's image, a CanConfigCard's DBC) into assets/ and
 // points the widgets at the copies.
 bool bundleImages(QJsonArray &widgets, const QDir &base, const QDir &assets, QSet<QString> &used, QString *error)
 {
-    struct Asset
-    {
-        const char *type;
-        const char *property;
-        const char *unreadable;
-        const char *uncopyable;
-    };
-    static constexpr Asset kinds[] = {
-        {"ImageDisplay", "imagePath", QT_TRANSLATE_NOOP("fhmi", "图片不存在或不可读: %1"),
-         QT_TRANSLATE_NOOP("fhmi", "无法复制图片: %1")},
-        {"CanConfigCard", "dbcFile", QT_TRANSLATE_NOOP("fhmi", "DBC 文件不存在或不可读: %1"),
-         QT_TRANSLATE_NOOP("fhmi", "无法复制 DBC 文件: %1")},
-    };
     for (int i = 0; i < widgets.size(); ++i) {
         QJsonObject widget = widgets.at(i).toObject();
         QJsonObject props = widget.value(QStringLiteral("properties")).toObject();
-        for (const Asset &kind : kinds) {
+        for (const BundledAssetKind &kind : kBundledAssetKinds) {
             const QString property = QLatin1String(kind.property);
             const QString file = props.value(property).toString();
             if (widget.value(QStringLiteral("type")).toString() != QLatin1String(kind.type) || file.isEmpty()) {
@@ -164,6 +192,21 @@ bool bundleImages(QJsonArray &widgets, const QDir &base, const QDir &assets, QSe
         widgets[i] = widget;
     }
     return true;
+}
+
+bool removePath(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.exists() && !info.isSymLink()) {
+        return true;
+    }
+    return info.isDir() && !info.isSymLink() ? QDir(path).removeRecursively() : QFile::remove(path);
+}
+
+bool movePath(const QString &from, const QString &to)
+{
+    const QFileInfo info(from);
+    return info.isDir() && !info.isSymLink() ? QDir().rename(from, to) : QFile::rename(from, to);
 }
 
 #ifdef Q_OS_MACOS
@@ -603,11 +646,35 @@ QString ExportService::runtimePath()
     return QString();
 }
 
-QString ExportService::exportApplication(const Project &project, const QString &outputDir, QString *error)
+ExportService::Appearance ExportService::currentAppearance()
+{
+    const auto *config = FluentQt::FluentConfig::instance();
+    return {config->themeMode(), config->themeColor(), config->localeName()};
+}
+
+QString ExportService::targetPath(const Project &project, const QString &outputDir)
+{
+    const QString name = safeName(project.appName);
+#ifdef Q_OS_MACOS
+    return QDir(outputDir).filePath(name + QStringLiteral(".app"));
+#elif defined(Q_OS_LINUX)
+    return QDir(outputDir).filePath(name + QStringLiteral(".tar.gz"));
+#else
+    return QDir(outputDir).filePath(name);
+#endif
+}
+
+QString ExportService::exportApplication(const Project &project, const QString &outputDir, QString *error,
+                                         bool overwrite, const std::optional<Appearance> &appearance)
 {
     const QString runtime = runtimePath();
     if (runtime.isEmpty()) {
         fail(error, QCoreApplication::translate("fhmi", "找不到 FluentHMI Runtime，请确认它与 Studio 一同安装"));
+        return QString();
+    }
+    // Validate the project schema, icon, and every referenced asset before copying the runtime.
+    Project validated;
+    if (!Project::fromJson(project.toJson(), &validated, error)) {
         return QString();
     }
     const QString name = safeName(project.appName);
@@ -620,22 +687,21 @@ QString ExportService::exportApplication(const Project &project, const QString &
              QCoreApplication::translate("fhmi", "图标不存在或不可读: %1").arg(QDir::toNativeSeparators(iconSource)));
         return QString();
     }
+    if (!validateAssets(widgets, QDir(project.assetBaseDir()), error)) {
+        return QString();
+    }
 
+    const QString target = targetPath(project, outputDir);
 #ifdef Q_OS_MACOS
-    const QString target = QDir(outputDir).filePath(name + QStringLiteral(".app"));
     const QString resources = QDir(target).filePath(QStringLiteral("Contents/Resources"));
-#elif defined(Q_OS_LINUX)
-    // One file that holds the folder <name>/ and keeps the program executable on a USB stick or a download.
-    const QString target = QDir(outputDir).filePath(name + QStringLiteral(".tar.gz"));
-    const QString resources = target;
 #else
-    const QString target = QDir(outputDir).filePath(name);
     const QString resources = target;
 #endif
-    if (QFileInfo::exists(target)) {
+    if (!overwrite && QFileInfo::exists(target)) {
         fail(error, QCoreApplication::translate("fhmi", "目标已存在: %1").arg(QDir::toNativeSeparators(target)));
         return QString();
     }
+    const Appearance resolvedAppearance = appearance ? *appearance : currentAppearance();
 
     // Stage beside the target, so a failure never leaves a half-built application.
     const QString staging = target + QStringLiteral(".partial");
@@ -785,9 +851,8 @@ QString ExportService::exportApplication(const Project &project, const QString &
         return abort(QString());
     }
     // The studio's theme mode and colour, as its preview shows them, and its language setting.
-    if (!writeAppearance(stagedResources, FluentQt::FluentConfig::instance()->themeMode(),
-                         FluentQt::FluentConfig::instance()->themeColor(),
-                         FluentQt::FluentConfig::instance()->localeName(), error)) {
+    if (!writeAppearance(stagedResources, resolvedAppearance.themeMode, resolvedAppearance.themeColor,
+                         resolvedAppearance.localeName, error)) {
         return abort(QString());
     }
 
@@ -818,16 +883,34 @@ QString ExportService::exportApplication(const Project &project, const QString &
     if (!writeStartScript(appDir, QFileInfo(renamed).fileName(), error) || !packFolder(staging, name, archive, error)) {
         return abort(QString());
     }
-    if (!QFile::rename(archive, target)) {
-        fail(error, QCoreApplication::translate("fhmi", "无法写入 %1").arg(QDir::toNativeSeparators(target)));
-        return abort(QString());
-    }
-    QDir(staging).removeRecursively();
+    const QString commitSource = archive;
 #else
-    if (!QDir().rename(staging, target)) {
+    const QString commitSource = staging;
+#endif
+    QString backup;
+    if (overwrite && QFileInfo::exists(target)) {
+        backup = target + QStringLiteral(".old");
+        for (int n = 1; QFileInfo::exists(backup); ++n) {
+            backup = QStringLiteral("%1.old.%2").arg(target).arg(n);
+        }
+        if (!movePath(target, backup)) {
+            fail(error, QCoreApplication::translate("fhmi", "无法覆盖已存在的目标: %1")
+                            .arg(QDir::toNativeSeparators(target)));
+            return abort(QString());
+        }
+    }
+    if (!movePath(commitSource, target)) {
+        if (!backup.isEmpty()) {
+            movePath(backup, target);
+        }
         fail(error, QCoreApplication::translate("fhmi", "无法写入 %1").arg(QDir::toNativeSeparators(target)));
         return abort(QString());
     }
+    if (!backup.isEmpty()) {
+        removePath(backup);
+    }
+#ifdef Q_OS_LINUX
+    QDir(staging).removeRecursively();
 #endif
     return target;
 }

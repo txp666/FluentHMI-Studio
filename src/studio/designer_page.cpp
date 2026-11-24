@@ -24,6 +24,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QMimeData>
 #include <QtCore/QSet>
+#include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QTimer>
 #include <QtGui/QAction>
@@ -206,6 +207,43 @@ Project blankProject()
 QString projectFilter() { return QCoreApplication::translate("fhmi", "FluentHMI / PyQt UI Designer 工程 (*.uidp)"); }
 
 constexpr int kHistoryLimit = 100;
+constexpr int kMaxRecentProjects = 10;
+const QString LastProjectDirKey = QStringLiteral("studio/lastProjectDir");
+const QString RecentProjectsKey = QStringLiteral("studio/recentProjects");
+
+QStringList loadRecentProjects()
+{
+    const QStringList stored = QSettings().value(RecentProjectsKey).toStringList();
+    QStringList valid;
+    for (const QString &path : stored) {
+        const QString clean = QDir::cleanPath(path);
+        if (!clean.isEmpty() && QFileInfo(clean).isFile() && !valid.contains(clean)) {
+            valid.append(clean);
+        }
+    }
+    if (valid != stored) {
+        QSettings().setValue(RecentProjectsKey, valid);
+    }
+    return valid;
+}
+
+void rememberProjectPath(const QString &path)
+{
+    const QFileInfo info(path);
+    const QString abs = QDir::cleanPath(info.absoluteFilePath());
+    if (abs.isEmpty()) {
+        return;
+    }
+    QSettings settings;
+    settings.setValue(LastProjectDirKey, info.absolutePath());
+    QStringList recent = loadRecentProjects();
+    recent.removeAll(abs);
+    recent.prepend(abs);
+    while (recent.size() > kMaxRecentProjects) {
+        recent.removeLast();
+    }
+    settings.setValue(RecentProjectsKey, recent);
+}
 
 // Copied widgets retain their source version. Plain snippets without a version are written for this editor.
 std::optional<QJsonObject> clipboardDocument(const QByteArray &content, bool plainText)
@@ -922,6 +960,29 @@ bool DesignerPage::newProject()
     return true;
 }
 
+void DesignerPage::showRecentProjectsMenu(const QPoint &globalPos)
+{
+    auto *menu = new FluentQt::RoundMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    const QStringList recent = loadRecentProjects();
+    if (recent.isEmpty()) {
+        QAction *empty = menu->addAction(tr("暂无最近打开的工程"));
+        empty->setEnabled(false);
+    } else {
+        for (const QString &file : recent) {
+            const QFileInfo info(file);
+            QAction *entry = menu->addAction(
+                QStringLiteral("%1  (%2)").arg(info.fileName(), info.dir().dirName()));
+            entry->setToolTip(QDir::toNativeSeparators(file));
+            connect(entry, &QAction::triggered, this, [this, file]() { openProject(file); });
+        }
+        menu->addSeparator();
+        QAction *clearAct = menu->addAction(tr("清空最近列表"));
+        connect(clearAct, &QAction::triggered, this, []() { QSettings().remove(RecentProjectsKey); });
+    }
+    menu->exec(globalPos.isNull() ? QCursor::pos() : globalPos, true);
+}
+
 bool DesignerPage::openProject(const QString &path)
 {
     if (!maybeSave()) {
@@ -929,7 +990,11 @@ bool DesignerPage::openProject(const QString &path)
     }
     QString file = path;
     if (file.isEmpty()) {
-        file = QFileDialog::getOpenFileName(this, tr("打开工程"), QString(), projectFilter());
+        const QString remembered = QSettings().value(LastProjectDirKey).toString();
+        const QString startDir = !remembered.isEmpty() && QDir(remembered).exists()
+                                     ? remembered
+                                     : (m_project.filePath.isEmpty() ? QString() : QFileInfo(m_project.filePath).absolutePath());
+        file = QFileDialog::getOpenFileName(this, tr("打开工程"), startDir, projectFilter());
         if (file.isEmpty()) {
             return false;
         }
@@ -941,6 +1006,7 @@ bool DesignerPage::openProject(const QString &path)
         return false;
     }
     load(project);
+    rememberProjectPath(file);
     emit notify(tr("已打开"), QFileInfo(file).fileName(), false);
     return true;
 }
@@ -952,8 +1018,12 @@ bool DesignerPage::save()
 
 bool DesignerPage::saveAs()
 {
-    const QString suggested = m_project.filePath.isEmpty() ? m_project.appName + QStringLiteral(".uidp")
-                                                           : m_project.filePath;
+    QString suggested = m_project.filePath;
+    if (suggested.isEmpty()) {
+        const QString remembered = QSettings().value(LastProjectDirKey).toString();
+        const QString baseName = m_project.appName + QStringLiteral(".uidp");
+        suggested = !remembered.isEmpty() && QDir(remembered).exists() ? QDir(remembered).filePath(baseName) : baseName;
+    }
     QString file = QFileDialog::getSaveFileName(this, tr("保存工程"), suggested, projectFilter());
     if (file.isEmpty()) {
         return false;
@@ -1020,6 +1090,7 @@ bool DesignerPage::saveTo(const QString &path)
     m_savedIndex = m_historyIndex;
     m_lastMergeKey.clear();
     setModified(false);
+    rememberProjectPath(m_project.filePath);
     emit notify(tr("已保存"), QFileInfo(path).fileName(), false);
     return true;
 }

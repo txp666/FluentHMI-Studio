@@ -435,6 +435,57 @@ class TestBinding : public QObject
         QCOMPARE(e->evaluate(qlonglong(21)).toLongLong(), 42);
         QCOMPARE(e->evaluate(QStringLiteral("text")).toString(), QStringLiteral("text"));
     }
+
+    void expressionBuiltinFunctions()
+    {
+        const auto eval = [](const char *expression, const QVariant &value) {
+            const QVariant result = Expression::evaluate(QString::fromUtf8(expression), value);
+            return result.isValid() ? displayString(result) : QStringLiteral("raw");
+        };
+        QCOMPARE(eval("abs(-42)", 0), QStringLiteral("42"));
+        QCOMPARE(eval("abs(-3.5)", 0), QStringLiteral("3.5"));
+        QCOMPARE(eval("abs(value)", -7), QStringLiteral("7"));
+        QCOMPARE(eval("min(5, 2, 9, -1)", 0), QStringLiteral("-1"));
+        QCOMPARE(eval("max(5, 2, 9.5, -1)", 0), QStringLiteral("9.5"));
+        QCOMPARE(eval("round(3.6)", 0), QStringLiteral("4"));
+        QCOMPARE(eval("round(-3.6)", 0), QStringLiteral("-4"));
+        QCOMPARE(eval("round(3.14159, 2)", 0), QStringLiteral("3.14"));
+        QCOMPARE(eval("round(1234, -2)", 0), QStringLiteral("1200"));
+        QCOMPARE(eval("clamp(value, 0, 100)", -5), QStringLiteral("0"));
+        QCOMPARE(eval("clamp(value, 0, 100)", 45), QStringLiteral("45"));
+        QCOMPARE(eval("clamp(value, 0, 100)", 150), QStringLiteral("100"));
+        QCOMPARE(eval("clamp(5, 10, 0)", 0), QStringLiteral("raw")); // lo > hi is an error
+        QCOMPARE(eval("abs()", 0), QStringLiteral("raw"));
+        QCOMPARE(eval("min(1)", 0), QStringLiteral("raw"));
+        QCOMPARE(eval("clamp(1, 2)", 0), QStringLiteral("raw"));
+        QCOMPARE(eval("round(1.5, 1.5)", 0), QStringLiteral("raw"));
+
+        bool valid = false;
+        bool usesValue = false;
+        const QStringList refs = Expression::references(
+            QStringLiteral("clamp(abs(T['delta']) + min(T['a'], value), 0, max(T['hi'], 10))"), &valid, &usesValue);
+        QVERIFY(valid);
+        QVERIFY(usesValue);
+        QCOMPARE(refs, (QStringList{QStringLiteral("delta"), QStringLiteral("a"), QStringLiteral("hi")}));
+        QCOMPARE(Expression::renameReference(QStringLiteral("clamp(T['a'], 0, 10)"), QStringLiteral("a"),
+                                             QStringLiteral("temp")),
+                 QStringLiteral("clamp(T['temp'], 0, 10)"));
+
+        bool badValid = true;
+        Expression::references(QStringLiteral("abs(1, 2)"), &badValid);
+        QVERIFY(!badValid);
+
+        const QVariant resolved = Expression::evaluate(
+            QStringLiteral("round(clamp(T['v'] - T['off'], 0, 100), 1)"), QVariant(),
+            [](const QString &name) -> QVariant {
+                if (name == QLatin1String("v"))
+                    return 25.37;
+                if (name == QLatin1String("off"))
+                    return 0.1;
+                return {};
+            });
+        QCOMPARE(resolved.toDouble(), 25.3);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestBinding)

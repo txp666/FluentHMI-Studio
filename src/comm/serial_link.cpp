@@ -105,7 +105,6 @@ bool SerialLink::open(const SerialSettings &settings, QString *error)
         return true;
     }
     m_port.setPortName(settings.portName);
-    m_port.setBaudRate(settings.baudRate);
 
     static const QHash<QString, QSerialPort::DataBits> dataBits = {{QStringLiteral("5"), QSerialPort::Data5},
                                                                    {QStringLiteral("6"), QSerialPort::Data6},
@@ -120,15 +119,21 @@ bool SerialLink::open(const SerialSettings &settings, QString *error)
         {QStringLiteral("1"), QSerialPort::OneStop},
         {QStringLiteral("1.5"), QSerialPort::OneAndHalfStop},
         {QStringLiteral("2"), QSerialPort::TwoStop}};
-    m_port.setDataBits(dataBits.value(settings.dataBits, QSerialPort::Data8));
-    m_port.setParity(parity.value(settings.parity, QSerialPort::NoParity));
-    m_port.setStopBits(stopBits.value(settings.stopBits, QSerialPort::OneStop));
-    if (settings.flowControl == QLatin1String("RTS/CTS")) {
-        m_port.setFlowControl(QSerialPort::HardwareControl);
-    } else if (settings.flowControl == QLatin1String("XON/XOFF")) {
-        m_port.setFlowControl(QSerialPort::SoftwareControl);
-    } else {
-        m_port.setFlowControl(QSerialPort::NoFlowControl);
+    const QSerialPort::FlowControl flow = settings.flowControl == QLatin1String("RTS/CTS")
+                                              ? QSerialPort::HardwareControl
+                                              : (settings.flowControl == QLatin1String("XON/XOFF")
+                                                     ? QSerialPort::SoftwareControl
+                                                     : QSerialPort::NoFlowControl);
+    if (!m_port.setBaudRate(settings.baudRate) ||
+        !m_port.setDataBits(dataBits.value(settings.dataBits, QSerialPort::Data8)) ||
+        !m_port.setParity(parity.value(settings.parity, QSerialPort::NoParity)) ||
+        !m_port.setStopBits(stopBits.value(settings.stopBits, QSerialPort::OneStop)) ||
+        !m_port.setFlowControl(flow)) {
+        if (error) {
+            const QString detail = m_port.errorString();
+            *error = detail.isEmpty() ? tr("串口参数不受支持") : tr("串口参数配置失败: %1").arg(detail);
+        }
+        return false;
     }
 
     if (!m_port.open(QIODevice::ReadWrite)) {

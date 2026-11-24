@@ -22,6 +22,8 @@ class MainWindow : public FluentQt::FluentWindow
 
   protected:
     void closeEvent(QCloseEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
   private:
     void exportApplication();
@@ -33,6 +35,7 @@ class MainWindow : public FluentQt::FluentWindow
     UpdateController *m_updates = nullptr;
     // Set while closing to restart into a downloaded update.
     bool m_restartForUpdate = false;
+    bool m_exporting = false;
 };
 
 } // namespace fhmi

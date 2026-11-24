@@ -24,7 +24,7 @@ namespace {
 QString projectArgument(const QStringList &args)
 {
     for (int i = 1; i < args.size(); ++i) {
-        if (args.at(i).endsWith(QLatin1String(".uidp"), Qt::CaseInsensitive) && QFileInfo(args.at(i)).isFile()) {
+        if (args.at(i).endsWith(QLatin1String(".uidp"), Qt::CaseInsensitive)) {
             return args.at(i);
         }
     }
@@ -66,6 +66,7 @@ int main(int argc, char *argv[])
         FluentQt::FluentConfig::instance()->load();
     }
     FluentQt::ThemeManager::instance()->setTheme(FluentQt::FluentConfig::instance()->themeMode());
+    FluentQt::ThemeManager::instance()->setAccentColor(FluentQt::FluentConfig::instance()->themeColor());
 
     // A project named on the command line comes first; otherwise this is an exported application,
     // which starts with the theme mode and colour and the language setting of the studio that exported it.

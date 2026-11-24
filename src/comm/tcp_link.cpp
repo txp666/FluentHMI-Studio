@@ -10,16 +10,29 @@ namespace fhmi {
 
 TcpClientLink::TcpClientLink(QObject *parent) : Link(parent)
 {
+    m_connectTimer.setSingleShot(true);
+    connect(&m_connectTimer, &QTimer::timeout, this, [this]() {
+        if (!isConnecting()) {
+            return;
+        }
+        m_socket.abort();
+        emit errorOccurred(tr("TCP 连接超时 (%1:%2)").arg(m_host).arg(m_port));
+        emit connectedChanged(false);
+    });
     connect(&m_socket, &QTcpSocket::connected, this, [this]() {
+        m_connectTimer.stop();
+        m_socket.setSocketOption(QAbstractSocket::KeepAliveOption, 1);
         resetDefaultParser();
         emit connectedChanged(true);
     });
     connect(&m_socket, &QTcpSocket::disconnected, this, [this]() {
+        m_connectTimer.stop();
         resetDefaultParser();
         emit connectedChanged(false);
     });
     connect(&m_socket, &QTcpSocket::readyRead, this, [this]() { deliver(defaultParser(), m_socket.readAll()); });
     connect(&m_socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError error) {
+        m_connectTimer.stop();
         if (error != QAbstractSocket::RemoteHostClosedError) {
             emit errorOccurred(m_socket.errorString());
         }
@@ -28,20 +41,31 @@ TcpClientLink::TcpClientLink(QObject *parent) : Link(parent)
 
 TcpClientLink::~TcpClientLink()
 {
+    m_connectTimer.stop();
     m_socket.blockSignals(true);
     m_socket.abort();
 }
 
+void TcpClientLink::setConnectTimeoutMs(int timeoutMs)
+{
+    m_connectTimeoutMs = qMax(0, timeoutMs);
+}
+
 void TcpClientLink::connectTo(const QString &host, quint16 port)
 {
+    m_connectTimer.stop();
     m_socket.abort();
     m_host = host;
     m_port = port;
+    if (m_connectTimeoutMs > 0) {
+        m_connectTimer.start(m_connectTimeoutMs);
+    }
     m_socket.connectToHost(host, port);
 }
 
 void TcpClientLink::close()
 {
+    m_connectTimer.stop();
     if (m_socket.state() == QAbstractSocket::UnconnectedState) {
         return;
     }
@@ -102,9 +126,16 @@ TcpServerLink::~TcpServerLink()
 bool TcpServerLink::listen(const QString &address, quint16 port, QString *error)
 {
     close();
-    const QHostAddress host = address.trimmed().isEmpty() || address == QLatin1String("0.0.0.0")
-                                  ? QHostAddress(QHostAddress::AnyIPv4)
-                                  : QHostAddress(address.trimmed());
+    const QString trimmed = address.trimmed();
+    QHostAddress host;
+    if (trimmed.isEmpty() || trimmed == QLatin1String("0.0.0.0")) {
+        host = QHostAddress(QHostAddress::AnyIPv4);
+    } else if (!host.setAddress(trimmed)) {
+        if (error) {
+            *error = tr("无效的监听地址: %1").arg(trimmed);
+        }
+        return false;
+    }
     if (!m_server.listen(host, port)) {
         if (error) {
             *error = m_server.errorString();
@@ -194,6 +225,7 @@ qint64 TcpServerLink::writeReply(Parser *parser, const QByteArray &bytes)
 void TcpServerLink::onNewConnection()
 {
     while (QTcpSocket *socket = m_server.nextPendingConnection()) {
+        socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
         const QString address = socket->peerAddress().toString();
         const QString peer = networkEndpoint(address, socket->peerPort());
         auto parser = std::shared_ptr<Parser>(createStreamParser(peer));

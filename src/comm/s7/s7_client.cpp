@@ -164,6 +164,7 @@ struct S7Client::Impl {
     struct Session {
         S7::Config config;
         QList<S7::Point> points;
+        bool pointsInitialized = false;
         QPointer<QThread> thread;
         QPointer<S7Worker> worker;
         std::shared_ptr<std::atomic<quint64>> activeLife=std::make_shared<std::atomic<quint64>>(0);
@@ -261,7 +262,10 @@ void S7Client::setNeeds(const QList<S7::Need> &needs) {
     for(const auto &entry:d->sessions) {
         QList<S7::Point> points;
         for(const auto &need:needs) if(need.sourceCardId==entry.first)points.append(need.point);
-        auto *s=entry.second.get();s->points=points;
+        auto *s=entry.second.get();
+        if(s->pointsInitialized && s->points==points) continue;
+        s->pointsInitialized=true;
+        s->points=points;
         if(QPointer<S7Worker> worker=s->worker)
             QMetaObject::invokeMethod(worker.data(),[worker,points]{if(worker) worker->needs(points);},Qt::QueuedConnection);
     }

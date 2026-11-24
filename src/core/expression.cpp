@@ -628,7 +628,149 @@ class ExpressionParser
         if (acceptWord("False")) {
             return boolValue(false);
         }
+        for (const char *fn : {"abs", "min", "max", "round", "clamp"}) {
+            if (acceptWord(fn)) {
+                return callBuiltin(QLatin1String(fn));
+            }
+        }
         return number();
+    }
+
+    std::optional<Value> callBuiltin(const QLatin1String &name)
+    {
+        if (!accept("(")) {
+            return std::nullopt;
+        }
+        QList<Value> args;
+        if (!accept(")")) {
+            while (true) {
+                const auto arg = orExpr();
+                if (!arg) {
+                    return std::nullopt;
+                }
+                args.append(*arg);
+                if (accept(")")) {
+                    break;
+                }
+                if (!accept(",")) {
+                    return std::nullopt;
+                }
+            }
+        }
+        const auto arityOk = [&]() {
+            if (name == QLatin1String("abs"))
+                return args.size() == 1;
+            if (name == QLatin1String("min") || name == QLatin1String("max"))
+                return args.size() >= 2;
+            if (name == QLatin1String("round"))
+                return args.size() == 1 || args.size() == 2;
+            if (name == QLatin1String("clamp"))
+                return args.size() == 3;
+            return false;
+        };
+        if (!arityOk()) {
+            return std::nullopt;
+        }
+        bool hasUnknown = false;
+        for (const Value &arg : args) {
+            if (arg.kind == Kind::Error) {
+                return Value{};
+            }
+            if (arg.kind == Kind::Unknown) {
+                hasUnknown = true;
+            }
+        }
+        if (hasUnknown) {
+            return Value{Kind::Unknown};
+        }
+        if (name == QLatin1String("abs")) {
+            const Value &v = args.first();
+            if (v.kind == Kind::Float) {
+                return floatValue(std::fabs(v.real));
+            }
+            if (v.integer == std::numeric_limits<qint64>::min()) {
+                return Value{};
+            }
+            return intValue(v.integer < 0 ? -v.integer : v.integer);
+        }
+        if (name == QLatin1String("min") || name == QLatin1String("max")) {
+            const bool wantMax = name == QLatin1String("max");
+            Value best = args.first();
+            for (qsizetype i = 1; i < args.size(); ++i) {
+                const int cmp = compare(args.at(i), best);
+                if (wantMax ? cmp > 0 : cmp < 0) {
+                    best = args.at(i);
+                }
+            }
+            return best;
+        }
+        if (name == QLatin1String("clamp")) {
+            const Value &x = args.at(0);
+            const Value &lo = args.at(1);
+            const Value &hi = args.at(2);
+            if (compare(lo, hi) > 0) {
+                return Value{};
+            }
+            if (compare(x, lo) < 0) {
+                return lo;
+            }
+            if (compare(x, hi) > 0) {
+                return hi;
+            }
+            return x;
+        }
+        // round(x[, ndigits])
+        const Value &v = args.first();
+        if (args.size() == 1) {
+            if (v.isInteger()) {
+                return intValue(v.integer);
+            }
+            if (!std::isfinite(v.real)) {
+                return Value{};
+            }
+            const double r = std::round(v.real);
+            if (std::fabs(r) >= 9223372036854775808.0) {
+                return Value{};
+            }
+            return intValue(qint64(r));
+        }
+        if (!args.at(1).isInteger()) {
+            return Value{};
+        }
+        const qint64 ndigits = args.at(1).integer;
+        if (v.isInteger()) {
+            if (ndigits >= 0) {
+                return intValue(v.integer);
+            }
+            if (ndigits < -18) {
+                return intValue(0);
+            }
+            const double factor = std::pow(10.0, double(-ndigits));
+            const double r = std::round(double(v.integer) / factor) * factor;
+            if (!std::isfinite(r) || std::fabs(r) >= 9223372036854775808.0) {
+                return Value{};
+            }
+            return intValue(qint64(r));
+        }
+        if (!std::isfinite(v.real)) {
+            return Value{};
+        }
+        if (ndigits >= 0) {
+            if (ndigits > 300) {
+                return floatValue(v.real);
+            }
+            const double factor = std::pow(10.0, double(ndigits));
+            const double scaled = v.real * factor;
+            if (!std::isfinite(scaled)) {
+                return floatValue(v.real);
+            }
+            return floatValue(std::round(scaled) / factor);
+        }
+        if (ndigits < -300) {
+            return floatValue(0.0);
+        }
+        const double factor = std::pow(10.0, double(-ndigits));
+        return floatValue(std::round(v.real / factor) * factor);
     }
 
     // Digits `isDigit` accepts, with single underscores between them as Python allows; the

@@ -37,6 +37,7 @@ class DesignerPage : public QWidget
     bool maybeSave();
     bool newProject();
     bool openProject(const QString &path = QString());
+    void showRecentProjectsMenu(const QPoint &globalPos = QPoint());
     bool save();
     bool saveAs();
 

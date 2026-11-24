@@ -3,6 +3,7 @@
 #include "comm/link.h"
 
 #include <QtCore/QHash>
+#include <QtCore/QTimer>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 
@@ -19,6 +20,7 @@ class TcpClientLink : public Link
     explicit TcpClientLink(QObject *parent = nullptr);
     ~TcpClientLink() override;
 
+    void setConnectTimeoutMs(int timeoutMs);
     void connectTo(const QString &host, quint16 port);
     void close() override;
 
@@ -33,6 +35,8 @@ class TcpClientLink : public Link
 
   private:
     QTcpSocket m_socket;
+    QTimer m_connectTimer;
+    int m_connectTimeoutMs = 10000;
     QString m_host;
     quint16 m_port = 0;
 };

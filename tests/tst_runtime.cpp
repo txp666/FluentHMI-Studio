@@ -6288,6 +6288,55 @@ class TestRuntime : public QObject
         auto *chartClear = chartW->findChild<QToolButton *>(QStringLiteral("chartClear"));
         QVERIFY(tblPause && tblClear && chartPause && chartClear);
     }
+
+    void batch3ExportAndCommRobustness()
+    {
+        // 1. ExportService upfront asset validation and safe overwrite
+        if (!ExportService::runtimePath().isEmpty()) {
+            QTemporaryDir outDir;
+            QVERIFY(outDir.isValid());
+            Project broken;
+            broken.appName = QStringLiteral("BrokenAssetApp");
+            broken.widgets.append(QJsonObject{
+                {"id", "img1"}, {"type", "ImageDisplay"}, {"properties", QJsonObject{{"imagePath", "missing.png"}}}});
+            QString error;
+            QVERIFY(ExportService::exportApplication(broken, outDir.path(), &error).isEmpty());
+            QVERIFY(error.contains(QStringLiteral("missing.png")));
+            QVERIFY(!QFileInfo::exists(ExportService::targetPath(broken, outDir.path())));
+            QVERIFY(!QFileInfo::exists(ExportService::targetPath(broken, outDir.path()) + QStringLiteral(".partial")));
+
+            Project valid;
+            valid.appName = QStringLiteral("OverwriteApp");
+            error.clear();
+            const QString first = ExportService::exportApplication(valid, outDir.path(), &error);
+            QVERIFY2(!first.isEmpty(), qPrintable(error));
+            QVERIFY(ExportService::exportApplication(valid, outDir.path(), &error, false).isEmpty());
+            const QString second = ExportService::exportApplication(valid, outDir.path(), &error, true);
+            QVERIFY2(!second.isEmpty(), qPrintable(error));
+            QCOMPARE(second, first);
+            QVERIFY(!QFileInfo::exists(first + QStringLiteral(".old")));
+        }
+
+        // 2. TcpServerLink rejects invalid listen address instead of silently binding to Any
+        {
+            TcpServerLink server;
+            QString error;
+            QVERIFY(!server.listen(QStringLiteral("not-an-ip-address"), 0, &error));
+            QVERIFY(!error.isEmpty());
+            QVERIFY(!server.isConnected());
+        }
+
+        // 3. DesignerPage remembers opened project in recent list and last directory
+        {
+            const QDir root(QStringLiteral(FHMI_EXAMPLES_DIR));
+            const QString demoPath = QDir::cleanPath(QFileInfo(root.filePath(QStringLiteral("demo.uidp"))).absoluteFilePath());
+            DesignerPage page;
+            QVERIFY(page.openProject(demoPath));
+            const QStringList recent = QSettings().value(QStringLiteral("studio/recentProjects")).toStringList();
+            QVERIFY(!recent.isEmpty());
+            QCOMPARE(recent.first(), demoPath);
+        }
+    }
 };
 
 QTEST_MAIN(TestRuntime)

@@ -444,8 +444,9 @@ DEB_DEPENDS = ("apt", "pkexec", "libc6 (>= 2.39)", "libstdc++6", "libgcc-s1") + 
     "libxcb-cursor0", "libxcb-icccm4", "libxcb-image0", "libxcb-keysyms1", "libxcb-render-util0", "libxcb-util1",
     "libxkbcommon-x11-0")
 # FluentQtWidgets' frameless title bar is proven on X11, which Wayland desktops run through XWayland.
+# Only force xcb when a desktop display is present so headless or framebuffer environments are not broken.
 LAUNCHER = f"""#!/bin/sh
-if [ -z "${{QT_QPA_PLATFORM:-}}" ]; then
+if [ -z "${{QT_QPA_PLATFORM:-}}" ] && ( [ -n "${{DISPLAY:-}}" ] || [ -n "${{WAYLAND_DISPLAY:-}}" ] ); then
     QT_QPA_PLATFORM=xcb
     export QT_QPA_PLATFORM
 fi

@@ -113,6 +113,10 @@ bool SlcanBackend::open(const CanSettings &settings, QString *error)
     }
     m_port.setPortName(settings.channel.trimmed());
     m_port.setBaudRate(kSerialBaud);
+    m_port.setDataBits(QSerialPort::Data8);
+    m_port.setParity(QSerialPort::NoParity);
+    m_port.setStopBits(QSerialPort::OneStop);
+    m_port.setFlowControl(QSerialPort::NoFlowControl);
     if (!m_port.open(QIODevice::ReadWrite)) {
         return fail(tr("无法打开串口 %1: %2").arg(settings.channel, m_port.errorString()));
     }
