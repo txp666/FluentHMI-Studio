@@ -23,6 +23,19 @@ QString tr(const char *text) { return QCoreApplication::translate("fhmi", text);
 
 void openPeriodicTasks(PeriodicSender *sender, QWidget *window)
 {
+    if (!sender) {
+        return;
+    }
+    if (window) {
+        if (auto *existing = window->findChild<AppDialog *>(QStringLiteral("periodicTasksDialog"),
+                                                            Qt::FindDirectChildrenOnly)) {
+            if (existing->isVisible()) {
+                existing->raise();
+                existing->activateWindow();
+                return;
+            }
+        }
+    }
     auto *dialog = new AppDialog(tr("周期任务"), window);
     dialog->setObjectName(QStringLiteral("periodicTasksDialog"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -45,9 +58,14 @@ void openPeriodicTasks(PeriodicSender *sender, QWidget *window)
     table->verticalHeader()->setDefaultSectionSize(42);
     auto *header = table->horizontalHeader();
     header->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    header->setSectionResizeMode(QHeaderView::ResizeToContents);
+    header->setStretchLastSection(false);
+    header->setSectionResizeMode(QHeaderView::Interactive);
     header->setSectionResizeMode(0, QHeaderView::Stretch);
     header->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->setColumnWidth(2, 86);
+    table->setColumnWidth(3, 108);
+    table->setColumnWidth(4, 78);
+    table->setColumnWidth(5, 68);
     dialog->viewLayout()->addWidget(table, 1);
 
     auto *empty = new FluentQt::BodyLabel(tr("当前没有周期任务"), dialog);

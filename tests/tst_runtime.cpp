@@ -6400,6 +6400,61 @@ class TestRuntime : public QObject
         QVERIFY(txCount >= 5);
         QVERIFY(rxCount >= 5);
     }
+
+    void projectDataMonitorStandaloneAndThrottled()
+    {
+        Project proj;
+        QString err;
+        const QDir root(QStringLiteral(FHMI_EXAMPLES_DIR));
+        QVERIFY2(Project::load(root.filePath(QStringLiteral("tutorials/14-工程数据与报警.uidp")), &proj, &err),
+                 qPrintable(err));
+        PlayerWindow player(proj, nullptr, true);
+        player.show();
+        QApplication::processEvents();
+
+        auto *btn = player.titleBar()->findChild<QPushButton *>(QStringLiteral("playerDataMonitorButton"));
+        QVERIFY(btn);
+        btn->click();
+        QApplication::processEvents();
+
+        const auto findMonitor = []() -> QWidget * {
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                if (w->objectName() == QLatin1String("projectDataMonitor") && w->isVisible())
+                    return w;
+            }
+            return nullptr;
+        };
+        QPointer<QWidget> first = findMonitor();
+        QVERIFY(first);
+        QVERIFY(first->isWindow());
+        QVERIFY(first->parentWidget() == nullptr); // decoupled from PlayerWindow's QGraphicsView
+
+        // Second click reuses the existing monitor window instead of stacking duplicates.
+        btn->click();
+        QApplication::processEvents();
+        int count = 0;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            if (w->objectName() == QLatin1String("projectDataMonitor") && w->isVisible())
+                ++count;
+        }
+        QCOMPARE(count, 1);
+        QCOMPARE(findMonitor(), first.data());
+
+        // Rapid updates are coalesced and shown after the 150ms flush interval.
+        auto *data = player.surface()->context()->projectData();
+        for (int i = 1; i <= 50; ++i) {
+            data->setSample(QStringLiteral("电量"), i, {}, DataQuality::Current, QDateTime::currentDateTimeUtc());
+            data->evaluate();
+        }
+        auto *table = first->findChild<QTableWidget *>(QStringLiteral("projectDataReadings"));
+        QVERIFY(table);
+        QTRY_COMPARE_WITH_TIMEOUT(table->item(2, 1)->text(), QStringLiteral("50"), 1000);
+
+        // Closing PlayerWindow automatically closes the monitor window.
+        player.close();
+        QApplication::processEvents();
+        QVERIFY(!first || !first->isVisible());
+    }
 };
 
 QTEST_MAIN(TestRuntime)

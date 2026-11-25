@@ -18,6 +18,9 @@ class PlayerWindow : public FluentQt::FluentWidget
 
     RuntimeSurface *surface() const { return m_surface; }
 
+  protected:
+    void resizeEvent(QResizeEvent *event) override;
+
   private:
     RuntimeSurface *m_surface = nullptr;
 };

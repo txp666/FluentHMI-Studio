@@ -6,6 +6,8 @@
 #include "runtime/runtime_surface.h"
 #include "runtime/ui_helpers.h"
 
+#include <FluentQtWidgets/Config.h>
+#include <FluentQtWidgets/Dialogs/Dialog.h>
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/InfoBar.h>
@@ -73,6 +75,8 @@ class CanvasView : public QGraphicsView
         setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         setAlignment(Qt::AlignCenter);
+        setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
+        setOptimizationFlag(QGraphicsView::DontSavePainterState);
         setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
         setStyleSheet(QStringLiteral("QGraphicsView { background: transparent; border: none; }"));
     }
@@ -100,6 +104,9 @@ class CanvasView : public QGraphicsView
 
 PlayerWindow::PlayerWindow(const Project &project, QWidget *parent, bool startRuntime) : FluentQt::FluentWidget(parent)
 {
+    // FluentWidget enables Windows 11 Mica by default; follow the studio setting (default off)
+    // so DWM transparent compositing does not stall QGraphicsView + dialog repaints.
+    setMicaEffectEnabled(FluentQt::FluentConfig::instance()->isMicaEnabled());
 #ifdef FHMI_CAN_DIAGNOSTICS
     setWindowTitle(project.appName + QStringLiteral(" [CAN diagnostics]"));
 #else
@@ -157,6 +164,17 @@ PlayerWindow::PlayerWindow(const Project &project, QWidget *parent, bool startRu
         size = size.boundedTo(screen->availableGeometry().size() * 0.95);
     }
     resize(size);
+}
+
+void PlayerWindow::resizeEvent(QResizeEvent *event)
+{
+    FluentQt::FluentWidget::resizeEvent(event);
+    // FluentWidget::resizeEvent raises titleBar(); keep any active overlay dialog above it.
+    for (auto *overlay : findChildren<FluentQt::MaskDialogBase *>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (overlay->isVisible()) {
+            overlay->raise();
+        }
+    }
 }
 
 } // namespace fhmi
