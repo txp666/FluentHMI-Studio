@@ -1537,6 +1537,8 @@ class TestRuntime : public QObject
             std::atomic<int> open{0};
             std::atomic<int> close{0};
             std::atomic<int> send{0};
+            QSemaphore completeOpen;
+            QSemaphore completeClose;
             QSemaphore completeSend;
         };
         struct DelayedBackend : CanBackend
@@ -1548,15 +1550,16 @@ class TestRuntime : public QObject
             ~DelayedBackend() override { close(); }
             bool open(const CanSettings &, QString *) override
             {
-                ++calls->open;
-                QThread::msleep(120);
+                if (++calls->open == 1 && !calls->completeOpen.tryAcquire(1, 3000))
+                    return false;
                 up = true;
                 return true;
             }
             void close() override
             {
                 if (up) {
-                    QThread::msleep(120);
+                    if (calls->close.load() == 0)
+                        calls->completeClose.tryAcquire(1, 3000);
                     up = false;
                     ++calls->close;
                 }
@@ -1577,13 +1580,17 @@ class TestRuntime : public QObject
         QSignalSpy opened(&session, &CanSession::opened), stopped(&session, &CanSession::closed);
         int ticks = 0;
         QTimer heartbeat;
+        heartbeat.setTimerType(Qt::PreciseTimer);
         heartbeat.setInterval(10);
         connect(&heartbeat, &QTimer::timeout, this, [&] { ++ticks; });
         heartbeat.start();
         QVERIFY(session.open({}, nullptr));
+        QTRY_COMPARE(calls->open.load(), 1);
+        QTRY_VERIFY(ticks >= 3);
+        QCOMPARE(opened.size(), 0); // UI ticked while the driver open call was still running
+        calls->completeOpen.release();
         QTRY_COMPARE(opened.size(), 1);
         QVERIFY(session.isOpen());
-        QVERIFY(ticks >= 3);
 
         QVERIFY(session.send({}, nullptr));
         QVERIFY(session.send({}, nullptr));
@@ -1591,8 +1598,10 @@ class TestRuntime : public QObject
         const int before = ticks;
         session.close();
         calls->completeSend.release();
+        QTRY_VERIFY(ticks - before >= 3);
+        QCOMPARE(stopped.size(), 0); // UI ticked while the driver close call was still running
+        calls->completeClose.release();
         QTRY_COMPARE(stopped.size(), 1);
-        QVERIFY(ticks - before >= 3);
         QCOMPARE(calls->close.load(), 1);
         QCOMPARE(calls->send.load(), 1); // only the already running driver call can finish
 
