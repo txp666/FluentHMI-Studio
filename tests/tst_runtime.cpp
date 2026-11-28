@@ -41,6 +41,8 @@
 #include "runtime/widgets/digital_timing_widget.h"
 #include "runtime/widgets/display_widgets.h"
 #include "runtime/widgets/industrial_widget.h"
+#include "studio/ai_assistant_panel.h"
+#include "studio/ai_service.h"
 #include "studio/designer_page.h"
 #include "studio/export_service.h"
 #include <FluentQtWidgets/Window/FluentTitleBar.h>
@@ -6463,6 +6465,115 @@ class TestRuntime : public QObject
         player.close();
         QApplication::processEvents();
         QVERIFY(!first || !first->isVisible());
+    }
+
+    void aiAssistantPatchExtractApplyAndUndo()
+    {
+        DesignerPage page;
+        page.show();
+        QApplication::processEvents();
+
+        auto *rightTabs = page.findChild<FluentQt::SegmentedWidget *>(QStringLiteral("rightPanelTabs"));
+        auto *aiPanel = page.findChild<AiAssistantPanel *>(QStringLiteral("aiAssistantPanel"));
+        auto *scene = page.findChild<DesignScene *>();
+        QVERIFY(rightTabs && aiPanel && scene);
+        QCOMPARE(page.snapshot().widgets.size(), 0);
+
+        // 1. Extract and validate a patch that creates a current GaugeMeter (-2000..2000, 60A)
+        const QString replyCreate = QStringLiteral(
+            "为你创建一个电流仪表盘：\n"
+            "```fhmi-patch\n"
+            "{\n"
+            "  \"title\": \"新增电流仪表盘\",\n"
+            "  \"upsertWidgets\": [\n"
+            "    {\n"
+            "      \"id\": \"gaugeMeter1\",\n"
+            "      \"type\": \"GaugeMeter\",\n"
+            "      \"geometry\": {\"x\": 40, \"y\": 40, \"w\": 180, \"h\": 180},\n"
+            "      \"properties\": {\"title\": \"电流\", \"unit\": \"A\", \"minimum\": -2000, \"maximum\": 2000, \"value\": 60}\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```");
+        const AiPatchProposal createProposal = AiService::extractPatch(replyCreate, page.snapshot());
+        QVERIFY(createProposal.hasPatch);
+        QVERIFY2(createProposal.valid, qPrintable(createProposal.error));
+        QCOMPARE(createProposal.patchedProject.widgets.size(), 1);
+        QCOMPARE(createProposal.touchedWidgetIds, QStringList{QStringLiteral("gaugeMeter1")});
+
+        // Apply through AiAssistantPanel signal -> DesignerPage undo stack
+        emit aiPanel->applyProjectRequested(createProposal.patchedProject, createProposal.touchedWidgetIds);
+        QApplication::processEvents();
+        QCOMPARE(page.snapshot().widgets.size(), 1);
+        QVERIFY(page.canUndo());
+        CanvasItem *gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
+        QVERIFY(gauge);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), -2000.0);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("maximum")).toDouble(), 2000.0);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("value")).toDouble(), 60.0);
+
+        // 2. Partial update patch on existing widget (only id + changed property)
+        const QString replyUpdate = QStringLiteral(
+            "将最小值改为 0：\n"
+            "```fhmi-patch\n"
+            "{\n"
+            "  \"title\": \"修改电流仪表盘量程\",\n"
+            "  \"upsertWidgets\": [\n"
+            "    {\n"
+            "      \"id\": \"gaugeMeter1\",\n"
+            "      \"properties\": {\"minimum\": 0}\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```");
+        const AiPatchProposal updateProposal = AiService::extractPatch(replyUpdate, page.snapshot());
+        QVERIFY(updateProposal.hasPatch && updateProposal.valid);
+        emit aiPanel->applyProjectRequested(updateProposal.patchedProject, updateProposal.touchedWidgetIds);
+        QApplication::processEvents();
+        gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
+        QVERIFY(gauge);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), 0.0);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("maximum")).toDouble(), 2000.0);
+
+        // 3. Undo both AI steps via DesignerPage::undo()
+        page.undo();
+        QApplication::processEvents();
+        gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
+        QVERIFY(gauge);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), -2000.0);
+
+        page.undo();
+        QApplication::processEvents();
+        QCOMPARE(page.snapshot().widgets.size(), 0);
+
+        // 4. Patch with shorthand parseMode ("键值"), data points, alarms, and RealtimeChart curves
+        const QString replyComplex = QStringLiteral(
+            "```fhmi-patch\n"
+            "{\n"
+            "  \"title\": \"储能电池充放电监控台\",\n"
+            "  \"upsertWidgets\": [\n"
+            "    {\"id\": \"serial1\", \"type\": \"SerialConfigCard\", \"geometry\": {\"x\": 20, \"y\": 440, \"w\": 360, \"h\": 320}},\n"
+            "    {\"id\": \"gauge1\", \"type\": \"GaugeMeter\", \"geometry\": {\"x\": 20, \"y\": 140, \"w\": 180, \"h\": 180},\n"
+            "     \"properties\": {\"title\": \"电流\", \"unit\": \"A\", \"minimum\": 0, \"maximum\": 2000, \"value\": 125},\n"
+            "     \"binding\": {\"parseMode\": \"键值\", \"key\": \"current\", \"expression\": \"x * 0.1\"}},\n"
+            "    {\"id\": \"chart1\", \"type\": \"RealtimeChart\", \"geometry\": {\"x\": 420, \"y\": 140, \"w\": 400, \"h\": 280},\n"
+            "     \"properties\": {\"title\": \"充放电趋势\", \"curveCount\": 2, \"_curve_0_name\": \"电压\", \"_curve_0_parseMode\": \"键值\", \"_curve_0_key\": \"voltage\", \"_curve_1_name\": \"电流\", \"_curve_1_parseMode\": \"键值\", \"_curve_1_key\": \"current\"}},\n"
+            "    {\"id\": \"alarms1\", \"type\": \"AlarmList\", \"geometry\": {\"x\": 420, \"y\": 440, \"w\": 740, \"h\": 320}}\n"
+            "  ],\n"
+            "  \"points\": [\n"
+            "    {\"name\": \"current\", \"key\": \"current\"}\n"
+            "  ],\n"
+            "  \"alarms\": [\n"
+            "    {\"id\": \"过流报警\", \"condition\": \"current > 1500\", \"level\": \"紧急\", \"message\": \"电流超过 1500A\"}\n"
+            "  ]\n"
+            "}\n"
+            "```");
+        const AiPatchProposal complexProposal = AiService::extractPatch(replyComplex, page.snapshot());
+        QVERIFY(complexProposal.hasPatch);
+        QVERIFY2(complexProposal.valid, qPrintable(complexProposal.error));
+        QCOMPARE(complexProposal.patchedProject.widgets.size(), 4);
+        QCOMPARE(complexProposal.patchedProject.logic.value(QStringLiteral("points")).toArray().size(), 1);
+        QCOMPARE(complexProposal.patchedProject.logic.value(QStringLiteral("alarms")).toArray().size(), 1);
     }
 };
 

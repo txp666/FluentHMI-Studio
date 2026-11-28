@@ -235,7 +235,12 @@
 默认尺寸 140×30，最小 30×20；绑定数据时写入 `on`
 
 - `label`（标签，文本）默认 `"状态"`
-- `color`（颜色，选项）默认 `"green"`，可选 `"green"` `"red"` `"yellow"` `"blue"` `"gray"`
+- `color`（颜色，选项）默认 `"green"`，可选 `"green"` `"red"` `"yellow"` `"blue"` `"orange"` `"cyan"` `"purple"` `"white"` `"gray"`
+- `ledShape`（形状，选项）默认 `"圆形"`，可选 `"圆形"` `"圆角方形"` `"方形"` `"胶囊灯牌"`
+- `ledSize`（灯珠尺寸，选项）默认 `"随控件缩放"`，可选 `"随控件缩放"` `"小"` `"标准"` `"大"` `"超大"`
+- `labelPosition`（标签位置，选项）默认 `"右侧"`，可选 `"右侧"` `"底部"` `"内部居中"` `"隐藏"`
+- `fontSize`（字号，整数）默认 `14`，范围 10–64
+- `blink`（点亮闪烁，true/false）默认 `false`
 - `on`（点亮，true/false）默认 `true`
 - `onValue`（亮值，文本）默认 `"1"`
 - `offValue`（灭值，文本）默认 `"0"`

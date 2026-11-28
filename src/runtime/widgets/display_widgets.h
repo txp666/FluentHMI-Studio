@@ -3,6 +3,7 @@
 #include "core/value_text.h"
 #include "runtime/hmi_widget.h"
 
+#include <QtCore/QTimer>
 #include <QtGui/QImage>
 #include <QtGui/QTransform>
 
@@ -30,10 +31,17 @@ class LedWidget : public HmiWidget
   protected:
     void apply() override;
     void bindingStatusChanged(BindingStatus status) override;
+    void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
   private:
+    qreal lampDiameter() const;
+    void updateLayoutGeometry();
+    void updateBlinkTimer();
+
     FluentQt::BodyLabel *m_label = nullptr;
+    QTimer m_blinkTimer;
+    bool m_blinkVisible = true;
     bool m_on = true;
     bool m_known = true;
 };

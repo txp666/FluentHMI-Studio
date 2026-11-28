@@ -2,6 +2,7 @@
 
 #include "core/i18n.h"
 #include "runtime/ui_helpers.h"
+#include "studio/ai_service.h"
 #include "studio/update_controller.h"
 
 #include <FluentQtWidgets/Config.h>
@@ -9,13 +10,18 @@
 #include <FluentQtWidgets/FluentIcon.h>
 #include <FluentQtWidgets/Settings/SettingCard.h>
 #include <FluentQtWidgets/Theme.h>
+#include <FluentQtWidgets/Widgets/Button.h>
+#include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/InfoBar.h>
 #include <FluentQtWidgets/Widgets/Label.h>
+#include <FluentQtWidgets/Widgets/LineEdit.h>
 #include <FluentQtWidgets/Widgets/ScrollArea.h>
 #include <FluentQtWidgets/Window/FluentWindow.h>
 
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QVBoxLayout>
 
 namespace fhmi {
@@ -140,6 +146,159 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
     appearance->addSettingCard(createMicaCard(appearance));
 #endif
     layout->addWidget(appearance);
+
+    m_aiTestService = new AiService(this);
+    auto *aiGroup = new FluentQt::SettingCardGroup(tr("AI 助手"), content);
+    aiGroup->setObjectName(QStringLiteral("aiSettingGroup"));
+    const AiConfig initialAi = AiConfig::load();
+
+    auto *providerCard = new FluentQt::SettingCard(
+        FluentQt::FluentIcon::Robot, tr("服务提供商"),
+        tr("选择云端 OpenAI 兼容服务或本地离线 Ollama 模型"), aiGroup);
+    providerCard->setObjectName(QStringLiteral("aiProviderCard"));
+    auto *providerCombo = new FluentQt::ComboBox(providerCard);
+    providerCombo->setObjectName(QStringLiteral("aiProviderCombo"));
+    providerCombo->setMinimumWidth(220);
+    for (const QString &id : AiConfig::providerIds()) {
+        providerCombo->addItem(AiConfig::providerDisplayName(id), {}, id);
+    }
+    const int initialProviderIdx = providerCombo->findData(initialAi.provider);
+    providerCombo->setCurrentIndex(initialProviderIdx >= 0 ? initialProviderIdx : 0);
+    providerCard->actionLayout()->addWidget(providerCombo);
+    aiGroup->addSettingCard(providerCard);
+
+    auto *baseUrlCard = new FluentQt::SettingCard(
+        FluentQt::FluentIcon::Cloud, tr("接口地址 (Base URL)"),
+        tr("OpenAI 兼容接口地址，例如 https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1"), aiGroup);
+    baseUrlCard->setObjectName(QStringLiteral("aiBaseUrlCard"));
+    auto *baseUrlEdit = new FluentQt::LineEdit(initialAi.baseUrl, baseUrlCard);
+    baseUrlEdit->setObjectName(QStringLiteral("aiBaseUrlEdit"));
+    baseUrlEdit->setMinimumWidth(300);
+    baseUrlEdit->setClearButtonEnabled(true);
+    baseUrlEdit->setPlaceholderText(AiConfig::presetBaseUrl(initialAi.provider));
+    baseUrlCard->actionLayout()->addWidget(baseUrlEdit);
+    aiGroup->addSettingCard(baseUrlCard);
+
+    auto *apiKeyCard = new FluentQt::SettingCard(
+        FluentQt::FluentIcon::Certificate, tr("API 密钥"),
+        tr("仅保存在本机配置中，不会写入 .uidp 工程文件（本地 Ollama 可留空）"), aiGroup);
+    apiKeyCard->setObjectName(QStringLiteral("aiApiKeyCard"));
+    auto *apiKeyEdit = new FluentQt::PasswordLineEdit(apiKeyCard);
+    apiKeyEdit->setObjectName(QStringLiteral("aiApiKeyEdit"));
+    apiKeyEdit->setMinimumWidth(300);
+    apiKeyEdit->setClearButtonEnabled(true);
+    apiKeyEdit->setText(initialAi.apiKey);
+    apiKeyEdit->setPlaceholderText(!AiConfig::requiresApiKey(initialAi.provider) ? tr("本地模型服务无需密钥") : QStringLiteral("sk-..."));
+    apiKeyCard->actionLayout()->addWidget(apiKeyEdit);
+    aiGroup->addSettingCard(apiKeyCard);
+
+    auto *modelCard = new FluentQt::SettingCard(
+        FluentQt::FluentIcon::Code, tr("模型名称"),
+        tr("可从下拉列表选择常用模型，也可直接输入自定义模型标识"), aiGroup);
+    modelCard->setObjectName(QStringLiteral("aiModelCard"));
+    auto *modelCombo = new FluentQt::EditableComboBox(modelCard);
+    modelCombo->setObjectName(QStringLiteral("aiModelEdit"));
+    modelCombo->setMinimumWidth(240);
+    modelCombo->setMaxVisibleItems(10);
+    modelCombo->addItems(AiConfig::presetModels(initialAi.provider));
+    modelCombo->setCurrentText(initialAi.model);
+    modelCombo->setPlaceholderText(AiConfig::presetModel(initialAi.provider));
+    auto *refreshModelsBtn = new FluentQt::TransparentToolButton(FluentQt::icon(FluentQt::FluentIcon::Sync), modelCard);
+    refreshModelsBtn->setObjectName(QStringLiteral("aiRefreshModelsButton"));
+    refreshModelsBtn->setFixedSize(32, 32);
+    fluentToolTip(refreshModelsBtn, tr("从接口在线拉取可用模型列表"));
+    auto *testBtn = new FluentQt::PushButton(tr("测试连接"), modelCard);
+    testBtn->setObjectName(QStringLiteral("aiTestConnectionButton"));
+    modelCard->actionLayout()->addWidget(modelCombo);
+    modelCard->actionLayout()->addSpacing(4);
+    modelCard->actionLayout()->addWidget(refreshModelsBtn);
+    modelCard->actionLayout()->addSpacing(6);
+    modelCard->actionLayout()->addWidget(testBtn);
+    aiGroup->addSettingCard(modelCard);
+
+    const auto currentAiConfig = [providerCombo, baseUrlEdit, apiKeyEdit, modelCombo]() {
+        AiConfig cfg;
+        cfg.provider = providerCombo->currentData().toString();
+        cfg.baseUrl = baseUrlEdit->text().trimmed();
+        if (cfg.baseUrl.isEmpty()) {
+            cfg.baseUrl = AiConfig::presetBaseUrl(cfg.provider);
+        }
+        cfg.apiKey = apiKeyEdit->text().trimmed();
+        cfg.model = modelCombo->currentText().trimmed();
+        if (cfg.model.isEmpty()) {
+            cfg.model = AiConfig::presetModel(cfg.provider);
+        }
+        return cfg;
+    };
+
+    const auto persistAiConfig = [currentAiConfig]() { AiConfig::save(currentAiConfig()); };
+
+    connect(providerCombo, &FluentQt::ComboBox::currentIndexChanged, this,
+            [providerCombo, baseUrlEdit, apiKeyEdit, modelCombo, persistAiConfig]() {
+                const QString provider = providerCombo->currentData().toString();
+                const QSignalBlocker b1(baseUrlEdit);
+                const QSignalBlocker b2(apiKeyEdit);
+                const QSignalBlocker b3(modelCombo);
+                baseUrlEdit->setText(AiConfig::presetBaseUrl(provider));
+                baseUrlEdit->setPlaceholderText(AiConfig::presetBaseUrl(provider));
+                modelCombo->clear();
+                modelCombo->addItems(AiConfig::presetModels(provider));
+                modelCombo->setCurrentText(AiConfig::presetModel(provider));
+                modelCombo->setPlaceholderText(AiConfig::presetModel(provider));
+                apiKeyEdit->setText(AiConfig::loadProviderApiKey(provider));
+                apiKeyEdit->setPlaceholderText(!AiConfig::requiresApiKey(provider)
+                                                   ? SettingsPage::tr("本地模型服务无需密钥")
+                                                   : QStringLiteral("sk-..."));
+                persistAiConfig();
+            });
+    connect(baseUrlEdit, &QLineEdit::editingFinished, this, persistAiConfig);
+    connect(apiKeyEdit, &QLineEdit::textChanged, this, persistAiConfig);
+    connect(modelCombo, &FluentQt::EditableComboBox::currentTextChanged, this, persistAiConfig);
+    connect(modelCombo, &QLineEdit::editingFinished, this, persistAiConfig);
+
+    connect(testBtn, &QPushButton::clicked, this, [this, testBtn, currentAiConfig]() {
+        const AiConfig cfg = currentAiConfig();
+        AiConfig::save(cfg);
+        testBtn->setEnabled(false);
+        testBtn->setText(tr("测试中…"));
+        m_aiTestService->testConnection(cfg);
+    });
+    connect(refreshModelsBtn, &QToolButton::clicked, this, [this, refreshModelsBtn, currentAiConfig]() {
+        const AiConfig cfg = currentAiConfig();
+        AiConfig::save(cfg);
+        refreshModelsBtn->setEnabled(false);
+        m_aiTestService->fetchModels(cfg);
+    });
+    connect(m_aiTestService, &AiService::modelsFetched, this,
+            [this, refreshModelsBtn, modelCombo, persistAiConfig](bool ok, const QStringList &models, const QString &message) {
+                refreshModelsBtn->setEnabled(true);
+                if (ok && !models.isEmpty()) {
+                    const QString current = modelCombo->currentText().trimmed();
+                    const QSignalBlocker blocker(modelCombo);
+                    modelCombo->clear();
+                    modelCombo->addItems(models);
+                    modelCombo->setCurrentText(models.contains(current) ? current : models.first());
+                    persistAiConfig();
+                    FluentQt::InfoBar::success(tr("模型列表已更新"), message, Qt::Horizontal, true, 3000,
+                                               FluentQt::InfoBarPosition::Top, window());
+                } else {
+                    FluentQt::InfoBar::error(tr("获取模型列表失败"), message, Qt::Horizontal, true, 4000,
+                                             FluentQt::InfoBarPosition::Top, window());
+                }
+            });
+    connect(m_aiTestService, &AiService::testFinished, this, [this, testBtn](bool ok, const QString &message) {
+        testBtn->setEnabled(true);
+        testBtn->setText(tr("测试连接"));
+        if (ok) {
+            FluentQt::InfoBar::success(tr("AI 连接成功"), message, Qt::Horizontal, true, 3000,
+                                       FluentQt::InfoBarPosition::Top, window());
+        } else {
+            FluentQt::InfoBar::error(tr("AI 连接失败"), message, Qt::Horizontal, true, 5000,
+                                     FluentQt::InfoBarPosition::Top, window());
+        }
+    });
+
+    layout->addWidget(aiGroup);
 
     auto *about = new FluentQt::SettingCardGroup(tr("关于"), content);
     about->setObjectName(QStringLiteral("aboutGroup"));

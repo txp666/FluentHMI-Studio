@@ -1,4 +1,5 @@
 #include "studio/designer_page.h"
+#include "studio/ai_assistant_panel.h"
 
 #include "core/frame_templates.h"
 #include "designer/canvas_item.h"
@@ -358,6 +359,30 @@ void DesignerPage::buildUi()
     m_outline->setScene(m_scene);
     m_properties = new PropertyEditor(this);
     m_properties->setScene(m_scene);
+    m_aiAssistant = new AiAssistantPanel(this);
+    m_aiAssistant->setProjectProvider([this]() { return snapshot(); });
+
+    auto *rightPanel = new QWidget(this);
+    rightPanel->setObjectName(QStringLiteral("designerRightPanel"));
+    auto *rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setContentsMargins(0, 6, 0, 0);
+    rightLayout->setSpacing(4);
+    auto *rightTabs = new FluentQt::SegmentedWidget(rightPanel);
+    rightTabs->setObjectName(QStringLiteral("rightPanelTabs"));
+    rightTabs->addItem(QStringLiteral("properties"), tr("属性"));
+    rightTabs->addItem(QStringLiteral("ai"), tr("AI 助手"));
+    rightTabs->setCurrentItem(QStringLiteral("properties"));
+    auto *rightStack = new QStackedWidget(rightPanel);
+    rightStack->addWidget(m_properties);
+    rightStack->addWidget(m_aiAssistant);
+    connect(rightTabs, &FluentQt::SegmentedWidget::currentItemChanged, rightStack, [rightStack](const QString &key) {
+        rightStack->setCurrentIndex(key == QLatin1String("ai") ? 1 : 0);
+    });
+    auto *rightTabsRow = new QHBoxLayout;
+    rightTabsRow->setContentsMargins(4, 0, 8, 0);
+    rightTabsRow->addWidget(rightTabs);
+    rightLayout->addLayout(rightTabsRow);
+    rightLayout->addWidget(rightStack, 1);
 
     auto *leftPanel = new QWidget(this);
     leftPanel->setObjectName(QStringLiteral("designerLeftPanel"));
@@ -482,7 +507,7 @@ void DesignerPage::buildUi()
     action(FluentIcon::FitPage, tr("适应窗口"), QKeySequence(Qt::CTRL | Qt::Key_0), [this]() { fitCanvas(); });
     action(FluentIcon::Zoom, tr("实际大小"), QKeySequence(), [this]() { m_view->resetTransform(); });
     bar->addSeparator();
-    panelSwitch(m_properties, tr("属性"), QStringLiteral("panel_right"));
+    panelSwitch(rightPanel, tr("属性"), QStringLiteral("panel_right"));
 
     auto *center = new QWidget(this);
     auto *centerLayout = new QVBoxLayout(center);
@@ -494,12 +519,12 @@ void DesignerPage::buildUi()
     auto *splitter = new QSplitter(Qt::Horizontal, this);
     splitter->addWidget(leftPanel);
     splitter->addWidget(center);
-    splitter->addWidget(m_properties);
+    splitter->addWidget(rightPanel);
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({216, 754, 330});
     splitter->setChildrenCollapsible(false);
     leftPanel->setMinimumWidth(180);
-    m_properties->setMinimumWidth(280);
+    rightPanel->setMinimumWidth(280);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 0, 8, 8);
@@ -514,9 +539,12 @@ void DesignerPage::buildUi()
     connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]() {
         const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
         m_properties->showItem(selected.size() == 1 ? selected.first() : nullptr);
+        m_aiAssistant->setSelectedItems(selected);
         m_outline->syncSelection();
         updateEditActions();
     });
+    connect(m_aiAssistant, &AiAssistantPanel::applyProjectRequested, this, &DesignerPage::applyAiProject);
+    connect(m_aiAssistant, &AiAssistantPanel::notify, this, &DesignerPage::notify);
     connect(m_outline, &WidgetOutline::itemContextMenuRequested, this, &DesignerPage::showItemContextMenu);
     connect(m_scene, &DesignScene::itemPropertiesChanged, this, [this](CanvasItem *item) {
         if (m_properties->currentItem() == item) {
@@ -731,6 +759,7 @@ void DesignerPage::load(const Project &project)
     m_project = project;
     m_properties->showItem(nullptr);
     m_properties->setProject(&m_project);
+    m_aiAssistant->setSelectedItems({});
     applyProjectSettings();
     m_outline->rebuild();
     // Once the view has its size: a page larger than the view opens fitted.
@@ -738,6 +767,23 @@ void DesignerPage::load(const Project &project)
     resetHistory();
     setModified(false);
     emit projectChanged();
+}
+
+void DesignerPage::applyAiProject(const Project &patched, const QStringList &selectIds)
+{
+    m_properties->showItem(nullptr);
+    QString error;
+    if (!m_scene->loadWidgets(patched.widgets, &error)) {
+        emit notify(tr("无法应用 AI 变更"), error, true);
+        return;
+    }
+    m_project = patched;
+    m_properties->setProject(&m_project);
+    applyProjectSettings();
+    m_scene->selectIds(selectIds);
+    m_aiAssistant->setSelectedItems(m_scene->selectedCanvasItems());
+    recordChange();
+    emit notify(tr("已应用 AI 变更"), tr("可按 Ctrl+Z 撤销此次修改"), false);
 }
 
 // ---------------------------------------------------------------------------

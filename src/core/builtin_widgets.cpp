@@ -454,7 +454,16 @@ QList<WidgetMeta> displayWidgets()
              {str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("状态")),
               choice(QStringLiteral("color"), QT_TR_NOOP("颜色"), QStringLiteral("green"),
                      {QStringLiteral("green"), QStringLiteral("red"), QStringLiteral("yellow"), QStringLiteral("blue"),
-                      QStringLiteral("gray")}),
+                      QStringLiteral("orange"), QStringLiteral("cyan"), QStringLiteral("purple"),
+                      QStringLiteral("white"), QStringLiteral("gray")}),
+              choice(QStringLiteral("ledShape"), QT_TR_NOOP("形状"), QStringLiteral("圆形"), // i18n: value
+                     {QStringLiteral("圆形"), QStringLiteral("圆角方形"), QStringLiteral("方形"), QStringLiteral("胶囊灯牌")}), // i18n: value
+              choice(QStringLiteral("ledSize"), QT_TR_NOOP("灯珠尺寸"), QStringLiteral("随控件缩放"), // i18n: value
+                     {QStringLiteral("随控件缩放"), QStringLiteral("小"), QStringLiteral("标准"), QStringLiteral("大"), QStringLiteral("超大")}), // i18n: value
+              choice(QStringLiteral("labelPosition"), QT_TR_NOOP("标签位置"), QStringLiteral("右侧"), // i18n: value
+                     {QStringLiteral("右侧"), QStringLiteral("底部"), QStringLiteral("内部居中"), QStringLiteral("隐藏")}), // i18n: value
+              integer(QStringLiteral("fontSize"), QT_TR_NOOP("字号"), 14, 10, 64),
+              boolean(QStringLiteral("blink"), QT_TR_NOOP("点亮闪烁"), false),
               boolean(QStringLiteral("on"), QT_TR_NOOP("点亮"), true, true),
               str(QStringLiteral("onValue"), QT_TR_NOOP("亮值"), QStringLiteral("1")),
               str(QStringLiteral("offValue"), QT_TR_NOOP("灭值"), QStringLiteral("0"))}),
