@@ -948,7 +948,7 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
             const auto type = widget.value(QStringLiteral("type")).toString();
             QString ruleProblem = widgetActionProblem(props.value(QStringLiteral("actions")), type, actionTargets,
                                                       allowExternalReferences);
-            if (ruleProblem.isEmpty() && (type == u"ProgressBar" || type == u"GaugeMeter"))
+            if (ruleProblem.isEmpty() && (type == u"ProgressBar" || type == u"GaugeMeter" || type == u"NumericDisplay"))
                 parseColorRanges(props.value(QStringLiteral("colorRanges")), &ruleProblem);
             if (!ruleProblem.isEmpty())
                 return fail(error, widget.value(QStringLiteral("id")).toString() + QStringLiteral(" · ") + ruleProblem);

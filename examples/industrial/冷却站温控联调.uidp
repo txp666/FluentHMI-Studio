@@ -402,6 +402,47 @@
                 "text": "故障复位"
             },
             "type": "PushButton"
+        },
+        {
+            "binding": {
+                "key": "出水温度",
+                "parseMode": "工程数据点"
+            },
+            "geometry": {
+                "h": 100,
+                "w": 180,
+                "x": 610,
+                "y": 90
+            },
+            "id": "outletTempCard",
+            "properties": {
+                "cardStyle": "标准",
+                "colorRanges": [
+                    {
+                        "color": "#008040"
+                    },
+                    {
+                        "color": "#E0A000",
+                        "min": 8
+                    },
+                    {
+                        "color": "#D13438",
+                        "min": 10
+                    }
+                ],
+                "decimals": "2",
+                "displayFormat": "自动",
+                "displayStyle": "数值",
+                "enumTable": "",
+                "fontSize": 28,
+                "textList": "",
+                "title": "出水温度",
+                "unit": "℃",
+                "unknownColor": "#d13438",
+                "unknownText": "",
+                "value": "0.00"
+            },
+            "type": "NumericDisplay"
         }
     ]
 }

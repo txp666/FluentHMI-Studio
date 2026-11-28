@@ -5,13 +5,14 @@
 #include "runtime/hmi_widget.h"
 #include "runtime/ui_helpers.h"
 
+#include <FluentQtWidgets/Color.h>
+#include <FluentQtWidgets/Theme.h>
 #include <FluentQtWidgets/Views/ItemViews.h>
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/LineEdit.h>
 
-#include <QtCore/QSet>
 #include <QtCore/QSignalBlocker>
 #include <QtGui/QAction>
 #include <QtGui/QPainter>
@@ -99,6 +100,8 @@ class MappingDialog final : public AppDialog
         });
         connect(m_sample, &QLineEdit::textChanged, this, [this] { preview(); });
         connect(m_rows, &QTableWidget::itemChanged, this, [this] { preview(); });
+        connect(FluentQt::ThemeManager::instance(), &FluentQt::ThemeManager::effectiveThemeChanged, this,
+                [this] { preview(); });
         connect(m_source, &FluentQt::ComboBox::currentIndexChanged, this, [this] {
             if (!storeCurrent()) {
                 const QSignalBlocker blocker(m_source);
@@ -216,10 +219,39 @@ class MappingDialog final : public AppDialog
         preview();
     }
 
-    QString readRows(QString &mapping, QJsonObject &effects) const
+    QString highlightDuplicateValues()
     {
+        QStringList keys;
+        QHash<QString, int> counts;
+        for (int row = 0; row < m_rows->rowCount(); ++row) {
+            keys.append(valueTextKey(m_rows->item(row, 0)->text().trimmed()));
+            ++counts[keys.last()];
+        }
+
+        const QSignalBlocker blocker(m_rows);
+        const QBrush background(FluentQt::color(FluentQt::FluentSystemColor::CriticalBackground));
+        const QBrush foreground(FluentQt::color(FluentQt::FluentSystemColor::CriticalForeground));
+        QStringList conflicts;
+        for (int row = 0; row < keys.size(); ++row) {
+            auto *cell = m_rows->item(row, 0);
+            const bool duplicate = !keys[row].isEmpty() && counts.value(keys[row]) > 1;
+            const QString hint = duplicate ? tr("第 %1 行的数值重复").arg(row + 1) : QString();
+            cell->setData(Qt::BackgroundRole, duplicate ? QVariant(background) : QVariant());
+            cell->setData(Qt::ForegroundRole, duplicate ? QVariant(foreground) : QVariant());
+            cell->setToolTip(hint);
+            cell->setData(Qt::AccessibleDescriptionRole, hint);
+            if (duplicate)
+                conflicts.append(QString::number(row + 1));
+        }
+        return conflicts.isEmpty() ? QString() : tr("第 %1 行包含重复的枚举值").arg(conflicts.join(QStringLiteral(", ")));
+    }
+
+    QString readRows(QString &mapping, QJsonObject &effects)
+    {
+        const auto duplicates = highlightDuplicateValues();
+        if (!duplicates.isEmpty())
+            return duplicates;
         QStringList lines;
-        QSet<QString> keys;
         for (int row = 0; row < m_rows->rowCount(); ++row) {
             const auto value = m_rows->item(row, 0)->text().trimmed();
             const auto key = valueTextKey(value);
@@ -227,9 +259,6 @@ class MappingDialog final : public AppDialog
             const auto color = static_cast<QLineEdit *>(m_rows->cellWidget(row, 2))->text().trimmed();
             if (key.isEmpty() || label.isEmpty() || label.contains(u'|') || label.contains(u'\n'))
                 return tr("请检查第 %1 行的数值和文字").arg(row + 1);
-            if (keys.contains(key))
-                return tr("第 %1 行的数值重复").arg(row + 1);
-            keys.insert(key);
             lines.append(value + u'=' + label + (color.isEmpty() ? QString() : u'|' + color));
             if (m_led) {
                 const auto effect = selectedValue(static_cast<FluentQt::ComboBox *>(m_rows->cellWidget(row, 3)));
