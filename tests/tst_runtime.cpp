@@ -15,6 +15,7 @@
 #include "designer/can_signal_editor.h"
 #include "designer/command_preview.h"
 #include "designer/design_scene.h"
+#include "designer/enum_mapping_editor.h"
 #include "runtime/frame_bytes_view.h"
 #include "designer/frame_template_editor.h"
 #include "designer/project_frame_templates.h"
@@ -999,9 +1000,10 @@ class TestRuntime : public QObject
 
     void numericCardRangesUseUnroundedFeedback()
     {
-        const QJsonObject props{{"displayFormat", "自动"}, {"decimals", "1"},
+        const QJsonObject props{{"displayFormat", "自动"}, {"decimals", "1"}, {"unit", "℃"},
                                 {"colorRanges", QJsonArray{QJsonObject{{"color", "#008040"}},
-                                                           QJsonObject{{"min", 8}, {"color", "#E0A000"}}}}};
+                                                           QJsonObject{{"min", 8}, {"color", "#E0A000"}},
+                                                           QJsonObject{{"min", 10}, {"color", "#D13438"}}}}};
         RuntimeContext context;
         FakeLink link;
         QWidget host;
@@ -1018,6 +1020,10 @@ class TestRuntime : public QObject
         context.setActive(true);
         const auto *reading = card->findChild<FluentQt::FluentLabelBase *>("numericDisplayValue");
         QVERIFY(reading);
+        const auto *markers = card->findChild<QLabel *>("numericDisplayThresholds");
+        QVERIFY(markers && markers->isVisible());
+        QCOMPARE(markers->text().count(u'≥'), 2);
+        QVERIFY(markers->text().contains(QStringLiteral("≥8℃")) && markers->text().contains(QStringLiteral("≥10℃")));
 
         link.inject("temp100=799\n");
         QCOMPARE(reading->text(), QStringLiteral("7.99")); // Rounding to 8.0 would display the next range.
@@ -1030,6 +1036,7 @@ class TestRuntime : public QObject
         QVERIFY(reading->font().pixelSize() < configuredSize);
         card->resize(40, 100);
         QCOMPARE(reading->toolTip(), reading->text());
+        QVERIFY(card->toolTip().contains(QStringLiteral("≥10℃")));
         card->resize(500, 100);
         QCOMPARE(reading->font().pixelSize(), configuredSize);
         QVERIFY(reading->toolTip().isEmpty());
@@ -1039,6 +1046,35 @@ class TestRuntime : public QObject
         QCOMPARE(reading->text(), QStringLiteral("8.0"));
         QCOMPARE(reading->lightColor(), QColor("#E0A000"));
         QCOMPARE(reading->font().pixelSize(), configuredSize);
+    }
+
+    void enumEditorHighlightsConflictingValues()
+    {
+        QWidget host;
+        host.resize(800, 600);
+        host.show();
+        const QJsonObject tables{{"mode", "10=手动\n42=自动\n90=维护"}};
+        QTimer::singleShot(0, &host, [&] {
+            auto *dialog = host.findChild<AppDialog *>("enumMappingEditor");
+            QVERIFY(dialog);
+            auto close = qScopeGuard([dialog] { dialog->reject(); });
+            QSignalSpy accepted(dialog, &AppDialog::yesSignal);
+            auto *rows = dialog->findChild<QTableWidget *>("enumMappingRows");
+            QVERIFY(rows && rows->rowCount() == 3);
+            const auto marked = [rows](int row) { return rows->item(row, 0)->data(Qt::BackgroundRole).isValid(); };
+            rows->item(2, 0)->setText("42.0");
+            QVERIFY(!marked(0) && marked(1) && marked(2));
+            dialog->yesButton()->click();
+            QCOMPARE(accepted.size(), 0);
+            rows->item(2, 0)->setText("91");
+            QVERIFY(!marked(1) && !marked(2));
+            dialog->yesButton()->click();
+            QCOMPARE(accepted.size(), 1);
+            close.dismiss();
+        });
+        const auto result = editEnumMapping("ComboBox", {{"enumTable", "mode"}}, tables, true, &host);
+        QVERIFY(result);
+        QCOMPARE(result->tables.value("mode").toString(), QStringLiteral("10=手动\n42=自动\n91=维护"));
     }
 
     void projectDataCommitsSameFrameBeforeEvaluatingAlarms()

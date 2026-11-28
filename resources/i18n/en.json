@@ -2716,6 +2716,7 @@
   "请填写尚未使用的枚举表名称": "Enter an unused enum table name",
   "请检查第 %1 行的数值和文字": "Check the value and text in row %1",
   "第 %1 行的数值重复": "Duplicate value in row %1",
+  "第 %1 行包含重复的枚举值": "Rows %1 contain duplicate enum values",
   "配置枚举表：%1": "Configure enum table: %1",
   "预览值": "Preview value",
   "点「编辑枚举」设置每个值的文字和颜色。另存为工程枚举后，小灯和徽标可以共用同一张表。": "Choose Edit enum to set the text and color for each value. Save a project enum to share the table between LEDs and badges.",

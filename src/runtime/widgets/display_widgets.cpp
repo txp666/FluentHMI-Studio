@@ -453,12 +453,18 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
     m_badge->setMinimumHeight(22);
     m_badge->hide();
     m_unit = new FluentQt::CaptionLabel(this);
+    m_thresholds = new FluentQt::CaptionLabel(this);
+    m_thresholds->setObjectName(QStringLiteral("numericDisplayThresholds"));
+    m_thresholds->setTextFormat(Qt::PlainText);
+    m_thresholds->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    m_thresholds->setAlignment(Qt::AlignCenter);
+    m_thresholds->hide();
     for (FluentQt::FluentLabelBase *label :
          {static_cast<FluentQt::FluentLabelBase *>(m_title), static_cast<FluentQt::FluentLabelBase *>(m_value),
           static_cast<FluentQt::FluentLabelBase *>(m_unit)}) {
         label->setAlignment(Qt::AlignCenter);
     }
-    for (FluentQt::CaptionLabel *label : {m_title, m_unit}) {
+    for (FluentQt::CaptionLabel *label : {m_title, m_unit, m_thresholds}) {
         label->setTextColor(QColor(QStringLiteral("#606060")), QColor(QStringLiteral("#b3b3b3")));
     }
     layout->addStretch();
@@ -466,6 +472,7 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
     layout->addWidget(m_value);
     layout->addWidget(m_badge);
     layout->addWidget(m_unit);
+    layout->addWidget(m_thresholds);
     layout->addStretch();
     repaintOnThemeChange(this);
     const auto restyle = [this]() { apply(); };
@@ -493,6 +500,7 @@ void NumericDisplayWidget::apply()
     m_enumEntries = enumeration ? parseValueText(enumMapping(properties(), enumTables())) : QHash<QString, ValueText>();
     m_ranges = enumeration ? QList<ColorRange>{} : parseColorRanges(prop("colorRanges"));
     showValue(m_reading);
+    updateThresholdMarkers();
     update();
 }
 
@@ -599,6 +607,52 @@ void NumericDisplayWidget::resizeEvent(QResizeEvent *event)
 {
     HmiWidget::resizeEvent(event);
     fitValueFont();
+    updateThresholdMarkers();
+}
+
+void NumericDisplayWidget::updateThresholdMarkers()
+{
+    QStringList marks;
+    const QString unit = text("unit").trimmed();
+    for (const auto &range : m_ranges) {
+        if (std::isfinite(range.minimum)) {
+            const QString bound = QString::number(range.minimum, 'g', QLocale::FloatingPointShortest);
+            marks.append(QStringLiteral("≥%1%2").arg(bound, unit));
+        }
+    }
+    const QString title = tr("阈值");
+    const QString separator = QStringLiteral(" · ");
+    const QString full = marks.isEmpty() ? QString() : title + u' ' + marks.join(separator);
+    setToolTip(full);
+    setAccessibleDescription(full);
+    m_thresholds->setAccessibleName(full);
+
+    const QSize space = contentsRect().marginsRemoved(layout()->contentsMargins()).size();
+    const auto metrics = m_thresholds->fontMetrics();
+    const int height = m_title->sizeHint().height() + m_value->minimumHeight()
+                       + m_unit->minimumHeight() + metrics.height();
+    const QString more = QStringLiteral(" …");
+    if (marks.isEmpty() || m_value->isHidden() || height > space.height()
+        || metrics.horizontalAdvance(title + more) > space.width()) {
+        m_thresholds->hide();
+        return;
+    }
+
+    QString visible = full;
+    if (metrics.horizontalAdvance(full) > space.width()) {
+        // Leave out whole bounds so a clipped decimal cannot suggest a different threshold.
+        QString prefix = title + u' ';
+        visible = title + more;
+        for (const auto &mark : marks) {
+            const QString candidate = prefix + mark + more;
+            if (metrics.horizontalAdvance(candidate) > space.width())
+                break;
+            visible = candidate;
+            prefix += mark + separator;
+        }
+    }
+    m_thresholds->setText(visible);
+    m_thresholds->show();
 }
 
 void NumericDisplayWidget::paintEvent(QPaintEvent *)

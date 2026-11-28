@@ -74,6 +74,7 @@ class NumericDisplayWidget : public HmiWidget
   private:
     void showValue(const QVariant &value);
     void fitValueFont();
+    void updateThresholdMarkers();
     QVariant m_reading;
     QHash<QString, ValueText> m_enumEntries;
     QList<ColorRange> m_ranges;
@@ -81,6 +82,7 @@ class NumericDisplayWidget : public HmiWidget
     FluentQt::BodyLabel *m_value = nullptr;
     FluentQt::InfoBadge *m_badge = nullptr;
     FluentQt::CaptionLabel *m_unit = nullptr;
+    FluentQt::CaptionLabel *m_thresholds = nullptr;
 };
 
 class ProgressBarWidget : public HmiWidget
