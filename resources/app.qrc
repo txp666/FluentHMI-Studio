@@ -2,5 +2,7 @@
     <qresource prefix="/fluenthmi">
         <file>logo.png</file>
         <file>i18n/en.json</file>
+        <file alias="licenses/pcbusb/LICENSE">../third_party/pcbusb/LICENSE</file>
+        <file alias="licenses/pcbusb/NOTICE">../third_party/pcbusb/NOTICE</file>
     </qresource>
 </RCC>

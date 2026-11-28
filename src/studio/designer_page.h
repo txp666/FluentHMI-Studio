@@ -12,6 +12,7 @@ class QGraphicsView;
 
 namespace fhmi {
 
+class AiAssistantPanel;
 class CanvasItem;
 class DesignScene;
 class PropertyEditor;
@@ -75,6 +76,7 @@ class DesignerPage : public QWidget
     // Shows the whole page, never larger than 100 %.
     void fitCanvas();
     void showItemContextMenu(CanvasItem *target, const QPoint &globalPos);
+    void applyAiProject(const Project &patched, const QStringList &selectIds);
 
     Project m_project;
     bool m_modified = false;
@@ -101,6 +103,7 @@ class DesignerPage : public QWidget
     WidgetPalette *m_palette = nullptr;
     WidgetOutline *m_outline = nullptr;
     PropertyEditor *m_properties = nullptr;
+    AiAssistantPanel *m_aiAssistant = nullptr;
 };
 
 } // namespace fhmi

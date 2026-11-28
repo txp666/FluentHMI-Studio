@@ -3,6 +3,7 @@
 #include "core/value_text.h"
 #include "runtime/hmi_widget.h"
 
+#include <QtCore/QTimer>
 #include <QtGui/QImage>
 #include <QtGui/QTransform>
 
@@ -30,12 +31,32 @@ class LedWidget : public HmiWidget
   protected:
     void apply() override;
     void bindingStatusChanged(BindingStatus status) override;
+    void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
   private:
+    qreal lampDiameter() const;
+    void updateLayoutGeometry();
+    void updateBlinkTimer();
+    void showEnumValue(const QVariant &value);
+    void activate();
+
     FluentQt::BodyLabel *m_label = nullptr;
+    QTimer m_blinkTimer;
+    QHash<QString, ValueText> m_entries;
+    QHash<QString, QString> m_effects;
+    QVariant m_reading;
+    QString m_stateLabel;
+    QColor m_stateColor;
+    int m_halfPeriod = 0;
+    bool m_multiState = false;
+    bool m_blinkVisible = true;
     bool m_on = true;
     bool m_known = true;
+    bool m_pressed = false;
 };
 
 class NumericDisplayWidget : public HmiWidget
@@ -67,9 +88,13 @@ class ProgressBarWidget : public HmiWidget
 
   protected:
     void apply() override;
+    void bindingStatusChanged(BindingStatus) override;
+    void paintEvent(QPaintEvent *event) override;
 
   private:
     FluentQt::ProgressBar *m_bar = nullptr;
+    QList<ColorRange> m_ranges;
+    std::optional<double> m_reading;
 };
 
 class ProgressRingWidget : public HmiWidget
@@ -124,6 +149,8 @@ class GaugeWidget : public HmiWidget
 
   private:
     double m_value = 0;
+    QList<ColorRange> m_ranges;
+    bool m_valid = true;
 };
 
 } // namespace fhmi

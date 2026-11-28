@@ -263,6 +263,11 @@ std::optional<WidgetValueRange> widgetValueRange(const WidgetMeta &meta, const Q
 
 QJsonObject normalizedWidgetProperties(const QString &typeName, QJsonObject props, const QString &changed)
 {
+    // A JSON author can specify LF as an actual character. Store the same option the editor selects.
+    const auto ending = props.value(QStringLiteral("commandNewline")).toString();
+    if (ending == u"\n" || ending == u"\r" || ending == u"\r\n")
+        props.insert(QStringLiteral("commandNewline"), QString(ending).replace(u'\r', QStringLiteral("\\r"))
+                                                                      .replace(u'\n', QStringLiteral("\\n")));
     if (typeName == QLatin1String("LineEdit")) {
         props.insert(QStringLiteral("inputOnly"), lineEditInputOnly(props));
         props.remove(QStringLiteral("sendOnEnter"));

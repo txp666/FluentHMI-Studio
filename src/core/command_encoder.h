@@ -265,6 +265,7 @@ struct SelectionOption
 };
 
 QList<SelectionOption> selectionOptions(const QJsonArray &rows);
+QList<SelectionOption> selectionOptions(const QJsonArray &local, const QString &table, const QJsonObject &tables);
 CommandResult selectionFromProperties(const QJsonObject &props, const SelectionOption &option,
                                       const QJsonObject &frameTemplates = {});
 

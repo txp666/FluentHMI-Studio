@@ -48,6 +48,8 @@ class RuntimeContext : public QObject
     ModbusPoller *modbusPoller() const { return m_poller; }
 
     void registerWidget(const QString &id, HmiWidget *widget);
+    void runWidgetActions(HmiWidget *source, const QString &event, const QVariant &value,
+                          std::function<void()> completed = {});
     QString widgetPreferencesGroup(const HmiWidget &widget) const;
     std::optional<CommandEncoder::InputValue> inputValue(const QString &id) const;
     std::optional<QJsonObject> pointWriteProperties(const QJsonObject &properties, QString *error) const;
@@ -73,7 +75,8 @@ class RuntimeContext : public QObject
     bool send(const CommandResult &result, QList<QByteArray> *sent = nullptr);
     // User actions enter here. Confirmation holds the command until the operator accepts.
     void requestSend(HmiWidget *sender, const CommandResult &result, bool confirm, bool showDetails,
-                     const QString &mode, std::function<void()> onSent, int intervalMs, CommandReader readInputs);
+                     const QString &mode, std::function<void()> onSent, int intervalMs, CommandReader readInputs,
+                     std::function<bool()> stillAllowed = {});
     std::optional<DataRoute> resolveCommandRoute(const EncodedCommand &command, QString *error) const;
     QString commandTargetText(EncodedCommand::Kind kind, const DataRoute &route) const;
 
@@ -105,6 +108,8 @@ class RuntimeContext : public QObject
     void notificationRequested(const QString &title, const QString &content, const QString &type, int durationMs);
 
   private:
+    void executeActions(HmiWidget *source, const QJsonArray &rows, qsizetype start, const QVariant &value,
+                        std::function<void()> completed);
     struct CommandTargets
     {
         QList<SendTarget> links;

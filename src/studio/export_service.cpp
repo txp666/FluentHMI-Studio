@@ -209,6 +209,116 @@ bool movePath(const QString &from, const QString &to)
     return info.isDir() && !info.isSymLink() ? QDir().rename(from, to) : QFile::rename(from, to);
 }
 
+bool projectUsesCanCard(const QJsonArray &widgets)
+{
+    return !visitWidgets(widgets, [](const QJsonObject &widget) {
+        return widget.value(QStringLiteral("type")).toString() != QLatin1String("CanConfigCard");
+    });
+}
+
+#ifdef Q_OS_MACOS
+const QString pcanBundlePath = QStringLiteral("Contents/Frameworks/libPCBUSB.dylib");
+
+bool bundlePcanDriver(const QString &runtime, const QString &staging, bool usesCan, QString *error)
+{
+    const QFileInfo target(QDir(staging).filePath(pcanBundlePath));
+    if (!target.exists() && !target.isSymLink() && !usesCan) {
+        return true;
+    }
+    if (!target.isFile() || target.isSymLink()) {
+        const QStringList candidates{QDir(runtime).filePath(pcanBundlePath),
+                                     QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Frameworks/libPCBUSB.dylib")),
+                                     QStringLiteral("/usr/local/lib/libPCBUSB.dylib")};
+        QString source;
+        QString brokenLink;
+        for (const QString &candidate : candidates) {
+            const QFileInfo info(candidate);
+            if (info.isFile()) {
+                source = info.canonicalFilePath();
+                break;
+            }
+            if (info.isSymLink()) {
+                brokenLink = candidate;
+            }
+        }
+        if (source.isEmpty()) {
+            return brokenLink.isEmpty() || fail(error, QCoreApplication::translate("fhmi", "无法复制: %1").arg(brokenLink));
+        }
+        if (!QDir().mkpath(target.absolutePath()) || (target.isSymLink() && !QFile::remove(target.filePath())) ||
+            !QFile::copy(source, target.filePath())) {
+            return fail(error, QCoreApplication::translate("fhmi", "无法复制: %1").arg(source));
+        }
+    }
+
+    const QDir notices(QDir(staging).filePath(QStringLiteral("Contents/Resources/licenses/pcbusb")));
+    if (!notices.mkpath(QStringLiteral("."))) {
+        return fail(error, QCoreApplication::translate("fhmi", "无法创建目录: %1").arg(notices.path()));
+    }
+    for (const QString &name : {QStringLiteral("LICENSE"), QStringLiteral("NOTICE")}) {
+        const QString path = notices.filePath(name);
+        if (!QFileInfo::exists(path) && !QFile::copy(QStringLiteral(":/fluenthmi/licenses/pcbusb/") + name, path)) {
+            return fail(error, QCoreApplication::translate("fhmi", "无法复制: %1").arg(path));
+        }
+    }
+    return true;
+}
+#endif
+
+// Copies vendor CAN driver files and folders (ZLG's zlgcan.dll + kerneldlls/ or zlgcan/, PEAK's PCANBasic.dll,
+// ControlCAN.dll) placed beside Studio or the runtime into `targetDir` so exported applications work out of the box.
+[[maybe_unused]] bool bundleCanDrivers(const QList<QDir> &sourceDirs, const QString &targetDir, QString *error)
+{
+    static const QStringList kDriverFilePatterns{
+        QStringLiteral("zlgcan.dll"),
+        QStringLiteral("PCANBasic.dll"),
+        QStringLiteral("ControlCAN.dll"),
+    };
+    static const QStringList kDriverDirNames{
+        QStringLiteral("kerneldlls"),
+        QStringLiteral("zlgcan"),
+    };
+
+    for (const QDir &dir : sourceDirs) {
+        if (!dir.exists()) {
+            continue;
+        }
+        QStringList entries = dir.entryList(kDriverFilePatterns, QDir::Files);
+        for (const QString &subDir : dir.entryList(kDriverDirNames, QDir::Dirs | QDir::NoDotAndDotDot)) {
+            entries.append(subDir);
+        }
+        // If kerneldlls/dll_cfg.ini names companion kernel DLLs that were placed directly in `dir`, include them too.
+        QFile ini(dir.filePath(QStringLiteral("kerneldlls/dll_cfg.ini")));
+        if (ini.open(QIODevice::ReadOnly)) {
+            const QStringList lines = QString::fromLocal8Bit(ini.readAll()).split(QLatin1Char('\n'));
+            for (const QString &raw : lines) {
+                const QString line = raw.trimmed();
+                const qsizetype eq = line.indexOf(QLatin1Char('='));
+                if (eq < 0 || line.startsWith(QLatin1Char(';')) || line.startsWith(QLatin1Char('#'))) {
+                    continue;
+                }
+                const QStringList fields = line.mid(eq + 1).simplified().split(QLatin1Char(' '));
+                if (!fields.isEmpty() && !fields.first().isEmpty()) {
+                    for (const QString &matched : dir.entryList({fields.first()}, QDir::Files)) {
+                        if (!entries.contains(matched)) {
+                            entries.append(matched);
+                        }
+                    }
+                }
+            }
+        }
+        for (const QString &entry : std::as_const(entries)) {
+            const QString dst = QDir(targetDir).filePath(entry);
+            if (QFileInfo::exists(dst)) {
+                continue;
+            }
+            if (!copyTree(dir.filePath(entry), dst, error)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 #ifdef Q_OS_MACOS
 QString plistEscape(const QString &text)
 {
@@ -713,7 +823,7 @@ QString ExportService::exportApplication(const Project &project, const QString &
     (void)abort;
 
 #ifdef Q_OS_MACOS
-    if (!copyTree(runtime, staging, error)) {
+    if (!copyTree(runtime, staging, error) || !bundlePcanDriver(runtime, staging, projectUsesCanCard(widgets), error)) {
         return abort(QString());
     }
     const QString stagedResources = QDir(staging).filePath(QStringLiteral("Contents/Resources"));
@@ -779,6 +889,9 @@ QString ExportService::exportApplication(const Project &project, const QString &
         if (!copyTree(runtimeDir.filePath(file), target, error)) {
             return abort(QString());
         }
+    }
+    if (!bundleCanDrivers({runtimeDir, QDir(QCoreApplication::applicationDirPath())}, appDir, error)) {
+        return abort(QString());
     }
     const QString stagedResources = appDir;
     const QString exe = QDir(appDir).filePath(runtimeInfo.fileName());
@@ -866,8 +979,12 @@ QString ExportService::exportApplication(const Project &project, const QString &
     {
         QProcess sign;
         sign.setProcessChannelMode(QProcess::MergedChannels);
-        sign.start(codesign, {QStringLiteral("--force"), QStringLiteral("--deep"), QStringLiteral("--sign"),
-                              QStringLiteral("-"), staging});
+        QStringList arguments{QStringLiteral("--force"), QStringLiteral("--sign"), QStringLiteral("-"), staging};
+        // Leave the vendor signature on PCBUSB intact. The runtime's other nested code was copied unchanged.
+        if (!QFileInfo::exists(QDir(staging).filePath(pcanBundlePath))) {
+            arguments.prepend(QStringLiteral("--deep"));
+        }
+        sign.start(codesign, arguments);
         if (!sign.waitForFinished(60000) || sign.exitStatus() != QProcess::NormalExit || sign.exitCode() != 0) {
             const QString detail = QString::fromLocal8Bit(sign.readAll()).trimmed();
             fail(error, detail.isEmpty()

@@ -68,7 +68,7 @@ void RuntimeSurface::build(const Project &project, bool startRuntime)
     }
     setFixedSize(project.canvasWidth, project.canvasHeight);
     for (const QJsonValue &value : project.widgets) {
-        buildWidget(value.toObject(), nullptr);
+        buildWidget(value.toObject(), nullptr, project.enumTables);
     }
     if (!startRuntime)
         return;
@@ -81,7 +81,7 @@ void RuntimeSurface::build(const Project &project, bool startRuntime)
     m_context->setActive(true);
 }
 
-void RuntimeSurface::buildWidget(const QJsonObject &data, HmiWidget *container)
+void RuntimeSurface::buildWidget(const QJsonObject &data, HmiWidget *container, const QJsonObject &enumTables)
 {
     const QString type = data.value(QStringLiteral("type")).toString();
     HmiWidget *widget = createHmiWidget(type, data.value(QStringLiteral("properties")).toObject(), nullptr,
@@ -89,6 +89,7 @@ void RuntimeSurface::buildWidget(const QJsonObject &data, HmiWidget *container)
     if (!widget) {
         return;
     }
+    widget->setEnumTables(enumTables);
     const QJsonObject geo = data.value(QStringLiteral("geometry")).toObject();
     const QRect rect(QPoint(int(geo.value(QStringLiteral("x")).toDouble(0)), int(geo.value(QStringLiteral("y")).toDouble(0))),
                      widget->sizeForGeometry(QSize(int(geo.value(QStringLiteral("w")).toDouble(widget->width())),
@@ -116,7 +117,7 @@ void RuntimeSurface::buildWidget(const QJsonObject &data, HmiWidget *container)
         }
     }
     for (const QJsonValue &child : data.value(QStringLiteral("children")).toArray()) {
-        buildWidget(child.toObject(), widget);
+        buildWidget(child.toObject(), widget, enumTables);
     }
 }
 

@@ -55,6 +55,14 @@ void HmiWidget::setAssetBaseDir(const QString &dir)
     apply();
 }
 
+void HmiWidget::setEnumTables(const QJsonObject &tables)
+{
+    if (m_enumTables == tables || !meta().prop(QStringLiteral("enumTable")))
+        return;
+    m_enumTables = tables;
+    apply();
+}
+
 void HmiWidget::applyBoundValue(const QVariant &, const BindingEntry &) {}
 
 void HmiWidget::setBindingStatus(BindingStatus status)
@@ -433,17 +441,6 @@ QIcon widgetIcon(const QString &iconName)
     }();
     const auto it = icons.constFind(iconName);
     return FluentQt::icon(it != icons.constEnd() ? *it : FluentQt::FluentIcon::Application);
-}
-
-QStringList tabNames(const QString &text)
-{
-    QStringList names;
-    for (const QString &line : text.split(QLatin1Char('\n'))) {
-        if (!line.trimmed().isEmpty()) {
-            names.append(line.trimmed());
-        }
-    }
-    return names.isEmpty() ? QStringList{QStringLiteral("标签1")} : names; // i18n: value
 }
 
 int clampTabIndex(int index, int count)

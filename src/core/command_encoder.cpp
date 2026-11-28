@@ -1,4 +1,5 @@
 #include "core/command_encoder.h"
+#include "core/value_text.h"
 #include "core/frame_templates.h"
 
 #include "core/binding.h"
@@ -1233,6 +1234,16 @@ QList<SelectionOption> selectionOptions(const QJsonArray &rows)
         if (!label.isEmpty())
             options.append({label, entry.value(QStringLiteral("value")).toString().trimmed()});
     }
+    return options;
+}
+
+QList<SelectionOption> selectionOptions(const QJsonArray &local, const QString &table, const QJsonObject &tables)
+{
+    if (table.isEmpty())
+        return selectionOptions(local);
+    QList<SelectionOption> options;
+    for (const auto &entry : orderedEnumEntries(tables.value(table).toString()))
+        options.append({entry.display.text, entry.code});
     return options;
 }
 

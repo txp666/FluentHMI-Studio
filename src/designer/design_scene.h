@@ -45,6 +45,7 @@ class DesignScene : public QGraphicsScene
     bool isGridVisible() const { return m_gridVisible; }
     void setAssetBaseDir(const QString &dir);
     void setProjectParser(const QString &parser);
+    void setEnumTables(const QJsonObject &tables);
 
     // Replaces the scene contents. Returns false (and keeps the old contents) if an
     // item cannot be built.
@@ -110,6 +111,7 @@ class DesignScene : public QGraphicsScene
     bool m_gridVisible = true;
     QString m_assetBaseDir;
     QJsonObject m_bitProfiles;
+    QJsonObject m_enumTables;
     CanvasItem *m_dropTarget = nullptr;
 };
 

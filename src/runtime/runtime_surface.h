@@ -35,7 +35,7 @@ class RuntimeSurface : public QWidget
     void paintEvent(QPaintEvent *event) override;
 
   private:
-    void buildWidget(const QJsonObject &data, HmiWidget *container);
+    void buildWidget(const QJsonObject &data, HmiWidget *container, const QJsonObject &enumTables);
 
     RuntimeContext *m_context = nullptr;
     QList<QPointer<HmiWidget>> m_widgets;

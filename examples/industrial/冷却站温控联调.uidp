@@ -1,0 +1,407 @@
+{
+    "appName": "冷却站温控联调",
+    "canvas": {
+        "gridSize": 10,
+        "height": 600,
+        "width": 1000
+    },
+    "enumTables": {
+        "运行模式": "10=手动\n42=自动\n90=维护"
+    },
+    "logic": {
+        "points": [
+            {
+                "binding": {
+                    "expression": "value / 100",
+                    "key": "temp100",
+                    "parseMode": "键值匹配",
+                    "sourceCardId": "coolLink"
+                },
+                "name": "出水温度"
+            },
+            {
+                "binding": {
+                    "key": "fault",
+                    "parseMode": "键值匹配",
+                    "sourceCardId": "coolLink"
+                },
+                "name": "故障码"
+            },
+            {
+                "initialValue": false,
+                "name": "检修许可"
+            }
+        ]
+    },
+    "serial": {
+        "baudRate": 115200,
+        "dataBits": 8,
+        "parity": "None",
+        "parser": "line",
+        "parserConfig": {
+            "separator": ","
+        },
+        "stopBits": 1
+    },
+    "version": "1.4",
+    "widgets": [
+        {
+            "geometry": {
+                "h": 235,
+                "w": 360,
+                "x": 20,
+                "y": 20
+            },
+            "id": "coolLink",
+            "properties": {
+                "defaultHost": "127.0.0.1",
+                "defaultPort": 15463,
+                "displayMode": "简洁",
+                "title": "冷却站 TCP"
+            },
+            "type": "TcpConfigCard"
+        },
+        {
+            "binding": {
+                "key": "出水温度",
+                "parseMode": "工程数据点"
+            },
+            "geometry": {
+                "h": 180,
+                "w": 180,
+                "x": 400,
+                "y": 20
+            },
+            "id": "tempGauge",
+            "properties": {
+                "colorRanges": [
+                    {
+                        "color": "#008040"
+                    },
+                    {
+                        "color": "#E0A000",
+                        "min": 8
+                    },
+                    {
+                        "color": "#D13438",
+                        "min": 10
+                    }
+                ],
+                "maximum": 20,
+                "minimum": 0,
+                "title": "出水温度",
+                "unit": "℃",
+                "value": 0
+            },
+            "type": "GaugeMeter"
+        },
+        {
+            "binding": {
+                "key": "出水温度",
+                "parseMode": "工程数据点"
+            },
+            "geometry": {
+                "h": 20,
+                "w": 250,
+                "x": 400,
+                "y": 220
+            },
+            "id": "tempBar",
+            "properties": {
+                "colorRanges": [
+                    {
+                        "color": "#008040"
+                    },
+                    {
+                        "color": "#E0A000",
+                        "min": 8
+                    },
+                    {
+                        "color": "#D13438",
+                        "min": 10
+                    }
+                ],
+                "maximum": 20,
+                "value": 20
+            },
+            "type": "ProgressBar"
+        },
+        {
+            "binding": {
+                "key": "mode",
+                "parseMode": "键值匹配",
+                "sourceCardId": "coolLink"
+            },
+            "geometry": {
+                "h": 40,
+                "w": 180,
+                "x": 610,
+                "y": 20
+            },
+            "id": "modeSelect",
+            "properties": {
+                "byteOrder": "大端(BE)",
+                "canCycle": 0,
+                "canFd": false,
+                "canId": "",
+                "commandEndpoint": "",
+                "commandJsonNewline": "无",
+                "commandMode": "文本",
+                "commandNewline": "\\n",
+                "commandTargetId": "coolLink",
+                "commandTemplate": "MODE={value}",
+                "confirmBeforeSend": false,
+                "currentIndex": 0,
+                "dataType": "HEX字符串",
+                "enumTable": "运行模式",
+                "frameHeader": "",
+                "frameTail": "",
+                "mbAddress": 0,
+                "mbDataType": "uint16",
+                "mbFunc": "06 写单寄存器",
+                "mbRegOrder": "大端(AB CD)",
+                "mbSlave": 1,
+                "options": [
+                    {
+                        "label": "选项1",
+                        "value": ""
+                    },
+                    {
+                        "label": "选项2",
+                        "value": ""
+                    },
+                    {
+                        "label": "选项3",
+                        "value": ""
+                    }
+                ],
+                "s7Command": {
+                    "address": "DB1.DBD4",
+                    "dataType": "REAL",
+                    "offValue": "0",
+                    "onValue": "1",
+                    "value": "1"
+                },
+                "selectionStyle": "下拉框",
+                "sendOnSelect": true,
+                "showSendConfirmationDetails": false
+            },
+            "type": "ComboBox"
+        },
+        {
+            "children": [
+                {
+                    "geometry": {
+                        "h": 30,
+                        "w": 560,
+                        "x": 20,
+                        "y": 20
+                    },
+                    "id": "faultDescription",
+                    "properties": {
+                        "alignment": "Left",
+                        "bold": false,
+                        "decimals": "自动",
+                        "displayFormat": "自动",
+                        "fontSize": 14,
+                        "text": "故障码 3：请检查冷却泵，确认现场状态后再按规程复位。"
+                    },
+                    "tabIndex": 1,
+                    "type": "Label"
+                }
+            ],
+            "geometry": {
+                "h": 300,
+                "w": 620,
+                "x": 20,
+                "y": 270
+            },
+            "id": "stationPages",
+            "properties": {
+                "currentTab": 0,
+                "navigationStyle": "经典选项卡",
+                "tabLayout": "自由",
+                "tabNames": "概览\n报警"
+            },
+            "type": "TabWidget"
+        },
+        {
+            "binding": {
+                "key": "故障码",
+                "parseMode": "工程数据点"
+            },
+            "geometry": {
+                "h": 30,
+                "w": 180,
+                "x": 660,
+                "y": 280
+            },
+            "id": "pumpLamp",
+            "properties": {
+                "actions": [
+                    {
+                        "condition": "value == 3",
+                        "event": "click",
+                        "target": "stationPages",
+                        "type": "navigate",
+                        "value": "报警"
+                    }
+                ],
+                "blink": false,
+                "color": "red",
+                "enumTable": "",
+                "fontSize": 14,
+                "label": "冷却泵故障",
+                "labelPosition": "右侧",
+                "ledEffects": {
+                },
+                "ledShape": "圆形",
+                "ledSize": "随控件缩放",
+                "offValue": "0",
+                "on": true,
+                "onValue": 3,
+                "stateMode": "开关量",
+                "stateValue": "0",
+                "textList": ""
+            },
+            "type": "LEDIndicator"
+        },
+        {
+            "binding": {
+                "key": "检修许可",
+                "parseMode": "工程数据点"
+            },
+            "geometry": {
+                "h": 30,
+                "w": 180,
+                "x": 660,
+                "y": 330
+            },
+            "id": "serviceSwitch",
+            "properties": {
+                "actions": [
+                    {
+                        "event": "on",
+                        "target": "检修许可",
+                        "type": "setParameter",
+                        "value": true
+                    },
+                    {
+                        "event": "off",
+                        "target": "检修许可",
+                        "type": "setParameter",
+                        "value": false
+                    }
+                ],
+                "byteOrder": "大端(BE)",
+                "canCycle": 0,
+                "canFd": false,
+                "canId": "",
+                "checked": false,
+                "commandEndpoint": "",
+                "commandJsonNewline": "无",
+                "commandMode": "文本",
+                "commandNewline": "\\r\\n",
+                "commandTargetId": "",
+                "commandTemplate": "{value}",
+                "confirmBeforeSend": false,
+                "dataType": "HEX字符串",
+                "frameHeader": "",
+                "frameTail": "",
+                "label": "检修许可",
+                "mbAddress": 0,
+                "mbArea": "线圈",
+                "mbBit": 0,
+                "mbSlave": 1,
+                "notify": false,
+                "notifyContent": "开关已切换",
+                "notifyDuration": 3000,
+                "notifyTitle": "提示",
+                "notifyType": "信息",
+                "offCommand": "",
+                "offFeedbackValue": "",
+                "onCommand": "",
+                "onCondition": "非零为开",
+                "onValue": "1",
+                "s7Command": {
+                    "address": "DB1.DBD4",
+                    "dataType": "REAL",
+                    "offValue": "0",
+                    "onValue": "1",
+                    "value": "1"
+                },
+                "showSendConfirmationDetails": false,
+                "switchStyle": "开关"
+            },
+            "type": "ToggleSwitch"
+        },
+        {
+            "geometry": {
+                "h": 40,
+                "w": 180,
+                "x": 660,
+                "y": 380
+            },
+            "id": "resetButton",
+            "properties": {
+                "actions": [
+                    {
+                        "condition": "T[\"检修许可\"] == 1",
+                        "event": "click",
+                        "target": "",
+                        "type": "send"
+                    },
+                    {
+                        "condition": "T[\"检修许可\"] == 1",
+                        "event": "click",
+                        "type": "notify",
+                        "value": "复位已下发"
+                    }
+                ],
+                "buttonStyle": "标准",
+                "byteOrder": "大端(BE)",
+                "canCycle": 0,
+                "canFd": false,
+                "canId": "",
+                "command": "RESET",
+                "commandEndpoint": "",
+                "commandInputs": [
+                ],
+                "commandJsonNewline": "无",
+                "commandMode": "文本",
+                "commandNewline": "\\n",
+                "commandTargetId": "coolLink",
+                "commandTemplate": "{value}",
+                "confirmBeforeSend": true,
+                "dataType": "HEX字符串",
+                "enabled": true,
+                "frameHeader": "",
+                "frameTail": "",
+                "mbAddress": 0,
+                "mbBit": -1,
+                "mbBitAction": "置位",
+                "mbDataType": "uint16",
+                "mbFunc": "03 读保持寄存器",
+                "mbRegOrder": "大端(AB CD)",
+                "mbSlave": 1,
+                "mbValue": "1",
+                "notify": false,
+                "notifyContent": "按钮已按下",
+                "notifyDuration": 3000,
+                "notifyTitle": "提示",
+                "notifyType": "成功",
+                "s7Command": {
+                    "address": "DB1.DBD4",
+                    "dataType": "REAL",
+                    "offValue": "0",
+                    "onValue": "1",
+                    "value": "1"
+                },
+                "sendIntervalMs": 0,
+                "showSendConfirmationDetails": false,
+                "text": "故障复位"
+            },
+            "type": "PushButton"
+        }
+    ]
+}

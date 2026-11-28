@@ -93,6 +93,8 @@ add_library(fhmi_core STATIC
     src/core/dbc.h
     src/core/value_text.cpp
     src/core/value_text.h
+    src/core/widget_rules.cpp
+    src/core/widget_rules.h
     src/core/project_logic.cpp
     src/core/project_logic.h
     src/core/expression.cpp
@@ -279,6 +281,8 @@ add_library(fhmi_designer STATIC
     src/designer/transmit_frame_editor.cpp
     src/designer/transmit_frame_editor.h
     src/designer/property_editor.cpp
+    src/designer/enum_mapping_editor.cpp
+    src/designer/enum_mapping_editor.h
     src/designer/property_editor.h
     src/designer/can_signal_editor.cpp
     src/designer/can_signal_editor.h
@@ -315,6 +319,10 @@ set_target_properties(FluentHMIRuntime PROPERTIES
 add_executable(FluentHMIStudio
     resources/app.qrc
     resources/widget_icons.qrc
+    src/studio/ai_assistant_panel.cpp
+    src/studio/ai_assistant_panel.h
+    src/studio/ai_service.cpp
+    src/studio/ai_service.h
     src/studio/designer_page.cpp
     src/studio/designer_page.h
     src/studio/export_service.cpp
@@ -471,6 +479,7 @@ if(FHMI_BUILD_TESTS)
     add_test(NAME industrial COMMAND tst_industrial)
 
     add_executable(tst_runtime tests/tst_runtime.cpp src/studio/export_service.cpp src/studio/designer_page.cpp
+        src/studio/ai_assistant_panel.cpp src/studio/ai_service.cpp
         src/player/player_window.cpp resources/app.qrc resources/widget_icons.qrc)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)
     target_compile_definitions(tst_runtime PRIVATE

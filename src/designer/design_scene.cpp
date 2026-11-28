@@ -145,6 +145,12 @@ QJsonObject remapWidgetReferences(QJsonObject widget, const QHash<QString, QStri
     };
     remap(QStringLiteral("sourceCardId"));
     remap(QStringLiteral("commandTargetId"));
+    editWidgetActions(props, [&](QJsonObject &row) {
+        const auto kind = row.value(QStringLiteral("type")).toString();
+        const auto target = row.value(QStringLiteral("target")).toString();
+        if ((kind == u"navigate" || kind == u"send") && ids.contains(target))
+            row.insert(QStringLiteral("target"), ids.value(target));
+    });
     const auto type = widget.value(QStringLiteral("type")).toString();
     const int series = isTimingChart(type) ? MaxTimingChannels : type == u"RealtimeChart" ? MaxRealtimeCurves : 0;
     for (int index = 0; index < series; ++index)
@@ -248,6 +254,7 @@ void DesignScene::setBitProfiles(const QJsonObject &profiles)
 void DesignScene::adopt(CanvasItem *item)
 {
     item->setGridSize(m_gridSize);
+    item->widget()->setEnumTables(m_enumTables);
     applyBitProfiles(item, m_bitProfiles);
     connect(item, &CanvasItem::changed, this, [this](CanvasItem *changed, bool resized) {
         if (resized) {
@@ -278,6 +285,15 @@ void DesignScene::adopt(CanvasItem *item)
     for (CanvasItem *child : item->containerChildren()) {
         adopt(child);
     }
+}
+
+void DesignScene::setEnumTables(const QJsonObject &tables)
+{
+    if (m_enumTables == tables)
+        return;
+    m_enumTables = tables;
+    for (auto *item : allItems())
+        item->widget()->setEnumTables(tables);
 }
 
 QList<CanvasItem *> DesignScene::movableTopSelection() const

@@ -41,6 +41,8 @@
 #include "runtime/widgets/digital_timing_widget.h"
 #include "runtime/widgets/display_widgets.h"
 #include "runtime/widgets/industrial_widget.h"
+#include "studio/ai_assistant_panel.h"
+#include "studio/ai_service.h"
 #include "studio/designer_page.h"
 #include "studio/export_service.h"
 #include <FluentQtWidgets/Window/FluentTitleBar.h>
@@ -6463,6 +6465,208 @@ class TestRuntime : public QObject
         player.close();
         QApplication::processEvents();
         QVERIFY(!first || !first->isVisible());
+    }
+
+    void aiEditsOneLedEffect()
+    {
+        Project original;
+        original.enumTables = {{"Pump", "0=Stopped\n2=Warning\n3=Fault"}};
+        const QJsonObject props{{"stateMode", "多状态"}, {"enumTable", "Pump"},
+                                {"ledEffects", QJsonObject{{"0", "off"}, {"2.0", "slow"}, {"3", "fast"}}}};
+        original.widgets = {QJsonObject{{"id", "lamp"}, {"type", "LEDIndicator"}, {"properties", props}}};
+        const QJsonObject edit{{"id", "lamp"}, {"properties", QJsonObject{{"ledEffects", QJsonObject{{"2", "steady"}}}}}};
+        Project result;
+        QString error;
+        QVERIFY2(AiService::applyPatchObject(original, {{"upsertWidgets", QJsonArray{edit}}}, &result, nullptr,
+                                             nullptr, &error), qPrintable(error));
+        const auto effects = result.widgets.first().toObject().value("properties").toObject().value("ledEffects").toObject();
+        const QJsonObject expected{{"0", "off"}, {"2", "steady"}, {"3", "fast"}};
+        QCOMPARE(effects, expected);
+        QCOMPARE(result.enumTables, original.enumTables);
+    }
+
+    void aiAssistantPatchExtractApplyAndUndo()
+    {
+        DesignerPage page;
+        page.show();
+        QApplication::processEvents();
+
+        auto *rightTabs = page.findChild<FluentQt::SegmentedWidget *>(QStringLiteral("rightPanelTabs"));
+        auto *aiPanel = page.findChild<AiAssistantPanel *>(QStringLiteral("aiAssistantPanel"));
+        auto *scene = page.findChild<DesignScene *>();
+        QVERIFY(rightTabs && aiPanel && scene);
+        QCOMPARE(page.snapshot().widgets.size(), 0);
+
+        // 1. Extract and validate a patch that creates a current GaugeMeter (-2000..2000, 60A)
+        const QString replyCreate = QStringLiteral(
+            "为你创建一个电流仪表盘：\n"
+            "```fhmi-patch\n"
+            "{\n"
+            "  \"title\": \"新增电流仪表盘\",\n"
+            "  \"upsertWidgets\": [\n"
+            "    {\n"
+            "      \"id\": \"gaugeMeter1\",\n"
+            "      \"type\": \"GaugeMeter\",\n"
+            "      \"geometry\": {\"x\": 40, \"y\": 40, \"w\": 180, \"h\": 180},\n"
+            "      \"properties\": {\"title\": \"电流\", \"unit\": \"A\", \"minimum\": -2000, \"maximum\": 2000, \"value\": 60}\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```");
+        const AiPatchProposal createProposal = AiService::extractPatch(replyCreate, page.snapshot());
+        QVERIFY(createProposal.hasPatch);
+        QVERIFY2(createProposal.valid, qPrintable(createProposal.error));
+        QCOMPARE(createProposal.patchedProject.widgets.size(), 1);
+        QCOMPARE(createProposal.touchedWidgetIds, QStringList{QStringLiteral("gaugeMeter1")});
+
+        // Apply through AiAssistantPanel signal -> DesignerPage undo stack
+        emit aiPanel->applyProjectRequested(createProposal.patchedProject, createProposal.touchedWidgetIds);
+        QApplication::processEvents();
+        QCOMPARE(page.snapshot().widgets.size(), 1);
+        QVERIFY(page.canUndo());
+        CanvasItem *gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
+        QVERIFY(gauge);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), -2000.0);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("maximum")).toDouble(), 2000.0);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("value")).toDouble(), 60.0);
+
+        // 2. Partial update patch on existing widget (only id + changed property)
+        const QString replyUpdate = QStringLiteral(
+            "将最小值改为 0：\n"
+            "```fhmi-patch\n"
+            "{\n"
+            "  \"title\": \"修改电流仪表盘量程\",\n"
+            "  \"upsertWidgets\": [\n"
+            "    {\n"
+            "      \"id\": \"gaugeMeter1\",\n"
+            "      \"properties\": {\"minimum\": 0}\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```");
+        const auto previous = AiConfig::load();
+        const auto local = AiConfig::loadProvider("ollama");
+        const auto restoreSettings = qScopeGuard([&] {
+            AiConfig::save(local);
+            AiConfig::save(previous);
+        });
+        AiConfig::save({"ollama", "http://127.0.0.1:1/v1", {}, "test"});
+        auto *input = aiPanel->findChild<QPlainTextEdit *>("aiPromptInput");
+        auto *send = aiPanel->findChild<QPushButton *>("aiSendButton");
+        auto *service = aiPanel->findChild<AiService *>();
+        QVERIFY(input && send && service);
+        input->setPlainText("Update gauge");
+        send->click();
+        service->abort(); // Supply the provider reply locally.
+        emit service->finished(replyUpdate);
+        QPointer<QPushButton> apply = aiPanel->findChild<QPushButton *>("aiApplyPatchButton");
+        QVERIFY(apply);
+        auto *manual = scene->createItem("Label", {300, 40});
+        QVERIFY(manual);
+        const QString manualId = manual->widgetId();
+        apply->click();
+        QApplication::processEvents();
+        QVERIFY(scene->findItem(manualId));
+        gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
+        QVERIFY(gauge);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), 0.0);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("maximum")).toDouble(), 2000.0);
+
+        // 3. Undo the proposal, the manual edit, then the original gauge.
+        page.undo();
+        QApplication::processEvents();
+        gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
+        QVERIFY(gauge);
+        QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), -2000.0);
+        QVERIFY(scene->findItem(manualId));
+        page.undo();
+        QVERIFY(!scene->findItem(manualId));
+        page.undo();
+        QApplication::processEvents();
+        QCOMPARE(page.snapshot().widgets.size(), 0);
+        input->setPlainText("Draft from previous project");
+        QVERIFY(page.newProject());
+        QVERIFY(input->toPlainText().isEmpty());
+        QVERIFY(apply.isNull());
+
+        // 4. Patch with shorthand parseMode ("键值"), data points, alarms, and RealtimeChart curves
+        const QString replyComplex = QStringLiteral(
+            "```fhmi-patch\n"
+            "{\n"
+            "  \"title\": \"储能电池充放电监控台\",\n"
+            "  \"upsertWidgets\": [\n"
+            "    {\"id\": \"serial1\", \"type\": \"SerialConfigCard\", \"geometry\": {\"x\": 20, \"y\": 440, \"w\": 360, \"h\": 320}},\n"
+            "    {\"id\": \"gauge1\", \"type\": \"GaugeMeter\", \"geometry\": {\"x\": 20, \"y\": 140, \"w\": 180, \"h\": 180},\n"
+            "     \"properties\": {\"title\": \"电流\", \"unit\": \"A\", \"minimum\": 0, \"maximum\": 2000, \"value\": 125},\n"
+            "     \"binding\": {\"parseMode\": \"键值\", \"key\": \"current\", \"expression\": \"x * 0.1\"}},\n"
+            "    {\"id\": \"chart1\", \"type\": \"RealtimeChart\", \"geometry\": {\"x\": 420, \"y\": 140, \"w\": 400, \"h\": 280},\n"
+            "     \"properties\": {\"title\": \"充放电趋势\", \"curveCount\": 2, \"_curve_0_name\": \"电压\", \"_curve_0_parseMode\": \"键值\", \"_curve_0_key\": \"voltage\", \"_curve_1_name\": \"电流\", \"_curve_1_parseMode\": \"键值\", \"_curve_1_key\": \"current\"}},\n"
+            "    {\"id\": \"alarms1\", \"type\": \"AlarmList\", \"geometry\": {\"x\": 420, \"y\": 440, \"w\": 740, \"h\": 320}}\n"
+            "  ],\n"
+            "  \"points\": [\n"
+            "    {\"name\": \"current\", \"key\": \"current\"}\n"
+            "  ],\n"
+            "  \"alarms\": [\n"
+            "    {\"id\": \"过流报警\", \"condition\": \"current > 1500\", \"level\": \"紧急\", \"message\": \"电流超过 1500A\"}\n"
+            "  ]\n"
+            "}\n"
+            "```");
+        const AiPatchProposal complexProposal = AiService::extractPatch(replyComplex, page.snapshot());
+        QVERIFY(complexProposal.hasPatch);
+        QVERIFY2(complexProposal.valid, qPrintable(complexProposal.error));
+        QCOMPARE(complexProposal.patchedProject.widgets.size(), 4);
+        QCOMPARE(complexProposal.patchedProject.logic.value(QStringLiteral("points")).toArray().size(), 1);
+        QCOMPARE(complexProposal.patchedProject.logic.value(QStringLiteral("alarms")).toArray().size(), 1);
+        const auto &base = complexProposal.patchedProject;
+        const auto patch = jsonObject(R"({"points":[{"name":"current","staleAfterMs":2000}],
+                                         "alarms":[{"id":"过流报警","message":"Updated"}]})");
+        Project updated;
+        QString error;
+        QVERIFY2(AiService::applyPatchObject(base, patch, &updated, nullptr, nullptr, &error), qPrintable(error));
+        QCOMPARE(updated.logic["points"].toArray().first().toObject()["binding"],
+                 base.logic["points"].toArray().first().toObject()["binding"]);
+        const auto alarm = updated.logic["alarms"].toArray().first().toObject();
+        QCOMPARE(alarm["condition"], base.logic["alarms"].toArray().first().toObject()["condition"]);
+        QCOMPARE(alarm["level"].toInt(), 3);
+        QCOMPARE(alarm["text"].toString(), QStringLiteral("Updated"));
+        const auto conflict = jsonObject(R"({"alarms":[{"id":"过流报警","message":"Another change"}]})");
+        QVERIFY(!AiService::applyPatchObject(updated, conflict, nullptr, nullptr, nullptr, &error, &base));
+    }
+
+    void aiCredentialsStayScoped()
+    {
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        const QString previousName = QCoreApplication::applicationName();
+        QCoreApplication::setApplicationName(QFileInfo(temporary.path()).fileName());
+        const auto restore = qScopeGuard([&] {
+            QSettings().clear();
+            QCoreApplication::setApplicationName(previousName);
+        });
+        QSettings settings;
+        settings.setValue("ai/provider", "custom");
+        settings.setValue("ai/baseUrl", "https://example.invalid/v1");
+        settings.setValue("ai/model", "private-model");
+        settings.setValue("ai/apiKey", "test-only-key");
+
+        const auto other = AiConfig::loadProvider("deepseek");
+        QVERIFY(other.apiKey.isEmpty());
+        AiConfig::save(other);
+        const auto custom = AiConfig::loadProvider("custom");
+        QCOMPARE(custom.baseUrl, QStringLiteral("https://example.invalid/v1"));
+        QCOMPARE(custom.model, QStringLiteral("private-model"));
+        QCOMPARE(custom.apiKey, QStringLiteral("test-only-key"));
+        QVERIFY(!settings.contains("ai/apiKey"));
+        QVERIFY(AiConfig::chatCompletionsUrl(AiConfig::presetBaseUrl("custom")).isEmpty());
+        QVERIFY(AiConfig::modelsUrl({}).isEmpty());
+
+        Project project;
+        project.widgets.append(jsonObject(R"({"type":"GroupBox","children":[{"type":"MqttConfigCard","id":"broker",
+            "properties":{"defaultUsername":"private-user","defaultPassword":"private-password"}}]})"));
+        const auto prompt = AiService::buildSystemPrompt(project, {});
+        QVERIFY(prompt.contains(QStringLiteral("broker")));
+        QVERIFY(!prompt.contains(QStringLiteral("private-user")));
+        QVERIFY(!prompt.contains(QStringLiteral("private-password")));
     }
 };
 

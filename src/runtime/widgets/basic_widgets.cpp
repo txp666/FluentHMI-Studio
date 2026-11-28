@@ -1,4 +1,5 @@
 #include "runtime/widgets/basic_widgets.h"
+#include "core/value_text.h"
 
 #include "core/frame_templates.h"
 #include "core/project_logic.h"
@@ -127,18 +128,24 @@ void PushButtonWidget::periodicSendChanged(bool running)
     m_button->setText(running ? (isPeriodicStarting() ? tr("取消启动") : tr("停止周期发送")) : m_caption);
 }
 
+CommandResult PushButtonWidget::configuredCommand(const QVariant &) const
+{
+    return encodeWidgetCommand(*this, [this](const QJsonObject &props) {
+        return CommandEncoder::buttonFromProperties(props,
+            [this](const QString &id) { return context()->inputValue(id); }, nullptr, frameTemplates());
+    });
+}
+
 void PushButtonWidget::sendCommand()
 {
     if (!context() || stopPeriodicSend()) {
         return;
     }
-    const auto encode = [this] {
-        return encodeWidgetCommand(*this, [this](const QJsonObject &props) {
-            return CommandEncoder::buttonFromProperties(props,
-                [this](const QString &id) { return context()->inputValue(id); }, nullptr, frameTemplates());
-        });
-    };
-    const auto command = encode();
+    if (!prop("actions").toArray().isEmpty()) {
+        context()->runWidgetActions(this, QStringLiteral("click"), 1);
+        return;
+    }
+    const auto command = configuredCommand();
     const auto notify = [this] {
         if (flag("notify"))
             context()->notify(text("notifyTitle"), text("notifyContent"), text("notifyType"), integer("notifyDuration"));
@@ -146,7 +153,7 @@ void PushButtonWidget::sendCommand()
     if (const int interval = CommandEncoder::periodicSendInterval(properties()); interval > 0) {
         CommandReader readInputs;
         if (CommandEncoder::supportsPeriodicInputs(properties()))
-            readInputs = encode;
+            readInputs = [this] { return configuredCommand(); };
         requestSend(command.command || !command.error.isEmpty() ? command : CommandResult::failure(tr("请配置发送内容")),
                     notify, {}, interval, std::move(readInputs));
         return;
@@ -364,7 +371,7 @@ void ComboBoxWidget::rebuildSelection(const QString &style, const QList<CommandE
 
 void ComboBoxWidget::apply()
 {
-    const auto options = CommandEncoder::selectionOptions(prop("options").toArray());
+    const auto options = CommandEncoder::selectionOptions(prop("options").toArray(), text("enumTable"), enumTables());
     QString style = text("selectionStyle");
     if (style != QStringLiteral("分段") && style != QStringLiteral("单选组")) // i18n: value
         style = QStringLiteral("下拉框");                                     // i18n: value
@@ -410,8 +417,20 @@ void ComboBoxWidget::setCurrentIndex(int index)
 
 void ComboBoxWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if (const auto index = bindingInteger(value))
+    if (!text("enumTable").isEmpty()) {
+        const auto key = valueTextKey(value);
+        const auto match = std::find_if(m_options.cbegin(), m_options.cend(), [&](const auto &option) {
+            return valueTextKey(option.value) == key;
+        });
+        setCurrentIndex(match == m_options.cend() ? -1 : int(match - m_options.cbegin()));
+    } else if (const auto index = bindingInteger(value))
         setCurrentIndex(*index >= 0 && *index < m_options.size() ? *index : -1);
+}
+
+void ComboBoxWidget::bindingStatusChanged(BindingStatus status)
+{
+    if ((status == BindingStatus::Waiting || status == BindingStatus::Stale) && !text("enumTable").isEmpty())
+        setCurrentIndex(-1);
 }
 
 void ComboBoxWidget::selectIndex(int index)
@@ -563,15 +582,30 @@ void ToggleSwitchWidget::applyBoundValue(const QVariant &value, const BindingEnt
     setChecked(isOn);
 }
 
+CommandResult ToggleSwitchWidget::configuredCommand(const QVariant &value) const
+{
+    return encodeWidgetCommand(*this, [this, &value](const QJsonObject &props) {
+        return CommandEncoder::switchFromProperties(props, value.toBool(), frameTemplates());
+    });
+}
+
 void ToggleSwitchWidget::checkedEdited(bool checked)
 {
     if (!context()) {
         m_checked = checked;
         return;
     }
-    const auto command = encodeWidgetCommand(*this, [this, checked](const QJsonObject &props) {
-        return CommandEncoder::switchFromProperties(props, checked, frameTemplates());
-    });
+    if (!prop("actions").toArray().isEmpty()) {
+        const bool previous = m_checked;
+        setChecked(previous);
+        context()->runWidgetActions(this, checked ? QStringLiteral("on") : QStringLiteral("off"), checked,
+                                    [this, previous, checked] {
+            if (m_checked == previous)
+                setChecked(checked);
+        });
+        return;
+    }
+    const auto command = configuredCommand(checked);
     const bool sends = command.command || !command.error.isEmpty();
     const auto notify = [this] {
         if (flag("notify"))

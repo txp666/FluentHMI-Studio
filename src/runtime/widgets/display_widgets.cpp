@@ -9,7 +9,10 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QLocale>
 #include <QtCore/QtMath>
+#include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtWidgets/QHBoxLayout>
@@ -69,6 +72,18 @@ QColor ledColor(const QString &name)
     if (name == QLatin1String("blue")) {
         return QColor(0x29, 0x8D, 0xF2);
     }
+    if (name == QLatin1String("orange")) {
+        return QColor(0xF7, 0x7F, 0x00);
+    }
+    if (name == QLatin1String("cyan")) {
+        return QColor(0x00, 0xB8, 0xD9);
+    }
+    if (name == QLatin1String("purple")) {
+        return QColor(0x9B, 0x51, 0xE0);
+    }
+    if (name == QLatin1String("white")) {
+        return QColor(0xF0, 0xF4, 0xF8);
+    }
     if (name == QLatin1String("gray")) {
         return QColor(0x9E, 0x9E, 0x9E);
     }
@@ -87,29 +102,131 @@ LedWidget::LedWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, 
     layout->setContentsMargins(34, 0, 4, 0);
     m_label = new FluentQt::BodyLabel(this);
     layout->addWidget(m_label);
+    m_blinkTimer.setTimerType(Qt::PreciseTimer);
+    connect(&m_blinkTimer, &QTimer::timeout, this, [this]() {
+        m_blinkVisible = !m_blinkVisible;
+        update();
+    });
     repaintOnThemeChange(this);
 }
 
 void LedWidget::apply()
 {
-    if (!isBound()) {
-        m_on = flag("on");
-        m_known = true;
+    const bool interactive = !prop("actions").toArray().isEmpty();
+    setFocusPolicy(interactive ? Qt::StrongFocus : Qt::NoFocus);
+    setCursor(interactive ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    m_multiState = usesMultiStateLed(properties());
+    if (m_multiState) {
+        m_entries = parseValueText(enumMapping(properties(), enumTables()));
+        m_effects = parseLedEffects(prop("ledEffects"));
+        showEnumValue(isBound() ? m_reading : prop("stateValue").toVariant());
+    } else {
+        m_stateLabel.clear();
+        m_halfPeriod = flag("blink") ? 450 : 0;
+        if (!isBound()) {
+            m_on = flag("on");
+            m_known = true;
+        }
     }
+    m_label->setPixelFontSize(std::clamp(integer("fontSize") > 0 ? integer("fontSize") : 14, 10, 64));
     bindingStatusChanged(bindingStatus());
 }
 
 void LedWidget::applyBoundValue(const QVariant &value, const BindingEntry &binding)
 {
+    if (m_multiState) {
+        if (m_reading != value || m_reading.metaType() != value.metaType()) {
+            showEnumValue(value);
+            bindingStatusChanged(bindingStatus());
+        }
+        return;
+    }
+    m_reading = value;
     const auto on = bindingLed(value, binding.ledOnValue, binding.ledOffValue);
     const bool knownChanged = m_known != on.has_value();
     m_known = on.has_value();
     if (on)
         m_on = *on;
+    updateBlinkTimer();
     if (knownChanged) {
         bindingStatusChanged(bindingStatus());
     } else {
         update();
+    }
+}
+
+void LedWidget::activate()
+{
+    if (!context() || prop("actions").toArray().isEmpty())
+        return;
+    QVariant value;
+    if (bindingStatus() == BindingStatus::Live)
+        value = m_reading;
+    else if (!isBound())
+        value = m_multiState ? prop("stateValue").toVariant() : QVariant(m_on);
+    context()->runWidgetActions(this, QStringLiteral("click"), value);
+}
+
+void LedWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && context() && !prop("actions").toArray().isEmpty()) {
+        m_pressed = true;
+        event->accept();
+    } else {
+        HmiWidget::mousePressEvent(event);
+    }
+}
+
+void LedWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_pressed) {
+        m_pressed = false;
+        if (rect().contains(event->position().toPoint()))
+            activate();
+        event->accept();
+    } else {
+        HmiWidget::mouseReleaseEvent(event);
+    }
+}
+
+void LedWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Space || event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        if (!event->isAutoRepeat())
+            activate();
+        event->accept();
+    } else {
+        HmiWidget::keyPressEvent(event);
+    }
+}
+
+void LedWidget::showEnumValue(const QVariant &value)
+{
+    m_reading = value;
+    const auto key = valueTextKey(value);
+    const auto entry = m_entries.constFind(key);
+    m_known = entry != m_entries.cend();
+    if (m_known)
+        m_stateLabel = entry->text;
+    else
+        m_stateLabel = value.isValid() ? tr("未知状态（%1）").arg(displayString(value)) : tr("数据未知");
+    m_stateColor = m_known ? QColor(entry->color) : QColor();
+    const auto effect = m_effects.value(key);
+    m_on = m_known && effect != u"off";
+    m_halfPeriod = effect == u"slow" ? 500 : effect == u"fast" ? 250 : 0;
+}
+
+void LedWidget::updateBlinkTimer()
+{
+    const bool available = !isBound() || bindingStatus() == BindingStatus::Live;
+    if (m_halfPeriod > 0 && available && m_known && m_on) {
+        if (!m_blinkTimer.isActive() || m_blinkTimer.interval() != m_halfPeriod) {
+            m_blinkVisible = true;
+            m_blinkTimer.start(m_halfPeriod);
+        }
+    } else {
+        m_blinkTimer.stop();
+        m_blinkVisible = true;
     }
 }
 
@@ -120,6 +237,8 @@ void LedWidget::bindingStatusChanged(BindingStatus status)
         detail = tr("待采集");
     } else if (status == BindingStatus::Stale) {
         detail = tr("数据已过期");
+    } else if (m_multiState) {
+        detail = m_stateLabel;
     } else if (!m_known) {
         detail = tr("数据未知");
     }
@@ -127,35 +246,182 @@ void LedWidget::bindingStatusChanged(BindingStatus status)
     if (!detail.isEmpty())
         label = label.isEmpty() ? detail : QStringLiteral("%1 · %2").arg(label, detail);
     m_label->setText(label);
+    setToolTip(m_multiState ? label : QString());
     setAccessibleDescription(detail);
+    updateBlinkTimer();
+    updateLayoutGeometry();
     update();
+}
+
+void LedWidget::resizeEvent(QResizeEvent *event)
+{
+    HmiWidget::resizeEvent(event);
+    updateLayoutGeometry();
+}
+
+qreal LedWidget::lampDiameter() const
+{
+    const QString pos = text("labelPosition");
+    const QString sizeMode = text("ledSize");
+    const bool hasText = pos != QStringLiteral("隐藏") && !m_label->text().isEmpty(); // i18n: value
+    const int labelH = m_label->fontMetrics().height();
+
+    qreal maxW = std::max<qreal>(0, width() - 6);
+    qreal maxH = std::max<qreal>(0, height() - 6);
+    if (hasText && pos == QStringLiteral("底部")) { // i18n: value
+        maxH = std::max<qreal>(0, height() - labelH - 2);
+    } else if (hasText && (pos.isEmpty() || pos == QStringLiteral("右侧"))) { // i18n: value
+        maxW = std::max<qreal>(8, width() * 0.65);
+    }
+    const qreal maxBox = std::min(maxW, maxH);
+
+    if (sizeMode == QStringLiteral("小")) { // i18n: value
+        return std::min<qreal>(14, maxBox);
+    }
+    if (sizeMode == QStringLiteral("标准")) { // i18n: value
+        return std::min<qreal>(18, maxBox);
+    }
+    if (sizeMode == QStringLiteral("大")) { // i18n: value
+        return std::min<qreal>(28, maxBox);
+    }
+    if (sizeMode == QStringLiteral("超大")) { // i18n: value
+        return std::min<qreal>(44, maxBox);
+    }
+    // 随控件缩放 (default): at default 140x30 gives 18px, and scales up smoothly when the widget is enlarged.
+    const qreal scaled = hasText && (pos.isEmpty() || pos == QStringLiteral("右侧")) // i18n: value
+                             ? (height() - 6) * 0.75 : maxBox * 0.78;
+    return std::min(maxBox, std::max<qreal>(12, scaled));
+}
+
+void LedWidget::updateLayoutGeometry()
+{
+    if (!layout() || !m_label) {
+        return;
+    }
+    const QString shape = text("ledShape");
+    const QString pos = text("labelPosition");
+    const bool hidden = pos == QStringLiteral("隐藏"); // i18n: value
+    m_label->setVisible(!hidden);
+    if (hidden) {
+        return;
+    }
+
+    if (shape == QStringLiteral("胶囊灯牌") || pos == QStringLiteral("内部居中")) { // i18n: value
+        layout()->setContentsMargins(8, 2, 8, 2);
+        m_label->setAlignment(Qt::AlignCenter);
+    } else if (pos == QStringLiteral("底部")) { // i18n: value
+        const qreal d = lampDiameter();
+        const int topSpace = std::min(int(d + 6), std::max(0, height() - m_label->fontMetrics().height() - 2));
+        layout()->setContentsMargins(4, topSpace, 4, 2);
+        m_label->setAlignment(Qt::AlignHCenter | Qt::AlignBottom);
+    } else {
+        const qreal d = lampDiameter();
+        const qreal glowRadius = std::min<qreal>(d * 0.75, std::min(width(), height()) / 2.0);
+        const int leftMargin = std::max(28, int(std::max(d, glowRadius * 2) + 8));
+        layout()->setContentsMargins(leftMargin, 0, 4, 0);
+        m_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    }
+    if (m_multiState) {
+        // A compact lamp still needs to show the state code when its fixed caption does not fit.
+        const auto margins = layout()->contentsMargins();
+        const int available = std::max(0, width() - margins.left() - margins.right());
+        const auto metrics = m_label->fontMetrics();
+        m_label->setText(metrics.horizontalAdvance(toolTip()) <= available ? toolTip()
+                         : metrics.elidedText(accessibleDescription(), Qt::ElideMiddle, available));
+    }
 }
 
 void LedWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    const qreal d = std::min<qreal>(18, height() - 4);
-    // The glow reaches past the dot; keep all of it inside the widget.
-    const qreal glowRadius = std::min<qreal>(d * 0.8, height() / 2.0);
-    const QRectF dot(glowRadius + 1 - d / 2, (height() - d) / 2, d, d);
-    const QColor color = ledColor(text("color"));
+    const QString shape = text("ledShape");
+    const QString pos = text("labelPosition");
+    const QColor color = m_multiState ? (m_stateColor.isValid() ? m_stateColor : accentColor()) : ledColor(text("color"));
     const bool available = !isBound() || bindingStatus() == BindingStatus::Live;
-    if (available && m_known && m_on) {
+    const bool lit = available && m_known && m_on && m_blinkVisible;
+    const bool dark = isDarkTheme();
+
+    if (shape == QStringLiteral("胶囊灯牌")) { // i18n: value
+        const QRectF pill = QRectF(rect()).adjusted(2, 2, -2, -2);
+        const qreal radius = std::min(pill.width(), pill.height()) / 2.0;
+        if (lit) {
+            QColor fill = color;
+            fill.setAlpha(dark ? 210 : 230);
+            painter.setBrush(fill);
+            painter.setPen(QPen(color.lighter(130), 1.5));
+        } else {
+            painter.setBrush(dark ? QColor(65, 65, 65) : QColor(210, 210, 210));
+            painter.setPen(QPen(dark ? QColor(255, 255, 255, 40) : QColor(0, 0, 0, 40), 1));
+        }
+        painter.drawRoundedRect(pill, radius, radius);
+        return;
+    }
+
+    const qreal d = lampDiameter();
+    if (d <= 0) {
+        return;
+    }
+    const qreal glowRadius = std::min<qreal>(d * 0.78, std::min(width(), height()) / 2.0);
+    QPointF center;
+    if (pos == QStringLiteral("隐藏") || pos == QStringLiteral("内部居中") || m_label->text().isEmpty()) { // i18n: value
+        center = QRectF(rect()).center();
+    } else if (pos == QStringLiteral("底部")) { // i18n: value
+        const int labelH = m_label->fontMetrics().height();
+        const qreal availH = std::max(0, height() - labelH - 2);
+        center = QPointF(width() / 2.0, availH / 2.0);
+    } else {
+        const qreal cx = std::max<qreal>(d / 2.0 + 3, glowRadius + 1);
+        center = QPointF(cx, height() / 2.0);
+    }
+    const QRectF dot(center.x() - d / 2.0, center.y() - d / 2.0, d, d);
+
+    if (lit) {
         QRadialGradient glow(dot.center(), glowRadius);
         QColor halo = color;
-        halo.setAlpha(90);
-        glow.setColorAt(0.55, halo);
+        halo.setAlpha(95);
+        glow.setColorAt(0.5, halo);
         glow.setColorAt(1, Qt::transparent);
         painter.setPen(Qt::NoPen);
         painter.setBrush(glow);
-        painter.drawEllipse(dot.center(), glowRadius, glowRadius);
+        if (shape == QStringLiteral("方形") || shape == QStringLiteral("圆角方形")) { // i18n: value
+            const qreal expand = glowRadius - d / 2.0;
+            const QRectF glowRect = dot.adjusted(-expand, -expand, expand, expand);
+            const qreal r = shape == QStringLiteral("圆角方形") ? d * 0.35 : 4.0; // i18n: value
+            painter.drawRoundedRect(glowRect, r, r);
+        } else {
+            painter.drawEllipse(dot.center(), glowRadius, glowRadius);
+        }
         painter.setBrush(color);
     } else {
-        painter.setBrush(isDarkTheme() ? QColor(70, 70, 70) : QColor(205, 205, 205));
+        painter.setBrush(dark ? QColor(70, 70, 70) : QColor(205, 205, 205));
     }
-    painter.setPen(QPen(isDarkTheme() ? QColor(255, 255, 255, 40) : QColor(0, 0, 0, 40), 1));
-    painter.drawEllipse(dot);
+
+    painter.setPen(QPen(dark ? QColor(255, 255, 255, 45) : QColor(0, 0, 0, 45), std::max<qreal>(1.0, d / 22.0)));
+    if (shape == QStringLiteral("方形")) { // i18n: value
+        const qreal r = std::max<qreal>(2.0, d * 0.08);
+        painter.drawRoundedRect(dot, r, r);
+    } else if (shape == QStringLiteral("圆角方形")) { // i18n: value
+        const qreal r = std::max<qreal>(4.0, d * 0.26);
+        painter.drawRoundedRect(dot, r, r);
+    } else {
+        painter.drawEllipse(dot);
+    }
+
+    // Specular highlight when diameter is large enough
+    if (d >= 16) {
+        painter.setPen(Qt::NoPen);
+        QRadialGradient highlight(dot.left() + d * 0.34, dot.top() + d * 0.32, d * 0.35);
+        highlight.setColorAt(0, QColor(255, 255, 255, lit ? 115 : 55));
+        highlight.setColorAt(1, Qt::transparent);
+        painter.setBrush(highlight);
+        if (shape == QStringLiteral("方形") || shape == QStringLiteral("圆角方形")) { // i18n: value
+            const qreal r = shape == QStringLiteral("圆角方形") ? d * 0.22 : 2.0; // i18n: value
+            painter.drawRoundedRect(dot.adjusted(1, 1, -1, -1), r, r);
+        } else {
+            painter.drawEllipse(dot.adjusted(1, 1, -1, -1));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +479,7 @@ void NumericDisplayWidget::apply()
     m_unit->setMinimumHeight(m_unit->fontMetrics().height());
     if (!isLive())
         m_reading = formatDisplayValue(prop("value").toVariant(), text("displayFormat"), text("decimals"));
-    m_enumEntries = enumeration ? parseValueText(text("textList")) : QHash<QString, ValueText>();
+    m_enumEntries = enumeration ? parseValueText(enumMapping(properties(), enumTables())) : QHash<QString, ValueText>();
     m_value->setPixelFontSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
     QFont font = m_value->font();
     font.setBold(true);
@@ -246,6 +512,8 @@ void NumericDisplayWidget::showValue(const QVariant &value)
         } else {
             if (!text("unknownText").isEmpty())
                 label = text("unknownText");
+            else if (!text("enumTable").isEmpty())
+                label = tr("未知状态（%1）").arg(label);
             if (QColor(text("unknownColor")).isValid())
                 color = QColor(text("unknownColor"));
         }
@@ -253,6 +521,8 @@ void NumericDisplayWidget::showValue(const QVariant &value)
     const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
     if (mutedState) {
         color = isDarkTheme() ? QColor(QStringLiteral("#8a8a8a")) : QColor(QStringLiteral("#909090"));
+        if (!text("enumTable").isEmpty() && text("displayFormat") == QStringLiteral("枚举")) // i18n: value
+            label = bindingStatus() == BindingStatus::Waiting ? tr("待采集") : tr("数据已过期");
     }
     m_value->setText(label);
     m_value->setTextColor(color, color);
@@ -293,14 +563,50 @@ ProgressBarWidget::ProgressBarWidget(const WidgetMeta &meta, QWidget *parent) : 
 
 void ProgressBarWidget::apply()
 {
+    m_ranges = parseColorRanges(prop("colorRanges"));
+    m_reading = integer("value");
     m_bar->setRange(0, std::max(1, integer("maximum")));
     m_bar->setValue(integer("value"));
+    bindingStatusChanged(bindingStatus());
 }
 
 void ProgressBarWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if (const auto number = bindingInteger(value)) {
+    if (!m_ranges.isEmpty()) {
+        m_reading = bindingFloat(value);
+        if (m_reading) {
+            const double position = std::clamp(*m_reading, 0.0, double(m_bar->maximum()));
+            m_bar->setValue(qRound(position));
+            m_bar->setVal(position);
+        }
+        bindingStatusChanged(bindingStatus());
+    } else if (const auto number = bindingInteger(value)) {
         m_bar->setValue(std::clamp(*number, m_bar->minimum(), m_bar->maximum()));
+    }
+}
+
+void ProgressBarWidget::bindingStatusChanged(BindingStatus status)
+{
+    const bool unavailable = !m_reading || status == BindingStatus::Waiting || status == BindingStatus::Stale;
+    if (!m_ranges.isEmpty() && unavailable) {
+        m_bar->setCustomBarColor(QColor(128, 128, 128), QColor(160, 160, 160));
+    } else {
+        const QColor color = m_reading ? QColor(rangeColor(m_ranges, *m_reading)) : QColor();
+        m_bar->setCustomBarColor(color, color);
+    }
+    update();
+}
+
+void ProgressBarWidget::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setPen(palette().color(QPalette::Mid));
+    for (const auto &range : m_ranges) {
+        if (range.minimum > 0 && range.minimum < m_bar->maximum()) {
+            const int x = qRound(m_bar->x() + (m_bar->width() - 1) * range.minimum / m_bar->maximum());
+            const int y = m_bar->geometry().center().y() - 2;
+            painter.drawLine(x, y - 3, x, y);
+        }
     }
 }
 
@@ -440,16 +746,19 @@ GaugeWidget::GaugeWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(me
 
 void GaugeWidget::apply()
 {
+    m_ranges = parseColorRanges(prop("colorRanges"));
+    m_valid = true;
     m_value = real("value");
     update();
 }
 
 void GaugeWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if (const auto number = bindingFloat(value)) {
+    const auto number = bindingFloat(value);
+    m_valid = number.has_value();
+    if (number)
         m_value = *number;
-        update();
-    }
+    update();
 }
 
 void GaugeWidget::bindingStatusChanged(BindingStatus)
@@ -462,7 +771,8 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const bool dark = isDarkTheme();
-    const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
+    const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale ||
+                            (!m_valid && !m_ranges.isEmpty());
     const QColor fg = mutedState ? (dark ? QColor(255, 255, 255, 125) : QColor(0, 0, 0, 115))
                                  : (dark ? QColor(255, 255, 255) : QColor(26, 26, 26));
     const QColor muted = dark ? QColor(255, 255, 255, 150) : QColor(0, 0, 0, 140);
@@ -483,18 +793,37 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     painter.setPen(track);
     painter.drawArc(arc, startAngle, spanAngle);
     if (ratio > 0) {
-        QPen value(mutedState ? muted : accentColor(), stroke, Qt::SolidLine, Qt::RoundCap);
+        const QColor band(rangeColor(m_ranges, m_value));
+        QPen value(mutedState ? muted : band.isValid() ? band : accentColor(), stroke, Qt::SolidLine, Qt::RoundCap);
         painter.setPen(value);
         painter.drawArc(arc, startAngle, int(spanAngle * ratio));
     }
 
+    painter.save();
+    painter.translate(arc.center());
+    painter.setPen(QPen(muted, 1.5));
+    for (const auto &range : m_ranges) {
+        if (range.minimum <= lo || range.minimum >= hi)
+            continue;
+        const auto angle = qDegreesToRadians(225.0 - 270.0 * (range.minimum - lo) / (hi - lo));
+        const QPointF direction(std::cos(angle), -std::sin(angle));
+        painter.drawLine(direction * (side / 2 - stroke / 2 - 3), direction * (side / 2 - stroke / 2));
+    }
+    painter.restore();
+
+    QString number = QString::number(m_value, 'f', 1);
+    if (!m_valid && !m_ranges.isEmpty())
+        number = QStringLiteral("—");
+    else if (!m_ranges.isEmpty() && rangeColor(m_ranges, number.toDouble()) != rangeColor(m_ranges, m_value))
+        number = QString::number(m_value, 'g', QLocale::FloatingPointShortest);
     QFont font = this->font();
     font.setBold(true);
     font.setPixelSize(std::max(10, int(side / 5.5)));
+    const int numberWidth = QFontMetrics(font).horizontalAdvance(number);
+    if (!m_ranges.isEmpty() && numberWidth > side * 0.84)
+        font.setPixelSize(std::max(8, int(font.pixelSize() * side * 0.84 / numberWidth)));
     painter.setFont(font);
     painter.setPen(fg);
-    // Keep one decimal place while showing the actual reading (even when out of range).
-    const QString number = QString::number(m_value, 'f', 1);
     painter.drawText(arc, Qt::AlignCenter, number);
 
     font.setBold(false);

@@ -1,4 +1,5 @@
 #include "studio/designer_page.h"
+#include "studio/ai_assistant_panel.h"
 
 #include "core/frame_templates.h"
 #include "designer/canvas_item.h"
@@ -263,10 +264,50 @@ std::optional<QJsonObject> clipboardDocument(const QByteArray &content, bool pla
     QJsonObject selection{{QStringLiteral("widgets"), widgets}};
     selection.insert(QStringLiteral("version"), object.contains(QStringLiteral("version"))
                                                     ? object.value(QStringLiteral("version"))
-                                                    : QJsonValue(Project::formatVersion(widgets)));
+                                                    : QJsonValue(Project::formatVersion(widgets, {}, {}, object.value(QStringLiteral("enumTables")).toObject())));
     if (object.contains(QStringLiteral("frameTemplates")))
         selection.insert(QStringLiteral("frameTemplates"), object.value(QStringLiteral("frameTemplates")));
+    if (object.contains(QStringLiteral("enumTables")))
+        selection.insert(QStringLiteral("enumTables"), object.value(QStringLiteral("enumTables")));
     return selection;
+}
+
+QJsonObject referencedEnums(const QJsonObject &tables, const QJsonArray &widgets)
+{
+    QJsonObject used;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const auto name = widget.value(QStringLiteral("properties")).toObject().value(QStringLiteral("enumTable")).toString();
+        if (tables.contains(name))
+            used.insert(name, tables.value(name));
+        return true;
+    });
+    return used;
+}
+
+// Bring each referenced table with the pasted widgets. A conflicting name in the destination keeps its meaning.
+QJsonArray importEnumReferences(QJsonArray widgets, const QJsonObject &source, QJsonObject &destination)
+{
+    for (qsizetype i = 0; i < widgets.size(); ++i) {
+        auto widget = widgets.at(i).toObject();
+        auto props = widget.value(QStringLiteral("properties")).toObject();
+        const auto original = props.value(QStringLiteral("enumTable")).toString();
+        if (source.contains(original)) {
+            const auto mapping = source.value(original);
+            QString name = original;
+            for (int n = 2; (destination.contains(name) && destination.value(name) != mapping) ||
+                            (source.contains(name) && source.value(name) != mapping); ++n)
+                name = QStringLiteral("%1 (%2)").arg(original).arg(n);
+            destination.insert(name, mapping);
+            if (name != original) {
+                props.insert(QStringLiteral("enumTable"), name);
+                widget.insert(QStringLiteral("properties"), props);
+            }
+        }
+        if (widget.contains(QStringLiteral("children")))
+            widget.insert(QStringLiteral("children"), importEnumReferences(widget.value(QStringLiteral("children")).toArray(), source, destination));
+        widgets[i] = widget;
+    }
+    return widgets;
 }
 
 QJsonObject referencedFrameTemplates(const QJsonObject &library, const QJsonArray &widgets)
@@ -358,6 +399,30 @@ void DesignerPage::buildUi()
     m_outline->setScene(m_scene);
     m_properties = new PropertyEditor(this);
     m_properties->setScene(m_scene);
+    m_aiAssistant = new AiAssistantPanel(this);
+    m_aiAssistant->setProjectProvider([this]() { return snapshot(); });
+
+    auto *rightPanel = new QWidget(this);
+    rightPanel->setObjectName(QStringLiteral("designerRightPanel"));
+    auto *rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setContentsMargins(0, 6, 0, 0);
+    rightLayout->setSpacing(4);
+    auto *rightTabs = new FluentQt::SegmentedWidget(rightPanel);
+    rightTabs->setObjectName(QStringLiteral("rightPanelTabs"));
+    rightTabs->addItem(QStringLiteral("properties"), tr("属性"));
+    rightTabs->addItem(QStringLiteral("ai"), tr("AI 助手"));
+    rightTabs->setCurrentItem(QStringLiteral("properties"));
+    auto *rightStack = new QStackedWidget(rightPanel);
+    rightStack->addWidget(m_properties);
+    rightStack->addWidget(m_aiAssistant);
+    connect(rightTabs, &FluentQt::SegmentedWidget::currentItemChanged, rightStack, [rightStack](const QString &key) {
+        rightStack->setCurrentIndex(key == QLatin1String("ai") ? 1 : 0);
+    });
+    auto *rightTabsRow = new QHBoxLayout;
+    rightTabsRow->setContentsMargins(4, 0, 8, 0);
+    rightTabsRow->addWidget(rightTabs);
+    rightLayout->addLayout(rightTabsRow);
+    rightLayout->addWidget(rightStack, 1);
 
     auto *leftPanel = new QWidget(this);
     leftPanel->setObjectName(QStringLiteral("designerLeftPanel"));
@@ -482,7 +547,7 @@ void DesignerPage::buildUi()
     action(FluentIcon::FitPage, tr("适应窗口"), QKeySequence(Qt::CTRL | Qt::Key_0), [this]() { fitCanvas(); });
     action(FluentIcon::Zoom, tr("实际大小"), QKeySequence(), [this]() { m_view->resetTransform(); });
     bar->addSeparator();
-    panelSwitch(m_properties, tr("属性"), QStringLiteral("panel_right"));
+    panelSwitch(rightPanel, tr("属性"), QStringLiteral("panel_right"));
 
     auto *center = new QWidget(this);
     auto *centerLayout = new QVBoxLayout(center);
@@ -494,12 +559,12 @@ void DesignerPage::buildUi()
     auto *splitter = new QSplitter(Qt::Horizontal, this);
     splitter->addWidget(leftPanel);
     splitter->addWidget(center);
-    splitter->addWidget(m_properties);
+    splitter->addWidget(rightPanel);
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({216, 754, 330});
     splitter->setChildrenCollapsible(false);
     leftPanel->setMinimumWidth(180);
-    m_properties->setMinimumWidth(280);
+    rightPanel->setMinimumWidth(280);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 0, 8, 8);
@@ -514,9 +579,12 @@ void DesignerPage::buildUi()
     connect(m_scene, &QGraphicsScene::selectionChanged, this, [this]() {
         const QList<CanvasItem *> selected = m_scene->selectedCanvasItems();
         m_properties->showItem(selected.size() == 1 ? selected.first() : nullptr);
+        m_aiAssistant->setSelectedItems(selected);
         m_outline->syncSelection();
         updateEditActions();
     });
+    connect(m_aiAssistant, &AiAssistantPanel::applyProjectRequested, this, &DesignerPage::applyAiProject);
+    connect(m_aiAssistant, &AiAssistantPanel::notify, this, &DesignerPage::notify);
     connect(m_outline, &WidgetOutline::itemContextMenuRequested, this, &DesignerPage::showItemContextMenu);
     connect(m_scene, &DesignScene::itemPropertiesChanged, this, [this](CanvasItem *item) {
         if (m_properties->currentItem() == item) {
@@ -581,6 +649,7 @@ void DesignerPage::applyProjectSettings()
     m_scene->setCanvasSize(QSize(m_project.canvasWidth, m_project.canvasHeight));
     m_scene->setProjectParser(m_project.parserType());
     m_scene->setBitProfiles(m_project.bitProfiles);
+    m_scene->setEnumTables(m_project.enumTables);
     m_scene->setGridSize(m_project.gridSize);
 }
 
@@ -731,6 +800,8 @@ void DesignerPage::load(const Project &project)
     m_project = project;
     m_properties->showItem(nullptr);
     m_properties->setProject(&m_project);
+    m_aiAssistant->clearConversation();
+    m_aiAssistant->setSelectedItems({});
     applyProjectSettings();
     m_outline->rebuild();
     // Once the view has its size: a page larger than the view opens fitted.
@@ -738,6 +809,23 @@ void DesignerPage::load(const Project &project)
     resetHistory();
     setModified(false);
     emit projectChanged();
+}
+
+void DesignerPage::applyAiProject(const Project &patched, const QStringList &selectIds)
+{
+    m_properties->showItem(nullptr);
+    QString error;
+    if (!m_scene->loadWidgets(patched.widgets, &error)) {
+        emit notify(tr("无法应用 AI 变更"), error, true);
+        return;
+    }
+    m_project = patched;
+    m_properties->setProject(&m_project);
+    applyProjectSettings();
+    m_scene->selectIds(selectIds);
+    m_aiAssistant->setSelectedItems(m_scene->selectedCanvasItems());
+    recordChange();
+    emit notify(tr("已应用 AI 变更"), tr("可按 Ctrl+Z 撤销此次修改"), false);
 }
 
 // ---------------------------------------------------------------------------
@@ -873,6 +961,9 @@ void DesignerPage::copy()
     const auto templates = referencedFrameTemplates(m_project.frameTemplates, widgets);
     if (!templates.isEmpty())
         document.insert(QStringLiteral("frameTemplates"), templates);
+    const auto tables = referencedEnums(m_project.enumTables, widgets);
+    if (!tables.isEmpty())
+        document.insert(QStringLiteral("enumTables"), tables);
     const QByteArray json = QJsonDocument(document).toJson(QJsonDocument::Compact);
     auto *mime = new QMimeData;
     mime->setData(QLatin1String(WidgetsClipboardType), json);
@@ -895,6 +986,15 @@ void DesignerPage::paste()
     }
     // Checked as opening a project checks them; a link card's frame format against this project's mode.
     if (document) {
+        const auto enums = document->value(QStringLiteral("enumTables"));
+        if (enums.isUndefined() || enums.isObject()) {
+            auto definitions = referencedEnums(m_project.enumTables, document->value(QStringLiteral("widgets")).toArray());
+            const auto incoming = enums.toObject();
+            for (auto it = incoming.begin(); it != incoming.end(); ++it)
+                definitions.insert(it.key(), it.value());
+            if (!definitions.isEmpty())
+                document->insert(QStringLiteral("enumTables"), definitions);
+        }
         document->insert(QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()},
                                                                {QStringLiteral("parserConfig"), m_project.parserConfig()}});
         const auto library = document->value(QStringLiteral("frameTemplates"));
@@ -922,9 +1022,15 @@ void DesignerPage::paste()
     m_pasteContent = content;
     m_pasteTarget = target;
     const auto previous = m_project.frameTemplates;
+    const auto previousEnums = m_project.enumTables;
+    clipboard.widgets = importEnumReferences(clipboard.widgets, clipboard.enumTables, m_project.enumTables);
+    m_scene->setEnumTables(m_project.enumTables);
     m_project.frameTemplates = importClipboardFrameTemplates(clipboard, previous);
-    if (m_scene->paste(clipboard.widgets, container, m_pasteCount).isEmpty())
+    if (m_scene->paste(clipboard.widgets, container, m_pasteCount).isEmpty()) {
         m_project.frameTemplates = previous;
+        m_project.enumTables = previousEnums;
+        m_scene->setEnumTables(previousEnums);
+    }
 }
 
 bool DesignerPage::maybeSave()
