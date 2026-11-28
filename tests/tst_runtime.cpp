@@ -1004,8 +1004,11 @@ class TestRuntime : public QObject
                                                            QJsonObject{{"min", 8}, {"color", "#E0A000"}}}}};
         RuntimeContext context;
         FakeLink link;
-        auto card = std::unique_ptr<HmiWidget>(createHmiWidget("NumericDisplay", props));
-        context.registerWidget("card", card.get());
+        QWidget host;
+        auto *card = createHmiWidget("NumericDisplay", props, &host);
+        card->resize(180, 100);
+        host.show();
+        context.registerWidget("card", card);
         card->attach(&context);
         const auto binding = BindingEntry::fromWidget({{"id", "card"}, {"type", "NumericDisplay"}, {"properties", props},
                                                        {"binding", QJsonObject{{"key", "temp100"}, {"expression", "value / 100"}}}});
@@ -1019,9 +1022,23 @@ class TestRuntime : public QObject
         link.inject("temp100=799\n");
         QCOMPARE(reading->text(), QStringLiteral("7.99")); // Rounding to 8.0 would display the next range.
         QCOMPARE(reading->lightColor(), QColor("#008040"));
+        const int configuredSize = reading->font().pixelSize();
+        link.inject("temp100=799.9999999999999\n");
+        QCOMPARE(reading->text(), QStringLiteral("7.999999999999999"));
+        QCOMPARE(reading->lightColor(), QColor("#008040"));
+        QVERIFY(reading->fontMetrics().horizontalAdvance(reading->text()) <= reading->contentsRect().width());
+        QVERIFY(reading->font().pixelSize() < configuredSize);
+        card->resize(40, 100);
+        QCOMPARE(reading->toolTip(), reading->text());
+        card->resize(500, 100);
+        QCOMPARE(reading->font().pixelSize(), configuredSize);
+        QVERIFY(reading->toolTip().isEmpty());
+        card->resize(180, 100);
+        QVERIFY(reading->font().pixelSize() < configuredSize);
         link.inject("temp100=800\n");
         QCOMPARE(reading->text(), QStringLiteral("8.0"));
         QCOMPARE(reading->lightColor(), QColor("#E0A000"));
+        QCOMPARE(reading->font().pixelSize(), configuredSize);
     }
 
     void projectDataCommitsSameFrameBeforeEvaluatingAlarms()

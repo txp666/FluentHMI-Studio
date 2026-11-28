@@ -446,6 +446,7 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
     m_title = new FluentQt::CaptionLabel(this);
     m_value = new FluentQt::BodyLabel(this);
     m_value->setObjectName(QStringLiteral("numericDisplayValue"));
+    m_value->setSizePolicy(QSizePolicy::Ignored, m_value->sizePolicy().verticalPolicy());
     m_badge = new FluentQt::InfoBadge(this);
     m_badge->setObjectName(QStringLiteral("numericDisplayBadge"));
     m_badge->setMargin(3);
@@ -491,10 +492,6 @@ void NumericDisplayWidget::apply()
         m_reading = prop("value").toVariant();
     m_enumEntries = enumeration ? parseValueText(enumMapping(properties(), enumTables())) : QHash<QString, ValueText>();
     m_ranges = enumeration ? QList<ColorRange>{} : parseColorRanges(prop("colorRanges"));
-    m_value->setPixelFontSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
-    QFont font = m_value->font();
-    font.setBold(true);
-    m_value->setFont(font);
     showValue(m_reading);
     update();
 }
@@ -549,6 +546,7 @@ void NumericDisplayWidget::showValue(const QVariant &value)
             label = bindingStatus() == BindingStatus::Waiting ? tr("待采集") : tr("数据已过期");
     }
     m_value->setText(label);
+    fitValueFont();
     m_value->setTextColor(color, color);
     m_badge->setText(label);
     if (text("displayStyle") == QStringLiteral("状态徽标")) { // i18n: value
@@ -566,6 +564,41 @@ void NumericDisplayWidget::showValue(const QVariant &value)
         FluentQt::FluentStyleSheet::setCustomStyleSheet(m_badge, foreground.arg(color.name()),
                                                         foreground.arg(darkText.name()));
     }
+}
+
+void NumericDisplayWidget::fitValueFont()
+{
+    constexpr int minSize = 8;
+    QFont font = m_value->font();
+    font.setBold(true);
+    font.setPixelSize(std::max(minSize, integer("fontSize")));
+    QString overflowText;
+    const bool ranged = !m_ranges.isEmpty() && !m_value->isHidden();
+    const QFontMetrics configuredMetrics(font, m_value);
+    // Keep the title and unit in place while the reading changes size.
+    m_value->setMinimumHeight(ranged ? configuredMetrics.height() : 0);
+    if (ranged) {
+        const int available = std::max(0, contentsRect().marginsRemoved(layout()->contentsMargins()).width());
+        const QString value = m_value->text();
+        int textWidth = configuredMetrics.horizontalAdvance(value);
+        while (textWidth > available && font.pixelSize() > minSize) {
+            const int size = int(double(font.pixelSize()) * available / textWidth);
+            font.setPixelSize(std::clamp(size, minSize, font.pixelSize() - 1));
+            textWidth = QFontMetrics(font, m_value).horizontalAdvance(value);
+        }
+        if (textWidth > available)
+            overflowText = value;
+    }
+    if (m_value->font() != font)
+        m_value->setFont(font);
+    if (m_value->toolTip() != overflowText)
+        m_value->setToolTip(overflowText);
+}
+
+void NumericDisplayWidget::resizeEvent(QResizeEvent *event)
+{
+    HmiWidget::resizeEvent(event);
+    fitValueFont();
 }
 
 void NumericDisplayWidget::paintEvent(QPaintEvent *)
