@@ -24,10 +24,6 @@
 
 #include <algorithm>
 
-#ifndef FHMI_VERSION
-#define FHMI_VERSION "0.9.3"
-#endif
-
 namespace fhmi {
 
 namespace {

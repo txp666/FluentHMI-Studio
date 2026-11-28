@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     FluentHMIStudio
-    VERSION 0.9.3
+    VERSION 0.10.0
     DESCRIPTION "Visual HMI designer for hardware engineers, built on FluentQtWidgets"
     HOMEPAGE_URL "https://github.com/txp666/FluentHMI-Studio"
     LANGUAGES CXX
@@ -483,6 +483,7 @@ if(FHMI_BUILD_TESTS)
         src/player/player_window.cpp resources/app.qrc resources/widget_icons.qrc)
     target_link_libraries(tst_runtime PRIVATE fhmi_designer Qt6::Test)
     target_compile_definitions(tst_runtime PRIVATE
+        FHMI_VERSION="${FHMI_APPLICATION_VERSION}"
         FHMI_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
         FHMI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
         FHMI_RUNTIME_BUILD_PATH="$<TARGET_FILE:FluentHMIRuntime>")

@@ -7,7 +7,7 @@
 
 Build a device interface by dragging widgets onto a canvas. Connect serial, TCP, UDP, MQTT, CAN / CAN FD, Modbus, or classic S7 devices, bind readings to displays and charts, and configure commands. Preview and exported applications share the runtime. Export includes the project and its assets, so the target machine can run it without a compiler.
 
-**Studio v0.9.0** adds shared frame templates, mixed HEX reception on one connection, field-based commands, and periodic tasks you can manage across pages. The project format is **UIDP 1.3** for these features. [Release notes](docs/release-notes/v0.9.0.md#english) · [Existing project migration](docs/uidp-format.md#从旧版升级)
+**Studio v0.10.0** adds a built-in AI assistant for editing projects. Indicators, badges, and choice controls can share a visual enum table. Numeric cards, gauges, and progress bars can change color at the same thresholds. [Release notes](docs/release-notes/v0.10.0.md#english) · [Project format and compatibility](docs/uidp-format.md#从旧版升级)
 
 ## Get started
 
