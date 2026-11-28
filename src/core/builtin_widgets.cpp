@@ -510,7 +510,8 @@ QList<WidgetMeta> displayWidgets()
               color(QStringLiteral("unknownColor"), QT_TR_NOOP("未匹配颜色"), QStringLiteral("#d13438")),
               choice(QStringLiteral("decimals"), QT_TR_NOOP("小数位数"),
                      QStringLiteral("自动"), // i18n: value
-                     kDecimals)}),
+                     kDecimals),
+              colorRanges().visibleWhen("displayFormat", {QStringLiteral("枚举")}, true)}), // i18n: value
         meta(QStringLiteral("ProgressBar"), QT_TR_NOOP("进度条"), WidgetCategory::Display,
              QStringLiteral("progress_bar"), 250, 20,
              {integer(QStringLiteral("value"), QT_TR_NOOP("当前值"), 50, 0, 99999, true),

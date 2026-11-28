@@ -1053,7 +1053,7 @@ void RuntimeContext::applyWidgetSample(const BindingEntry &binding, const DataPo
         widget->setBindingProblem({});
         if (type == QLatin1String("BmsCellMatrix") || type == QLatin1String("DcPowerSupply") ||
             type == QLatin1String("StatusWordPanel") || type == QLatin1String("DigitalTimingChart") ||
-            type == QLatin1String("RotaryEncoder") ||
+            type == QLatin1String("RotaryEncoder") || type == u"NumericDisplay" ||
             ((type == u"ProgressBar" || type == u"GaugeMeter") && !widget->prop("colorRanges").toArray().isEmpty())) {
             widget->applyBoundValue(value, binding);
         } else if (isIndustrialCategory(widget->meta().category)) {

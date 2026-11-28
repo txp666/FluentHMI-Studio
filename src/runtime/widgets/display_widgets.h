@@ -74,6 +74,7 @@ class NumericDisplayWidget : public HmiWidget
     void showValue(const QVariant &value);
     QVariant m_reading;
     QHash<QString, ValueText> m_enumEntries;
+    QList<ColorRange> m_ranges;
     FluentQt::CaptionLabel *m_title = nullptr;
     FluentQt::BodyLabel *m_value = nullptr;
     FluentQt::InfoBadge *m_badge = nullptr;

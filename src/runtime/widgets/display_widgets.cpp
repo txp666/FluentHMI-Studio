@@ -61,6 +61,15 @@ void repaintOnThemeChange(QWidget *widget)
                      [widget]() { widget->update(); });
 }
 
+QString rangeDisplayText(const QList<ColorRange> &ranges, double value, const QString &formatted)
+{
+    bool ok = false;
+    const double rounded = formatted.toDouble(&ok);
+    if (ok && rounded != value && rangeColor(ranges, rounded) != rangeColor(ranges, value))
+        return QString::number(value, 'g', QLocale::FloatingPointShortest);
+    return formatted;
+}
+
 QColor ledColor(const QString &name)
 {
     if (name == QLatin1String("red")) {
@@ -436,6 +445,7 @@ NumericDisplayWidget::NumericDisplayWidget(const WidgetMeta &meta, QWidget *pare
     layout->setSpacing(0);
     m_title = new FluentQt::CaptionLabel(this);
     m_value = new FluentQt::BodyLabel(this);
+    m_value->setObjectName(QStringLiteral("numericDisplayValue"));
     m_badge = new FluentQt::InfoBadge(this);
     m_badge->setObjectName(QStringLiteral("numericDisplayBadge"));
     m_badge->setMargin(3);
@@ -478,8 +488,9 @@ void NumericDisplayWidget::apply()
     m_unit->setVisible(!enumeration && (!badge || !m_unit->text().isEmpty()));
     m_unit->setMinimumHeight(m_unit->fontMetrics().height());
     if (!isLive())
-        m_reading = formatDisplayValue(prop("value").toVariant(), text("displayFormat"), text("decimals"));
+        m_reading = prop("value").toVariant();
     m_enumEntries = enumeration ? parseValueText(enumMapping(properties(), enumTables())) : QHash<QString, ValueText>();
+    m_ranges = enumeration ? QList<ColorRange>{} : parseColorRanges(prop("colorRanges"));
     m_value->setPixelFontSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
     QFont font = m_value->font();
     font.setBold(true);
@@ -501,9 +512,23 @@ void NumericDisplayWidget::bindingStatusChanged(BindingStatus)
 
 void NumericDisplayWidget::showValue(const QVariant &value)
 {
-    QString label = value.isValid() ? displayString(value) : QString::fromUtf8("—");
+    const auto format = text("displayFormat");
+    const auto formatted = formatDisplayValue(value, format, text("decimals"));
+    QString label = formatted.isValid() ? displayString(formatted) : QString::fromUtf8("—");
     QColor color = accentColor();
-    if (text("displayFormat") == QStringLiteral("枚举") && value.isValid()) { // i18n: value
+    bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
+    if (!m_ranges.isEmpty()) {
+        if (const auto reading = bindingFloat(value)) {
+            const QColor band(rangeColor(m_ranges, *reading));
+            if (band.isValid())
+                color = band;
+            if (format == QStringLiteral("自动")) // i18n: value
+                label = rangeDisplayText(m_ranges, *reading, label);
+        } else {
+            label = QString::fromUtf8("—");
+            mutedState = true;
+        }
+    } else if (format == QStringLiteral("枚举") && value.isValid()) { // i18n: value
         const auto it = m_enumEntries.constFind(valueTextKey(value));
         if (it != m_enumEntries.cend()) {
             label = it->text;
@@ -518,18 +543,16 @@ void NumericDisplayWidget::showValue(const QVariant &value)
                 color = QColor(text("unknownColor"));
         }
     }
-    const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
     if (mutedState) {
         color = isDarkTheme() ? QColor(QStringLiteral("#8a8a8a")) : QColor(QStringLiteral("#909090"));
-        if (!text("enumTable").isEmpty() && text("displayFormat") == QStringLiteral("枚举")) // i18n: value
+        if (!text("enumTable").isEmpty() && format == QStringLiteral("枚举")) // i18n: value
             label = bindingStatus() == BindingStatus::Waiting ? tr("待采集") : tr("数据已过期");
     }
     m_value->setText(label);
     m_value->setTextColor(color, color);
     m_badge->setText(label);
     if (text("displayStyle") == QStringLiteral("状态徽标")) { // i18n: value
-        // Enum colors mean foreground colors in both display styles. The badge gets
-        // a separate, softly tinted surface rather than using that text color as fill.
+        // Keep the selected color on the text and use a soft tint for the badge surface.
         const auto tint = [&color](const QColor &surface, double amount) {
             return QColor(qRound(surface.red() * (1 - amount) + color.red() * amount),
                           qRound(surface.green() * (1 - amount) + color.green() * amount),
@@ -539,8 +562,9 @@ void NumericDisplayWidget::showValue(const QVariant &value)
         // InfoBadge's stylesheet sets its text color, so match that selector as Fluent
         // labels do; a palette change alone would be overwritten by the component.
         const QString foreground = QStringLiteral("QLabel[fqw=\"InfoBadge\"] { color: %1; }");
+        const QColor darkText = m_ranges.isEmpty() ? color.lighter(160) : color;
         FluentQt::FluentStyleSheet::setCustomStyleSheet(m_badge, foreground.arg(color.name()),
-                                                      foreground.arg(color.lighter(160).name()));
+                                                        foreground.arg(darkText.name()));
     }
 }
 
@@ -814,8 +838,8 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     QString number = QString::number(m_value, 'f', 1);
     if (!m_valid && !m_ranges.isEmpty())
         number = QStringLiteral("—");
-    else if (!m_ranges.isEmpty() && rangeColor(m_ranges, number.toDouble()) != rangeColor(m_ranges, m_value))
-        number = QString::number(m_value, 'g', QLocale::FloatingPointShortest);
+    else if (!m_ranges.isEmpty())
+        number = rangeDisplayText(m_ranges, m_value, number);
     QFont font = this->font();
     font.setBold(true);
     font.setPixelSize(std::max(10, int(side / 5.5)));

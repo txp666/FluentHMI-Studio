@@ -56,6 +56,7 @@
 #include <FluentQtWidgets/Widgets/Button.h>
 #include <FluentQtWidgets/Widgets/ComboBox.h>
 #include <FluentQtWidgets/Widgets/InfoBadge.h>
+#include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/Menu.h>
 #include <FluentQtWidgets/Widgets/RealtimePlotWidget.h>
 #include <FluentQtWidgets/Widgets/ScrollArea.h>
@@ -994,6 +995,33 @@ class TestRuntime : public QObject
         QVERIFY(std::any_of(events.begin(), events.end(), [](const QJsonValue &event) {
             return event.toObject().value("id") == QStringLiteral("external event");
         }));
+    }
+
+    void numericCardRangesUseUnroundedFeedback()
+    {
+        const QJsonObject props{{"displayFormat", "自动"}, {"decimals", "1"},
+                                {"colorRanges", QJsonArray{QJsonObject{{"color", "#008040"}},
+                                                           QJsonObject{{"min", 8}, {"color", "#E0A000"}}}}};
+        RuntimeContext context;
+        FakeLink link;
+        auto card = std::unique_ptr<HmiWidget>(createHmiWidget("NumericDisplay", props));
+        context.registerWidget("card", card.get());
+        card->attach(&context);
+        const auto binding = BindingEntry::fromWidget({{"id", "card"}, {"type", "NumericDisplay"}, {"properties", props},
+                                                       {"binding", QJsonObject{{"key", "temp100"}, {"expression", "value / 100"}}}});
+        QVERIFY(binding);
+        context.addBinding(*binding);
+        context.hub()->addLink(&link);
+        context.setActive(true);
+        const auto *reading = card->findChild<FluentQt::FluentLabelBase *>("numericDisplayValue");
+        QVERIFY(reading);
+
+        link.inject("temp100=799\n");
+        QCOMPARE(reading->text(), QStringLiteral("7.99")); // Rounding to 8.0 would display the next range.
+        QCOMPARE(reading->lightColor(), QColor("#008040"));
+        link.inject("temp100=800\n");
+        QCOMPARE(reading->text(), QStringLiteral("8.0"));
+        QCOMPARE(reading->lightColor(), QColor("#E0A000"));
     }
 
     void projectDataCommitsSameFrameBeforeEvaluatingAlarms()
