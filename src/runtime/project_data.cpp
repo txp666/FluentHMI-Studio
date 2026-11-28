@@ -456,11 +456,10 @@ void ProjectData::clearValues()
     }
     evaluate();
 }
-QVariant ProjectData::calculate(const QString &expression) const
+QVariant ProjectData::calculate(const QString &expression, const QVariant &eventValue) const
 {
     // Unknown/disconnected inputs must not silently become a healthy/zero state.
-    const auto resolve = [this](const QString &name) -> QVariant {
-        const auto value = m_values.value(name);
+    const auto numeric = [](const QVariant &value) -> QVariant {
         const auto number = bindingFloat(value);
         if (!number)
             return {};
@@ -471,7 +470,9 @@ QVariant ProjectData::calculate(const QString &expression) const
         }
         return value;
     };
-    return Expression::evaluate(expression, {}, resolve);
+    return Expression::evaluate(expression, numeric(eventValue), [this, &numeric](const QString &name) {
+        return numeric(m_values.value(name));
+    });
 }
 void ProjectData::evaluate()
 {

@@ -2,6 +2,7 @@
 
 #include "core/binding.h"
 #include "core/widget_meta.h"
+#include "core/widget_rules.h"
 #include "runtime/runtime_context.h"
 
 #include <QtCore/QJsonObject>
@@ -105,6 +106,7 @@ class HmiWidget : public QWidget
     bool isPeriodicSending() const;
     bool isPeriodicStarting() const;
     bool stopPeriodicSend();
+    virtual CommandResult configuredCommand(const QVariant &) const { return {}; }
     virtual void periodicSendChanged(bool) {}
 
   private:
@@ -129,8 +131,6 @@ HmiWidget *createHmiWidget(const QString &typeName, const QJsonObject &props, QW
 // The icon a widget's metadata names, one of the palette's own or a FluentIcon; it follows the theme.
 QIcon widgetIcon(const QString &iconName);
 
-// Tab names of a TabWidget's "tabNames" text; never empty.
-QStringList tabNames(const QString &text);
 int clampTabIndex(int index, int count);
 
 } // namespace fhmi

@@ -184,7 +184,8 @@ QString previewInputCommand(const QJsonObject &properties, const QList<CanPrevie
 
 void openCommandPreview(const CanvasItem &item, const QList<CanPreviewSource> &canSources,
                         const CommandTargetPreview &destination, const QMap<QString, CommandEncoder::InputValue> &inputDefaults,
-                        QWidget *parent, const QJsonObject &properties, const QJsonObject &frameTemplates)
+                        QWidget *parent, const QJsonObject &properties, const QJsonObject &frameTemplates,
+                        const QJsonObject &enumTables)
 {
     const QString type = item.typeName();
     const QString mode = item.propertyValue(QStringLiteral("commandMode")).toString();
@@ -283,7 +284,8 @@ void openCommandPreview(const CanvasItem &item, const QList<CanPreviewSource> &c
             update();
         }
     } else if (type == QLatin1String("ComboBox")) {
-        const auto options = CommandEncoder::selectionOptions(item.propertyValue(QStringLiteral("options")).toArray());
+        const auto options = CommandEncoder::selectionOptions(item.propertyValue(QStringLiteral("options")).toArray(),
+            item.propertyValue(QStringLiteral("enumTable")).toString(), enumTables);
         auto *sample = new FluentQt::ComboBox(dialog);
         for (const auto &option : options)
             sample->addItem(option.label);

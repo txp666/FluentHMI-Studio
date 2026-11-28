@@ -117,6 +117,48 @@ class TestProject : public QObject
         QVERIFY(!Project::validate(project.toJson(), &error));
     }
 
+    void enumSelectionSendsTheDeviceCodeAndRequestedTerminator()
+    {
+        const QJsonObject tables{{"modes", "10=Manual\n42=Auto\n90=Service"}};
+        const auto options = CommandEncoder::selectionOptions({}, QStringLiteral("modes"), tables);
+        QCOMPARE(options.size(), 3);
+        const auto props = normalizedWidgetProperties(QStringLiteral("ComboBox"),
+            {{"commandMode", "文本"}, {"commandTemplate", "MODE={value}"}, {"commandNewline", "\n"}});
+        const auto result = CommandEncoder::selectionFromProperties(props, options[1]);
+        QVERIFY2(result.command, qPrintable(result.error));
+        QCOMPARE(result.command->bytes, QByteArray("MODE=42\n"));
+    }
+
+    void colorRangesAndActionsRequireCapableRuntime()
+    {
+        Project project;
+        QJsonObject gauge{{"type", "GaugeMeter"}, {"id", "gauge"}};
+        QJsonObject lamp{{"type", "LEDIndicator"}, {"id", "lamp"}};
+        QJsonObject tab{{"type", "TabWidget"}, {"id", "pages"}, {"properties", QJsonObject{{"tabNames", "Status\nAlarm"}}}};
+        const QJsonArray ranges{QJsonObject{{"color", "#008040"}}, QJsonObject{{"min", 8}, {"color", "#e0a000"}}};
+        const QJsonObject jump{{"event", "click"}, {"condition", "value == 3"}, {"type", "navigate"},
+                               {"target", "pages"}, {"value", "Alarm"}};
+        project.widgets = {gauge, lamp, tab};
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.0"));
+        gauge.insert("properties", QJsonObject{{"colorRanges", ranges}});
+        project.widgets[0] = gauge;
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.4"));
+        QString error;
+        QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
+        auto invalid = ranges;
+        invalid.append(QJsonObject{{"min", 7.99}, {"color", "#ffffff"}});
+        gauge.insert("properties", QJsonObject{{"colorRanges", invalid}});
+        project.widgets[0] = gauge;
+        QVERIFY(!Project::validate(project.toJson(), &error));
+        lamp.insert("properties", QJsonObject{{"actions", QJsonArray{jump}}});
+        project.widgets = {lamp, tab};
+        QCOMPARE(project.toJson().value("version").toString(), QStringLiteral("1.4"));
+        QVERIFY2(Project::validate(project.toJson(), &error), qPrintable(error));
+        project.widgets.removeLast();
+        QVERIFY(!Project::validate(project.toJson(), &error));
+        QVERIFY2(Project::validate(project.toJson(), &error, true), qPrintable(error));
+    }
+
     void explicitRoutesRoundTripAndRequireCapableRuntime()
     {
         Project project;

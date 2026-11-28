@@ -1,4 +1,5 @@
 #include "core/project_logic.h"
+#include "core/widget_rules.h"
 #include "core/binding.h"
 #include "core/chart_limits.h"
 #include "core/command_encoder.h"
@@ -42,6 +43,13 @@ QJsonArray renameWidgetReferences(QJsonArray widgets, const QString &previous, c
             widget.insert(QStringLiteral("binding"), binding);
         }
         auto props = widget.value(QStringLiteral("properties")).toObject();
+        editWidgetActions(props, [&](QJsonObject &row) {
+            if (row.contains(QStringLiteral("condition")))
+                row.insert(QStringLiteral("condition"), Expression::renameReference(
+                    row.value(QStringLiteral("condition")).toString(), previous, current));
+            if (row.value(QStringLiteral("type")).toString() == u"setParameter" && row.value(QStringLiteral("target")) == previous)
+                row.insert(QStringLiteral("target"), current);
+        });
         const QString type = widget.value(QStringLiteral("type")).toString();
         if (type == QLatin1String("RealtimeChart") || isTimingChart(type)) {
             const int limit = isTimingChart(type) ? MaxTimingChannels : MaxRealtimeCurves;
@@ -374,6 +382,13 @@ QStringList dataPointReferences(const Project &project, const QString &name)
         const auto type = widget.value(QStringLiteral("type")).toString();
         const auto props = widget.value(QStringLiteral("properties")).toObject();
         const auto id = widget.value(QStringLiteral("id")).toString();
+        const auto actions = props.value(QStringLiteral("actions")).toArray();
+        for (qsizetype row = 0; row < actions.size(); ++row) {
+            const auto action = actions[row].toObject();
+            if ((action.value(QStringLiteral("type")).toString() == u"setParameter" && action.value(QStringLiteral("target")) == name) ||
+                Expression::references(action.value(QStringLiteral("condition")).toString()).contains(name))
+                references.append(tr("%1 · 自定义操作第 %2 行").arg(id).arg(row + 1));
+        }
         if (boundToPoint(widget.value(QStringLiteral("binding")).toObject()))
             references.append(tr("%1 · 控件绑定").arg(id));
         if (props.value(S7WritePoint).toString() == name || props.value(ModbusWritePoint).toString() == name)

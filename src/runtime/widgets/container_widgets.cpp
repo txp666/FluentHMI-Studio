@@ -1,4 +1,5 @@
 #include "runtime/widgets/container_widgets.h"
+#include <QtWidgets/QStackedWidget>
 
 #include "runtime/widgets/display_widgets.h"
 
@@ -318,6 +319,23 @@ QWidget *TabContainerWidget::childHost(int tabIndex)
 int TabContainerWidget::currentPage() const
 {
     return m_tabs->currentIndex();
+}
+
+bool TabContainerWidget::showNamedPage(const QString &name)
+{
+    for (int index = 0; index < m_tabs->count(); ++index) {
+        if (m_tabs->tabText(index) != name)
+            continue;
+        // A nested tab group may itself sit on a background page.
+        for (QWidget *page = this; page->parentWidget(); page = page->parentWidget()) {
+            if (auto *stack = qobject_cast<QStackedWidget *>(page->parentWidget());
+                stack && qobject_cast<QTabWidget *>(stack->parentWidget()))
+                static_cast<QTabWidget *>(stack->parentWidget())->setCurrentWidget(page);
+        }
+        m_tabs->setCurrentIndex(index);
+        return true;
+    }
+    return false;
 }
 
 int TabContainerWidget::pageCount() const

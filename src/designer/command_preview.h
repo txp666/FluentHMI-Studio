@@ -44,6 +44,7 @@ QString previewInputCommand(const QJsonObject &properties, const QList<CanPrevie
                             BinaryFrameExample *example = nullptr, const QJsonObject &frameTemplates = {});
 void openCommandPreview(const CanvasItem &item, const QList<CanPreviewSource> &canSources,
                         const CommandTargetPreview &destination, const QMap<QString, CommandEncoder::InputValue> &inputDefaults,
-                        QWidget *parent, const QJsonObject &properties, const QJsonObject &frameTemplates);
+                        QWidget *parent, const QJsonObject &properties, const QJsonObject &frameTemplates,
+                        const QJsonObject &enumTables = {});
 
 } // namespace fhmi

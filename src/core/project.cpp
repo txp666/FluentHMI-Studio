@@ -1,4 +1,5 @@
 #include "core/project.h"
+#include "core/widget_rules.h"
 #include "core/bit_profile.h"
 #include "core/project_logic.h"
 #include "core/s7.h"
@@ -245,11 +246,13 @@ bool usesModbusBitWrite(const QString &type, const QJsonObject &props)
            CommandEncoder::modbusBit(props) != CommandEncoder::WholeRegister;
 }
 
-bool usesMultiStateDisplays(const QJsonArray &widgets)
+bool usesV14Features(const QJsonArray &widgets)
 {
     return !visitWidgets(widgets, [](const QJsonObject &widget) {
         const auto props = widget.value(QStringLiteral("properties")).toObject();
-        return props.value(QStringLiteral("enumTable")).toString().isEmpty() &&
+        return props.value(QStringLiteral("actions")).toArray().isEmpty() &&
+               props.value(QStringLiteral("colorRanges")).toArray().isEmpty() &&
+               props.value(QStringLiteral("enumTable")).toString().isEmpty() &&
                !(widget.value(QStringLiteral("type")).toString() == u"LEDIndicator" && usesMultiStateLed(props));
     });
 }
@@ -684,7 +687,7 @@ Project::Project()
 QString Project::formatVersion(const QJsonArray &widgets, const QJsonObject &logic, const QJsonObject &frameTemplates,
                                const QJsonObject &enumTables)
 {
-    if (!enumTables.isEmpty() || usesMultiStateDisplays(widgets))
+    if (!enumTables.isEmpty() || usesV14Features(widgets))
         return QString::fromLatin1(FormatVersion);
     if (!frameTemplates.isEmpty() || !logic.isEmpty() || usesV13Features(widgets) ||
         hasNewCanConfiguration(widgets) || usesStructuredRows(widgets))
@@ -888,8 +891,8 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
     const auto tables = tablesValue.toObject();
     if (!tablesValue.isUndefined() && !tablesValue.isObject())
         return fail(error, QCoreApplication::translate("fhmi", "工程枚举表必须是对象"));
-    if ((!tables.isEmpty() || usesMultiStateDisplays(widgets)) && version != QLatin1String("1.4"))
-        return fail(error, QCoreApplication::translate("fhmi", "多状态小灯和工程枚举表需要 UIDP 1.4 格式"));
+    if ((!tables.isEmpty() || usesV14Features(widgets)) && version != QLatin1String("1.4"))
+        return fail(error, QCoreApplication::translate("fhmi", "此工程需要使用 UIDP 1.4 格式"));
     for (auto it = tables.begin(); it != tables.end(); ++it) {
         if (it.key().isEmpty() || it.key() != it.key().trimmed() || !it.value().isString())
             return fail(error, QCoreApplication::translate("fhmi", "枚举表需要有效的名称和映射文本"));
@@ -939,8 +942,16 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
             withPoints.append(pointItem);
         }
     }
+    const ActionTargets actionTargets(widgets, logic.toObject());
     if (!visitWidgets(widgets, [&](const QJsonObject &widget) {
             const auto props = widget.value(QStringLiteral("properties")).toObject();
+            const auto type = widget.value(QStringLiteral("type")).toString();
+            QString ruleProblem = widgetActionProblem(props.value(QStringLiteral("actions")), type, actionTargets,
+                                                      allowExternalReferences);
+            if (ruleProblem.isEmpty() && (type == u"ProgressBar" || type == u"GaugeMeter"))
+                parseColorRanges(props.value(QStringLiteral("colorRanges")), &ruleProblem);
+            if (!ruleProblem.isEmpty())
+                return fail(error, widget.value(QStringLiteral("id")).toString() + QStringLiteral(" · ") + ruleProblem);
             const auto table = props.value(QStringLiteral("enumTable"));
             if (!table.isUndefined() &&
                 (!table.isString() || (!table.toString().isEmpty() && !tables.contains(table.toString()))))
@@ -978,7 +989,6 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
                 const auto location = curve < 0 ? widgetId : QCoreApplication::translate("fhmi", "%1 的曲线 %2").arg(widgetId).arg(curve + 1);
                 return fail(error, QCoreApplication::translate("fhmi", "%1 绑定的数据点不存在：%2").arg(location, key));
             };
-            const auto type = widget.value(QStringLiteral("type")).toString();
             if (!(isTimingChart(type) && TimingSource::usesChannels(props)) &&
                 !checkPoint(widget.value(QStringLiteral("binding")).toObject()))
                 return false;

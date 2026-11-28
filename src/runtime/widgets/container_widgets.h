@@ -69,6 +69,7 @@ class TabContainerWidget : public HmiWidget
     int currentPage() const override;
     int contentTop() const override;
     int pageCount() const;
+    bool showNamedPage(const QString &name);
     int navigationPageAt(const QPoint &position) const;
 
   protected:

@@ -145,6 +145,12 @@ QJsonObject remapWidgetReferences(QJsonObject widget, const QHash<QString, QStri
     };
     remap(QStringLiteral("sourceCardId"));
     remap(QStringLiteral("commandTargetId"));
+    editWidgetActions(props, [&](QJsonObject &row) {
+        const auto kind = row.value(QStringLiteral("type")).toString();
+        const auto target = row.value(QStringLiteral("target")).toString();
+        if ((kind == u"navigate" || kind == u"send") && ids.contains(target))
+            row.insert(QStringLiteral("target"), ids.value(target));
+    });
     const auto type = widget.value(QStringLiteral("type")).toString();
     const int series = isTimingChart(type) ? MaxTimingChannels : type == u"RealtimeChart" ? MaxRealtimeCurves : 0;
     for (int index = 0; index < series; ++index)

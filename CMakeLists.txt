@@ -93,6 +93,8 @@ add_library(fhmi_core STATIC
     src/core/dbc.h
     src/core/value_text.cpp
     src/core/value_text.h
+    src/core/widget_rules.cpp
+    src/core/widget_rules.h
     src/core/project_logic.cpp
     src/core/project_logic.h
     src/core/expression.cpp

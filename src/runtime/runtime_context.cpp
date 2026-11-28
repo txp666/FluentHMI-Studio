@@ -12,6 +12,7 @@
 #include "runtime/modbus_poller.h"
 #include "runtime/periodic_sender.h"
 #include "runtime/ui_helpers.h"
+#include "runtime/widgets/container_widgets.h"
 #include <FluentQtWidgets/Widgets/Label.h>
 #include <FluentQtWidgets/Widgets/LineEdit.h>
 #include <QtCore/QCryptographicHash>
@@ -200,6 +201,78 @@ void RuntimeContext::registerWidget(const QString &id, HmiWidget *widget)
         widget->setProperty("fhmiWidgetId",id);
         m_widgets.insert(id, widget);
     }
+}
+
+void RuntimeContext::runWidgetActions(HmiWidget *source, const QString &event, const QVariant &value,
+                                      std::function<void()> completed)
+{
+    QJsonArray rows;
+    for (const auto &entry : source->prop("actions").toArray())
+        if (entry.toObject().value(QStringLiteral("event")).toString() == event)
+            rows.append(entry);
+    if (rows.isEmpty()) {
+        if (completed)
+            completed();
+        return;
+    }
+    executeActions(source, rows, 0, value, std::move(completed));
+}
+
+void RuntimeContext::executeActions(HmiWidget *source, const QJsonArray &rows, qsizetype start, const QVariant &value,
+                                    std::function<void()> completed)
+{
+    if (!m_active || source->context() != this)
+        return;
+    bool executed = start > 0;
+    for (qsizetype i = start; i < rows.size(); ++i) {
+        const auto row = rows[i].toObject();
+        const auto condition = row.value(QStringLiteral("condition")).toString().trimmed();
+        if (!condition.isEmpty() && !m_data->calculate(condition, value).toBool())
+            continue;
+        const auto kind = row.value(QStringLiteral("type")).toString();
+        const auto target = row.value(QStringLiteral("target")).toString();
+        const auto argument = row.value(QStringLiteral("value")).toVariant().toString();
+        if (kind == u"send") {
+            auto *sender = target.isEmpty() ? source : m_widgets.value(target).data();
+            if (!sender || sender->context() != this ||
+                (!target.isEmpty() && (sender->typeName() != u"PushButton" || !sender->flag("enabled"))))
+                return;
+            const QPointer<HmiWidget> origin(source);
+            auto next = [this, origin, rows, i, value, completed] {
+                // Confirmation can finish after the source page is closed. Queue the continuation so even
+                // an immediately accepted transport never nests successive sends on the same call stack.
+                QMetaObject::invokeMethod(this, [this, origin, rows, i, value, completed] {
+                    if (origin)
+                        executeActions(origin, rows, i + 1, value, completed);
+                }, Qt::QueuedConnection);
+            };
+            auto allowed = [this, origin, condition, value] {
+                return origin && origin->context() == this && m_active &&
+                       (condition.isEmpty() || m_data->calculate(condition, value).toBool());
+            };
+            auto command = sender->configuredCommand(value);
+            if (!command.command && command.error.isEmpty())
+                command = CommandResult::failure(tr("请配置发送内容"));
+            requestSend(sender, command, sender->confirmsSend(), sender->flag("showSendConfirmationDetails"),
+                        sender->text("commandMode"), std::move(next), 0, {}, std::move(allowed));
+            return;
+        }
+        if (kind == u"navigate") {
+            auto *tabs = dynamic_cast<TabContainerWidget *>(m_widgets.value(target).data());
+            if (!tabs || !tabs->showNamedPage(argument))
+                return;
+        } else if (kind == u"setParameter") {
+            if (!m_data->setParameter(target, argument))
+                return;
+        } else if (kind == u"notify") {
+            notify(target.isEmpty() ? tr("提示") : target, argument);
+        } else {
+            return;
+        }
+        executed = true;
+    }
+    if (executed && completed)
+        completed();
 }
 
 QString RuntimeContext::widgetPreferencesGroup(const HmiWidget &widget) const
@@ -619,7 +692,7 @@ QString RuntimeContext::commandTargetText(EncodedCommand::Kind kind, const DataR
 
 void RuntimeContext::requestSend(HmiWidget *sender, const CommandResult &result, bool confirm, bool showDetails,
                                  const QString &mode, std::function<void()> onSent, int intervalMs,
-                                 CommandReader readInputs)
+                                 CommandReader readInputs, std::function<bool()> stillAllowed)
 {
     const bool periodic = intervalMs > 0;
     if (m_sendConfirmation || (periodic && (!m_active || sender->isPeriodicSending())))
@@ -647,9 +720,13 @@ void RuntimeContext::requestSend(HmiWidget *sender, const CommandResult &result,
     const bool followsInputs = periodic && bool(readInputs);
     auto dispatch = [this, source = QPointer<HmiWidget>(sender), command, targets, mode, intervalMs,
                      readInputs = std::move(readInputs),
-                     onSent = std::move(onSent)] {
+                     onSent = std::move(onSent), stillAllowed = std::move(stillAllowed)] {
         if (!source || source->context() != this)
             return;
+        if (stillAllowed && !stillAllowed()) {
+            notify(tr("提示"), tr("操作条件已变化，命令未发送"), NotifyType::Warning);
+            return;
+        }
         if (intervalMs > 0) {
             if (!m_active)
                 return;
@@ -976,7 +1053,8 @@ void RuntimeContext::applyWidgetSample(const BindingEntry &binding, const DataPo
         widget->setBindingProblem({});
         if (type == QLatin1String("BmsCellMatrix") || type == QLatin1String("DcPowerSupply") ||
             type == QLatin1String("StatusWordPanel") || type == QLatin1String("DigitalTimingChart") ||
-            type == QLatin1String("RotaryEncoder")) {
+            type == QLatin1String("RotaryEncoder") ||
+            ((type == u"ProgressBar" || type == u"GaugeMeter") && !widget->prop("colorRanges").toArray().isEmpty())) {
             widget->applyBoundValue(value, binding);
         } else if (isIndustrialCategory(widget->meta().category)) {
             const auto numeric = bindingFloat(value);

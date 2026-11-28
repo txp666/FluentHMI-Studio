@@ -27,7 +27,7 @@ class MappingDialog final : public AppDialog
   public:
     MappingDialog(const QString &type, const QJsonObject &props, const QJsonObject &tables, bool canShare,
                   QWidget *parent)
-        : AppDialog(tr("可视化枚举"), parent), m_props(props), m_led(type == u"LEDIndicator"),
+        : AppDialog(tr("可视化枚举"), parent), m_props(props), m_led(type == u"LEDIndicator"), m_combo(type == u"ComboBox"),
           m_edit{props.value("textList").toString(), props.value("enumTable").toString(), tables,
                  props.value("ledEffects").toObject()}
     {
@@ -35,7 +35,7 @@ class MappingDialog final : public AppDialog
         setPreferredSize({720, 510});
         auto *source = new QHBoxLayout;
         m_source = new FluentQt::ComboBox(this);
-        m_source->addItem(tr("仅此控件"), {}, QString());
+        m_source->addItem(m_combo ? tr("新枚举表") : tr("仅此控件"), {}, QString());
         for (const auto &name : tables.keys())
             m_source->addItem(name, {}, name);
         selectValue(m_source, m_edit.tableName);
@@ -132,7 +132,14 @@ class MappingDialog final : public AppDialog
             name->clear();
         });
         loadRows();
-        setValidator([this] { return storeCurrent(); });
+        setValidator([this] {
+            if (m_combo && m_edit.tableName.isEmpty()) {
+                m_problem->setText(tr("请为枚举表命名并另存为工程枚举"));
+                m_problem->show();
+                return false;
+            }
+            return storeCurrent();
+        });
     }
 
     const EnumMappingEdit &edit() const { return m_edit; }
@@ -252,6 +259,14 @@ class MappingDialog final : public AppDialog
         if (!readValidRows(mapping, effects))
             return;
         auto props = m_props;
+        if (m_combo) {
+            const QString name = m_edit.tableName.isEmpty() ? QStringLiteral("_preview") : m_edit.tableName;
+            props.insert(QStringLiteral("enumTable"), name);
+            m_preview->setEnumTables({{name, mapping}});
+            m_preview->setProperties(props);
+            m_preview->applyBoundValue(m_sample->text(), {});
+            return;
+        }
         props.insert(QStringLiteral("enumTable"), m_edit.tableName);
         if (m_edit.tableName.isEmpty())
             props.insert(QStringLiteral("textList"), mapping);
@@ -285,6 +300,7 @@ class MappingDialog final : public AppDialog
 
     QJsonObject m_props;
     bool m_led;
+    bool m_combo;
     EnumMappingEdit m_edit;
     QString m_originalRows;
     QJsonObject m_originalEffects;

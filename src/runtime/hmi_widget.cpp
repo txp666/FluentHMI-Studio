@@ -443,17 +443,6 @@ QIcon widgetIcon(const QString &iconName)
     return FluentQt::icon(it != icons.constEnd() ? *it : FluentQt::FluentIcon::Application);
 }
 
-QStringList tabNames(const QString &text)
-{
-    QStringList names;
-    for (const QString &line : text.split(QLatin1Char('\n'))) {
-        if (!line.trimmed().isEmpty()) {
-            names.append(line.trimmed());
-        }
-    }
-    return names.isEmpty() ? QStringList{QStringLiteral("标签1")} : names; // i18n: value
-}
-
 int clampTabIndex(int index, int count)
 {
     return std::clamp(index, 0, std::max(0, count - 1));

@@ -74,6 +74,20 @@ PropDef rows(const QString &name, const QString &label, const QJsonArray &defaul
     return def;
 }
 
+PropDef colorRanges()
+{
+    return rows(QStringLiteral("colorRanges"), QT_TR_NOOP("区间颜色"), {},
+                {{QStringLiteral("min"), QT_TR_NOOP("下限（含）")}, {QStringLiteral("color"), QT_TR_NOOP("颜色")}});
+}
+
+PropDef widgetActions()
+{
+    return rows(QStringLiteral("actions"), QT_TR_NOOP("自定义操作"), {},
+                {{QStringLiteral("event"), QT_TR_NOOP("触发事件")}, {QStringLiteral("condition"), QT_TR_NOOP("条件表达式")},
+                 {QStringLiteral("type"), QT_TR_NOOP("操作")}, {QStringLiteral("target"), QT_TR_NOOP("目标")},
+                 {QStringLiteral("value"), QT_TR_NOOP("值或内容")}});
+}
+
 // A link card's own frame format: the keys of the project's serial.parserConfig.
 PropDef parserConfig()
 {
@@ -305,6 +319,7 @@ QList<WidgetMeta> basicWidgets()
     QList<PropDef> combo{choice(QStringLiteral("selectionStyle"), QT_TR_NOOP("选择样式"),
                                 QStringLiteral("下拉框"), // i18n: value
                                 {QStringLiteral("下拉框"), QStringLiteral("分段"), QStringLiteral("单选组")}).withHelp("widget.selection"), // i18n: value
+                         str(QStringLiteral("enumTable"), QT_TR_NOOP("工程枚举表"), QString()),
                          rows(QStringLiteral("options"), QT_TR_NOOP("选项与发送值"),
                               QJsonArray{QJsonObject{{"label", QT_TR_NOOP("选项1")}, {"value", ""}},
                                          QJsonObject{{"label", QT_TR_NOOP("选项2")}, {"value", ""}},
@@ -384,7 +399,7 @@ QList<WidgetMeta> basicWidgets()
     spinProps.insert(5, real(QStringLiteral("singleStep"), QT_TR_NOOP("步长"), 1, 0.000001, 99999));
 
     return {meta(QStringLiteral("PushButton"), QT_TR_NOOP("按钮"), WidgetCategory::Basic, QStringLiteral("button"), 120,
-                 36, button),
+                 36, button + QList<PropDef>{widgetActions()}),
             meta(QStringLiteral("Label"), QT_TR_NOOP("标签"), WidgetCategory::Basic, QStringLiteral("font"), 120, 30,
                  label),
             meta(QStringLiteral("LineEdit"), QT_TR_NOOP("输入框"), WidgetCategory::Basic, QStringLiteral("text_field"),
@@ -392,7 +407,7 @@ QList<WidgetMeta> basicWidgets()
             meta(QStringLiteral("ComboBox"), QT_TR_NOOP("下拉框"), WidgetCategory::Basic, QStringLiteral("dropdown"),
                  160, 36, combo),
             meta(QStringLiteral("ToggleSwitch"), QT_TR_NOOP("开关"), WidgetCategory::Basic, QStringLiteral("toggle"),
-                 140, 30, toggle),
+                 140, 30, toggle + QList<PropDef>{widgetActions()}),
             meta(QStringLiteral("Slider"), QT_TR_NOOP("滑块"), WidgetCategory::Basic, QStringLiteral("slider"), 200, 30,
                  sliderProps),
             meta(QStringLiteral("SpinBox"), QT_TR_NOOP("数值框"), WidgetCategory::Basic, QStringLiteral("spin_box"),
@@ -451,7 +466,7 @@ QList<WidgetMeta> displayWidgets()
     return {
         meta(QStringLiteral("LEDIndicator"), QT_TR_NOOP("LED指示灯"), WidgetCategory::Display, QStringLiteral("led"),
              140, 30,
-             {str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("状态")),
+             {widgetActions(), str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("状态")),
               choice(QStringLiteral("stateMode"), QT_TR_NOOP("状态显示"), QStringLiteral("开关量"), // i18n: value
                      {QStringLiteral("开关量"), QStringLiteral("多状态")}).withHelp("display.enum"), // i18n: value
               text(QStringLiteral("textList"), QT_TR_NOOP("枚举映射"), QString()).withHelp("display.enum"),
@@ -499,7 +514,7 @@ QList<WidgetMeta> displayWidgets()
         meta(QStringLiteral("ProgressBar"), QT_TR_NOOP("进度条"), WidgetCategory::Display,
              QStringLiteral("progress_bar"), 250, 20,
              {integer(QStringLiteral("value"), QT_TR_NOOP("当前值"), 50, 0, 99999, true),
-              integer(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100, 1, 99999)},
+              integer(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100, 1, 99999), colorRanges()},
              30, 10),
         meta(QStringLiteral("ProgressRingDisplay"), QT_TR_NOOP("进度环"), WidgetCategory::Display,
              QStringLiteral("progress_ring"), 120, 130,
@@ -607,7 +622,7 @@ QList<WidgetMeta> chartWidgets()
               str(QStringLiteral("unit"), QT_TR_NOOP("单位"), QString()),
               real(QStringLiteral("value"), QT_TR_NOOP("当前值"), 0.0, -99999, 99999, true),
               real(QStringLiteral("minimum"), QT_TR_NOOP("最小值"), 0.0, -99999, 99999),
-              real(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100.0, -99999, 99999)},
+              real(QStringLiteral("maximum"), QT_TR_NOOP("最大值"), 100.0, -99999, 99999), colorRanges()},
              80, 80),
         // The Python designer files the data table under charts as well.
         meta(QStringLiteral("DataTable"), QT_TR_NOOP("数据表格"), WidgetCategory::Chart, QStringLiteral("table"), 350,

@@ -36,6 +36,7 @@ class PushButtonWidget : public HmiWidget
   private:
     void setButtonStyle(const QString &style);
     void sendCommand();
+    CommandResult configuredCommand(const QVariant &value = {}) const override;
 
     FluentQt::PushButton *m_button = nullptr;
     QString m_buttonStyle;
@@ -79,6 +80,7 @@ class ComboBoxWidget : public HmiWidget
 
   protected:
     void apply() override;
+    void bindingStatusChanged(BindingStatus status) override;
 
   private:
     void rebuildSelection(const QString &style, const QList<CommandEncoder::SelectionOption> &options);
@@ -111,6 +113,7 @@ class ToggleSwitchWidget : public HmiWidget
     void setSwitchStyle(const QString &style);
     void setChecked(bool checked);
     void checkedEdited(bool checked);
+    CommandResult configuredCommand(const QVariant &value) const override;
 
     QWidget *m_control = nullptr;
     FluentQt::BodyLabel *m_label = nullptr;

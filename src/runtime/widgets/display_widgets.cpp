@@ -9,7 +9,10 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QLocale>
 #include <QtCore/QtMath>
+#include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtWidgets/QHBoxLayout>
@@ -109,6 +112,9 @@ LedWidget::LedWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, 
 
 void LedWidget::apply()
 {
+    const bool interactive = !prop("actions").toArray().isEmpty();
+    setFocusPolicy(interactive ? Qt::StrongFocus : Qt::NoFocus);
+    setCursor(interactive ? Qt::PointingHandCursor : Qt::ArrowCursor);
     m_multiState = usesMultiStateLed(properties());
     if (m_multiState) {
         m_entries = parseValueText(enumMapping(properties(), enumTables()));
@@ -146,6 +152,51 @@ void LedWidget::applyBoundValue(const QVariant &value, const BindingEntry &bindi
         bindingStatusChanged(bindingStatus());
     } else {
         update();
+    }
+}
+
+void LedWidget::activate()
+{
+    if (!context() || prop("actions").toArray().isEmpty())
+        return;
+    QVariant value;
+    if (bindingStatus() == BindingStatus::Live)
+        value = m_reading;
+    else if (!isBound())
+        value = m_multiState ? prop("stateValue").toVariant() : QVariant(m_on);
+    context()->runWidgetActions(this, QStringLiteral("click"), value);
+}
+
+void LedWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && context() && !prop("actions").toArray().isEmpty()) {
+        m_pressed = true;
+        event->accept();
+    } else {
+        HmiWidget::mousePressEvent(event);
+    }
+}
+
+void LedWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_pressed) {
+        m_pressed = false;
+        if (rect().contains(event->position().toPoint()))
+            activate();
+        event->accept();
+    } else {
+        HmiWidget::mouseReleaseEvent(event);
+    }
+}
+
+void LedWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Space || event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        if (!event->isAutoRepeat())
+            activate();
+        event->accept();
+    } else {
+        HmiWidget::keyPressEvent(event);
     }
 }
 
@@ -512,14 +563,50 @@ ProgressBarWidget::ProgressBarWidget(const WidgetMeta &meta, QWidget *parent) : 
 
 void ProgressBarWidget::apply()
 {
+    m_ranges = parseColorRanges(prop("colorRanges"));
+    m_reading = integer("value");
     m_bar->setRange(0, std::max(1, integer("maximum")));
     m_bar->setValue(integer("value"));
+    bindingStatusChanged(bindingStatus());
 }
 
 void ProgressBarWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if (const auto number = bindingInteger(value)) {
+    if (!m_ranges.isEmpty()) {
+        m_reading = bindingFloat(value);
+        if (m_reading) {
+            const double position = std::clamp(*m_reading, 0.0, double(m_bar->maximum()));
+            m_bar->setValue(qRound(position));
+            m_bar->setVal(position);
+        }
+        bindingStatusChanged(bindingStatus());
+    } else if (const auto number = bindingInteger(value)) {
         m_bar->setValue(std::clamp(*number, m_bar->minimum(), m_bar->maximum()));
+    }
+}
+
+void ProgressBarWidget::bindingStatusChanged(BindingStatus status)
+{
+    const bool unavailable = !m_reading || status == BindingStatus::Waiting || status == BindingStatus::Stale;
+    if (!m_ranges.isEmpty() && unavailable) {
+        m_bar->setCustomBarColor(QColor(128, 128, 128), QColor(160, 160, 160));
+    } else {
+        const QColor color = m_reading ? QColor(rangeColor(m_ranges, *m_reading)) : QColor();
+        m_bar->setCustomBarColor(color, color);
+    }
+    update();
+}
+
+void ProgressBarWidget::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setPen(palette().color(QPalette::Mid));
+    for (const auto &range : m_ranges) {
+        if (range.minimum > 0 && range.minimum < m_bar->maximum()) {
+            const int x = qRound(m_bar->x() + (m_bar->width() - 1) * range.minimum / m_bar->maximum());
+            const int y = m_bar->geometry().center().y() - 2;
+            painter.drawLine(x, y - 3, x, y);
+        }
     }
 }
 
@@ -659,16 +746,19 @@ GaugeWidget::GaugeWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(me
 
 void GaugeWidget::apply()
 {
+    m_ranges = parseColorRanges(prop("colorRanges"));
+    m_valid = true;
     m_value = real("value");
     update();
 }
 
 void GaugeWidget::applyBoundValue(const QVariant &value, const BindingEntry &)
 {
-    if (const auto number = bindingFloat(value)) {
+    const auto number = bindingFloat(value);
+    m_valid = number.has_value();
+    if (number)
         m_value = *number;
-        update();
-    }
+    update();
 }
 
 void GaugeWidget::bindingStatusChanged(BindingStatus)
@@ -681,7 +771,8 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const bool dark = isDarkTheme();
-    const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
+    const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale ||
+                            (!m_valid && !m_ranges.isEmpty());
     const QColor fg = mutedState ? (dark ? QColor(255, 255, 255, 125) : QColor(0, 0, 0, 115))
                                  : (dark ? QColor(255, 255, 255) : QColor(26, 26, 26));
     const QColor muted = dark ? QColor(255, 255, 255, 150) : QColor(0, 0, 0, 140);
@@ -702,18 +793,37 @@ void GaugeWidget::paintEvent(QPaintEvent *)
     painter.setPen(track);
     painter.drawArc(arc, startAngle, spanAngle);
     if (ratio > 0) {
-        QPen value(mutedState ? muted : accentColor(), stroke, Qt::SolidLine, Qt::RoundCap);
+        const QColor band(rangeColor(m_ranges, m_value));
+        QPen value(mutedState ? muted : band.isValid() ? band : accentColor(), stroke, Qt::SolidLine, Qt::RoundCap);
         painter.setPen(value);
         painter.drawArc(arc, startAngle, int(spanAngle * ratio));
     }
 
+    painter.save();
+    painter.translate(arc.center());
+    painter.setPen(QPen(muted, 1.5));
+    for (const auto &range : m_ranges) {
+        if (range.minimum <= lo || range.minimum >= hi)
+            continue;
+        const auto angle = qDegreesToRadians(225.0 - 270.0 * (range.minimum - lo) / (hi - lo));
+        const QPointF direction(std::cos(angle), -std::sin(angle));
+        painter.drawLine(direction * (side / 2 - stroke / 2 - 3), direction * (side / 2 - stroke / 2));
+    }
+    painter.restore();
+
+    QString number = QString::number(m_value, 'f', 1);
+    if (!m_valid && !m_ranges.isEmpty())
+        number = QStringLiteral("—");
+    else if (!m_ranges.isEmpty() && rangeColor(m_ranges, number.toDouble()) != rangeColor(m_ranges, m_value))
+        number = QString::number(m_value, 'g', QLocale::FloatingPointShortest);
     QFont font = this->font();
     font.setBold(true);
     font.setPixelSize(std::max(10, int(side / 5.5)));
+    const int numberWidth = QFontMetrics(font).horizontalAdvance(number);
+    if (!m_ranges.isEmpty() && numberWidth > side * 0.84)
+        font.setPixelSize(std::max(8, int(font.pixelSize() * side * 0.84 / numberWidth)));
     painter.setFont(font);
     painter.setPen(fg);
-    // Keep one decimal place while showing the actual reading (even when out of range).
-    const QString number = QString::number(m_value, 'f', 1);
     painter.drawText(arc, Qt::AlignCenter, number);
 
     font.setBold(false);

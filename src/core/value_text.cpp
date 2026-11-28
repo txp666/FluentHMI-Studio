@@ -1,6 +1,7 @@
 #include "core/value_text.h"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSet>
 #include <cmath>
 
 namespace fhmi {
@@ -10,9 +11,10 @@ QString valueTextKey(const QVariant &value)
     const double number = value.toDouble(&ok);
     return ok && std::isfinite(number) ? QString::number(number, 'g', 17) : QString();
 }
-QHash<QString, ValueText> parseValueText(const QString &text, QString *error)
+QList<EnumEntry> orderedEnumEntries(const QString &text, QString *error)
 {
-    QHash<QString, ValueText> result;
+    QList<EnumEntry> entries;
+    QSet<QString> keys;
     const auto lines = text.split(QLatin1Char('\n'));
     static const QRegularExpression color(QStringLiteral("^#[0-9a-fA-F]{6}$"));
     for (int i = 0; i < lines.size(); ++i) {
@@ -20,10 +22,11 @@ QHash<QString, ValueText> parseValueText(const QString &text, QString *error)
         if (line.isEmpty())
             continue;
         const int equal = line.indexOf(QLatin1Char('='));
-        const QString key = valueTextKey(line.left(equal).trimmed());
+        const QString code = line.left(equal).trimmed();
+        const QString key = valueTextKey(code);
         const auto parts = line.mid(equal + 1).split(QLatin1Char('|'));
         const QString tint = parts.value(1).trimmed();
-        if (equal < 1 || key.isEmpty() || result.contains(key) || parts.size() > 2 || parts[0].trimmed().isEmpty() ||
+        if (equal < 1 || key.isEmpty() || keys.contains(key) || parts.size() > 2 || parts[0].trimmed().isEmpty() ||
             (!tint.isEmpty() && !color.match(tint).hasMatch())) {
             if (error)
                 *error =
@@ -31,8 +34,17 @@ QHash<QString, ValueText> parseValueText(const QString &text, QString *error)
                         .arg(i + 1);
             return {};
         }
-        result.insert(key, {parts[0].trimmed(), tint});
+        keys.insert(key);
+        entries.append({code, {parts[0].trimmed(), tint}});
     }
+    return entries;
+}
+
+QHash<QString, ValueText> parseValueText(const QString &text, QString *error)
+{
+    QHash<QString, ValueText> result;
+    for (const auto &entry : orderedEnumEntries(text, error))
+        result.insert(valueTextKey(entry.code), entry.display);
     return result;
 }
 

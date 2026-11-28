@@ -10,7 +10,13 @@ struct ValueText
     QString text;
     QString color;
 };
+struct EnumEntry
+{
+    QString code;
+    ValueText display;
+};
 // One numeric value=text|#RRGGBB per line; colour is optional.
+QList<EnumEntry> orderedEnumEntries(const QString &text, QString *error = nullptr);
 QHash<QString, ValueText> parseValueText(const QString &text, QString *error = nullptr);
 QString valueTextKey(const QVariant &value);
 QString enumMapping(const QJsonObject &properties, const QJsonObject &tables);

@@ -66,6 +66,7 @@ class ProjectData : public QObject
     void evaluate(); // commit one incoming message/frame atomically before evaluating dependencies
     Message values() const { return m_values; }
     DataPointSample sample(const QString &name) const;
+    QVariant calculate(const QString &expression, const QVariant &eventValue = {}) const;
     QList<AlarmState> alarms() const { return m_states; }
     QJsonArray history() const { return m_history; }
     bool audible() const;
@@ -99,7 +100,6 @@ class ProjectData : public QObject
     };
     static Condition condition(const QString &expression);
     void record(const AlarmState &state, const QString &event, const QDateTime &time);
-    QVariant calculate(const QString &expression) const;
     void updateHistory(const QString &file, const QJsonArray &records);
     void reportHistoryError(const QString &file, const QString &message);
     void publish(const QString &name, Point &point, DataPointSample sample);

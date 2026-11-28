@@ -59,6 +59,7 @@
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QCompleter>
+#include <QtWidgets/QComboBox>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHeaderView>
@@ -160,6 +161,92 @@ class RecordFieldDelegate : public QStyledItemDelegate
 
   private:
     QStringList m_names;
+};
+
+class ActionDelegate : public QStyledItemDelegate
+{
+  public:
+    ActionDelegate(const QString &widgetType, ActionTargets targets, QObject *parent)
+        : QStyledItemDelegate(parent), m_type(widgetType), m_targets(std::move(targets)) {}
+
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &style, const QModelIndex &index) const override
+    {
+        const auto kind = index.siblingAtColumn(2).data().toString();
+        if (index.column() == 1 || (index.column() == 3 && kind == u"notify") ||
+            (index.column() == 4 && kind != u"navigate" && kind != u"send"))
+            return QStyledItemDelegate::createEditor(parent, style, index);
+        if (index.column() == 4 && kind == u"send")
+            return nullptr;
+        auto *combo = new QComboBox(parent);
+        for (const auto &key : choices(index)) {
+            const auto label = index.column() == 0 || index.column() == 2 ? actionLabel(key) : key;
+            combo->addItem(key.isEmpty() ? tr("本控件") : label, key);
+        }
+        return combo;
+    }
+
+    void setEditorData(QWidget *editor, const QModelIndex &index) const override
+    {
+        if (auto *combo = qobject_cast<QComboBox *>(editor))
+            combo->setCurrentIndex(std::max(0, combo->findData(index.data().toString())));
+        else
+            QStyledItemDelegate::setEditorData(editor, index);
+    }
+
+    void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override
+    {
+        if (auto *combo = qobject_cast<QComboBox *>(editor)) {
+            if (combo->currentIndex() >= 0)
+                model->setData(index, combo->currentData(), Qt::EditRole);
+        } else {
+            QStyledItemDelegate::setModelData(editor, model, index);
+        }
+    }
+
+  protected:
+    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        if (index.column() == 0 || index.column() == 2)
+            option->text = actionLabel(option->text);
+        if (index.column() == 3 && option->text.isEmpty() && index.siblingAtColumn(2).data().toString() == u"send" &&
+            m_type != u"LEDIndicator")
+            option->text = tr("本控件");
+    }
+
+  private:
+    QString actionLabel(const QString &key) const
+    {
+        static const QHash<QString, const char *> labels{{"click", QT_TR_NOOP("点击")}, {"on", QT_TR_NOOP("开启")},
+            {"off", QT_TR_NOOP("关闭")}, {"send", QT_TR_NOOP("发送已配置命令")}, {"navigate", QT_TR_NOOP("切换页面")},
+            {"setParameter", QT_TR_NOOP("写工程参数")}, {"notify", QT_TR_NOOP("显示通知")}};
+        return labels.contains(key) ? tr(labels.value(key)) : key;
+    }
+
+    QStringList choices(const QModelIndex &index) const
+    {
+        if (index.column() == 0)
+            return m_type == u"ToggleSwitch" ? QStringList{"on", "off"} : QStringList{"click"};
+        if (index.column() == 2)
+            return {"navigate", "send", "setParameter", "notify"};
+        const auto kind = index.siblingAtColumn(2).data().toString();
+        if (index.column() == 4)
+            return m_targets.pages.value(index.siblingAtColumn(3).data().toString());
+        QStringList names;
+        if (kind == u"navigate")
+            names = m_targets.pages.keys();
+        else if (kind == u"setParameter")
+            names = m_targets.parameters.keys();
+        else if (kind == u"send")
+            names = m_targets.buttons.values();
+        names.sort();
+        if (kind == u"send" && m_type != u"LEDIndicator")
+            names.prepend(QString());
+        return names;
+    }
+
+    QString m_type;
+    ActionTargets m_targets;
 };
 
 QStringList dataPointNames(const Project *project)
@@ -1050,7 +1137,8 @@ QWidget *PropertyEditor::createEditor(const PropDef &def, const QJsonValue &valu
             for (int i = 0; i < chartCurveCount(m_item->typeName(), props); ++i)
                 box->addItem(editorCurveChoice(*m_item, i), QIcon(), i);
         } else {
-            const auto options = CommandEncoder::selectionOptions(m_item->propertyValue(QStringLiteral("options")).toArray());
+            const auto options = CommandEncoder::selectionOptions(m_item->propertyValue(QStringLiteral("options")).toArray(),
+                m_item->propertyValue(QStringLiteral("enumTable")).toString(), m_project ? m_project->enumTables : QJsonObject{});
             for (const auto &option : options)
                 box->addItem(option.label);
         }
@@ -2273,7 +2361,8 @@ void PropertyEditor::commitProperty(const QString &name, const QJsonValue &value
                                              QStringLiteral("curveCount"), TimingSource::Property,
                                              QStringLiteral("tabNames"),
                                              QStringLiteral("defaultParser"), QStringLiteral("options"),
-                                             QStringLiteral("recordColumns"), QStringLiteral("commandInputs"),
+                                             QStringLiteral("recordColumns"), QStringLiteral("commandInputs"), QStringLiteral("enumTable"),
+                                             QStringLiteral("actions"), QStringLiteral("colorRanges"),
                                              QStringLiteral("feedbackMode"), QStringLiteral("parameterName")};
     const bool modbusEditorChanged = (name == QLatin1String("mbFunc") || name == QLatin1String("mbDataType")) &&
                                      m_item->meta().prop(QStringLiteral("mbValue"));
@@ -2388,8 +2477,21 @@ void PropertyEditor::addPageRows(QFormLayout *form)
     auto *name = new FluentQt::LineEdit(m_content);
     name->setObjectName(QStringLiteral("tabPageName"));
     name->setText(names.at(current));
-    connect(name, &QLineEdit::editingFinished, this, [this, name, current, finish]() {
+    connect(name, &QLineEdit::editingFinished, this, [this, name, current, names, finish]() {
         if (m_item && m_item->renamePage(current, name->text())) {
+            if (m_scene && names.count(names.at(current)) == 1) {
+                for (auto *source : m_scene->allItems()) {
+                    auto props = source->properties();
+                    editWidgetActions(props, [&](QJsonObject &row) {
+                        if (row.value(QStringLiteral("type")).toString() == u"navigate" &&
+                            row.value(QStringLiteral("target")) == m_item->widgetId() &&
+                            row.value(QStringLiteral("value")) == names.at(current))
+                            row.insert(QStringLiteral("value"), name->text().trimmed());
+                    });
+                    if (props != source->properties())
+                        source->setPropertyValue(QStringLiteral("actions"), props.value(QStringLiteral("actions")));
+                }
+            }
             finish();
         } else if (m_item) {
             name->setText(tabNames(m_item->propertyValue(QStringLiteral("tabNames")).toString()).value(current));
@@ -2524,7 +2626,7 @@ void PropertyEditor::buildItemProperties()
     const bool timing = isTimingChart(meta.typeName);
     const bool timingChannels = timing && TimingSource::usesChannels(m_item->properties());
     const bool hasCommands = meta.prop(QStringLiteral("commandMode"));
-    const QStringList firstSendFields{commandActivationProperty(meta.typeName), QStringLiteral("commandMode"),
+    const QStringList firstSendFields{QStringLiteral("actions"), commandActivationProperty(meta.typeName), QStringLiteral("commandMode"),
                                      QStringLiteral("commandTargetId"), QStringLiteral("commandEndpoint"),
                                      CommandEncoder::SendInterval,
                                      QStringLiteral("confirmBeforeSend"), QStringLiteral("showSendConfirmationDetails")};
@@ -2715,7 +2817,8 @@ void PropertyEditor::showSendPreview()
     const auto inputs = m_item->typeName() == QLatin1String("PushButton") &&
                         !CommandEncoder::commandInputIds(m_item->properties()).isEmpty()
         ? inputDefaults(widgets, m_project) : QMap<QString, CommandEncoder::InputValue>{};
-    openCommandPreview(*m_item, sources, destination, inputs, window(), effective.value_or(props), project.frameTemplates);
+    openCommandPreview(*m_item, sources, destination, inputs, window(), effective.value_or(props), project.frameTemplates,
+                       project.enumTables);
 }
 
 void PropertyEditor::editTransmitFormat()
@@ -2819,11 +2922,44 @@ void PropertyEditor::addItemProperties(QFormLayout *form, const QList<const Prop
     for (const PropDef *def : properties) {
         const QString &name = def->name;
         if (name == QLatin1String("currentTab") || name == QLatin1String("bitProfile") ||
-            name == u"enumTable" || name == u"ledEffects" ||
+            (name == u"enumTable" && m_item->typeName() != u"ComboBox") || name == u"ledEffects" ||
             name.startsWith(QLatin1String("curveCan")))
             continue;
         if (name == QLatin1String("tabNames")) {
             addPageRows(form);
+        } else if (name == u"enumTable") {
+            auto *box = new FluentQt::ComboBox(m_content);
+            box->addItem(tr("本地选项"), {}, QString());
+            if (m_project)
+                for (const auto &table : m_project->enumTables.keys())
+                    box->addItem(table, {}, table);
+            selectValue(box, itemValue(*def).toString());
+            auto *row = new QWidget(m_content);
+            auto *layout = new QHBoxLayout(row);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->addWidget(box, 1);
+            auto *edit = new FluentQt::TransparentToolButton(FluentQt::icon(FluentQt::FluentIcon::Edit), row);
+            edit->setObjectName(QStringLiteral("editEnumMapping"));
+            keepSquareBeside(edit, box);
+            edit->setAccessibleName(tr("编辑工程枚举"));
+            fluentToolTip(edit, edit->accessibleName());
+            edit->setVisible(m_project != nullptr);
+            layout->addWidget(edit);
+            addRow(form, name, translated(def->label), row);
+            connect(edit, &QToolButton::clicked, this, [this, name] {
+                const QPointer<CanvasItem> item = m_item;
+                const auto result = editEnumMapping(item->typeName(), item->properties(), m_project->enumTables, true, window());
+                if (!result || !item || item != m_item)
+                    return;
+                const bool changed = result->tables != m_project->enumTables;
+                m_project->enumTables = result->tables;
+                commitProperty(name, result->tableName);
+                if (changed)
+                    emit projectSettingsChanged({});
+            });
+            connect(box, &FluentQt::ComboBox::currentIndexChanged, this, [this, box, name] {
+                commitProperty(name, selectedValue(box));
+            });
         } else if (name == u"textList") {
             auto *edit = new FluentQt::PushButton(m_content);
             edit->setObjectName(QStringLiteral("editEnumMapping"));
@@ -3180,6 +3316,8 @@ void PropertyEditor::editPropertyRows(const PropDef &def)
     const QPointer<CanvasItem> item = m_item;
     const auto existing = itemValue(def).toArray();
     const bool editingOptions = def.name == QLatin1String("options");
+    const bool ranges = def.name == u"colorRanges";
+    const bool custom = def.name == u"actions";
     const bool recordColumns = def.name == QLatin1String("recordColumns");
     const bool pointColumns = recordColumns &&
                               item->propertyValue(QStringLiteral("recordSource")).toString() == QLatin1String("points");
@@ -3187,8 +3325,20 @@ void PropertyEditor::editPropertyRows(const PropDef &def)
     const int previousIndex = editingOptions ? item->propertyValue(QStringLiteral("currentIndex")).toInt() : -1;
     auto *dialog = new AppDialog(translated(def.label), window());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setPreferredSize(QSize(560, 430));
+    dialog->setPreferredSize(QSize(custom ? 820 : 560, 430));
     auto *table = new FluentQt::TableWidget(dialog);
+    table->setObjectName(def.name + QStringLiteral("Rows"));
+    const ActionTargets targets(custom ? currentWidgets(m_project, m_scene) : QJsonArray{},
+                                custom && m_project ? m_project->logic : QJsonObject{});
+    if (custom || ranges) {
+        auto *hint = new FluentQt::BodyLabel(custom
+            ? tr("按行执行。条件可用 value 或 T[\"点名\"]。发送成功后才继续下一行。配置操作后，仅执行表中操作。")
+            : tr("下限包含本值，按升序填写。首行下限留空可覆盖更低的数值。"), dialog);
+        hint->setWordWrap(true);
+        dialog->viewLayout()->addWidget(hint);
+    }
+    if (custom)
+        table->setItemDelegate(new ActionDelegate(item->typeName(), targets, table));
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setColumnCount(def.columns.size());
@@ -3209,7 +3359,7 @@ void PropertyEditor::editPropertyRows(const PropDef &def)
         const int row = table->rowCount();
         table->insertRow(row);
         for (int column = 0; column < columns.size(); ++column) {
-            auto *cell = new QTableWidgetItem(values.value(columns.at(column).first).toString());
+            auto *cell = new QTableWidgetItem(values.value(columns.at(column).first).toVariant().toString());
             cell->setData(Qt::UserRole, originalIndex);
             table->setItem(row, column, cell);
         }
@@ -3225,12 +3375,36 @@ void PropertyEditor::editPropertyRows(const PropDef &def)
     auto *down = new FluentQt::PushButton(tr("下移"), dialog);
     for (auto *button : {append, remove, up, down})
         actions->addWidget(button);
+    if (ranges) {
+        auto *pick = new FluentQt::PushButton(tr("选择颜色"), dialog);
+        actions->addWidget(pick);
+        const auto swatch = [](QTableWidgetItem *cell) {
+            if (cell->column() == 1) {
+                const QColor color(cell->text());
+                if (cell->data(Qt::DecorationRole).value<QColor>() != color)
+                    cell->setData(Qt::DecorationRole, color);
+            }
+        };
+        for (int row = 0; row < table->rowCount(); ++row)
+            swatch(table->item(row, 1));
+        connect(table, &QTableWidget::itemChanged, dialog, swatch);
+        connect(pick, &QPushButton::clicked, dialog, [dialog, table] {
+            if (auto *cell = table->item(table->currentRow(), 1)) {
+                const QColor color = chooseColor(QColor(cell->text()), tr("选择颜色"), dialog);
+                if (color.isValid())
+                    cell->setText(color.name());
+            }
+        });
+    }
     dialog->viewLayout()->addLayout(actions);
     auto *problem = newProblemLabel(dialog);
     problem->hide();
     dialog->viewLayout()->addWidget(problem);
-    connect(append, &QPushButton::clicked, dialog, [table, add] {
-        add({}, -1);
+    const QJsonObject defaults = custom
+        ? QJsonObject{{"event", item->typeName() == u"ToggleSwitch" ? "on" : "click"}, {"type", "notify"}}
+        : ranges ? QJsonObject{{"color", "#008040"}} : QJsonObject{};
+    connect(append, &QPushButton::clicked, dialog, [table, add, defaults] {
+        add(defaults, -1);
         const int row = table->rowCount() - 1;
         table->setCurrentCell(row, 0);
         table->editItem(table->item(row, 0));
@@ -3252,7 +3426,27 @@ void PropertyEditor::editPropertyRows(const PropDef &def)
     };
     connect(up, &QPushButton::clicked, dialog, [move] { move(-1); });
     connect(down, &QPushButton::clicked, dialog, [move] { move(1); });
-    dialog->setValidator([table, problem, pointFields] {
+    const auto readRows = [table, columns = def.columns] {
+        QJsonArray rows;
+        for (int row = 0; row < table->rowCount(); ++row) {
+            QJsonObject values;
+            for (int column = 0; column < columns.size(); ++column)
+                values.insert(columns.at(column).first, table->item(row, column)->text().trimmed());
+            rows.append(values);
+        }
+        return rows;
+    };
+    dialog->setValidator([table, problem, pointFields, ranges, custom, type = item->typeName(), readRows, targets] {
+        if (custom || ranges) {
+            QString error;
+            if (custom)
+                error = widgetActionProblem(readRows(), type, targets);
+            else
+                parseColorRanges(readRows(), &error);
+            problem->setProblem(error);
+            problem->setVisible(!error.isEmpty());
+            return error.isEmpty();
+        }
         for (int row = 0; row < table->rowCount(); ++row) {
             const QString field = table->item(row, 0)->text().trimmed();
             if (field.isEmpty() || (!pointFields.isEmpty() && !pointFields.contains(field))) {
@@ -3265,22 +3459,17 @@ void PropertyEditor::editPropertyRows(const PropDef &def)
         }
         return true;
     });
-    connect(dialog, &QDialog::accepted, this, [this, item, table, def, previousIndex, editingOptions] {
+    connect(dialog, &QDialog::accepted, this, [this, item, table, def, previousIndex, editingOptions, readRows] {
         if (!item || item != m_item)
             return;
-        QJsonArray rows;
         int selected = -1;
         for (int row = 0; row < table->rowCount(); ++row) {
-            QJsonObject values;
-            for (int column = 0; column < def.columns.size(); ++column)
-                values.insert(def.columns.at(column).first, table->item(row, column)->text().trimmed());
-            rows.append(values);
             if (previousIndex >= 0 && table->item(row, 0)->data(Qt::UserRole).toInt() == previousIndex)
                 selected = row;
         }
         if (editingOptions)
             item->setPropertyValue(QStringLiteral("currentIndex"), std::max(0, selected));
-        commitProperty(def.name, rows);
+        commitProperty(def.name, readRows());
     });
     dialog->open();
 }
@@ -3646,6 +3835,8 @@ void PropertyEditor::updateVisibility()
     }
     const QString format = m_item->propertyValue(QStringLiteral("displayFormat")).toString();
     const bool automatic = format == QStringLiteral("自动"); // i18n: value
+    if (meta.typeName == u"ComboBox")
+        setRowVisible(QStringLiteral("options"), m_item->propertyValue(QStringLiteral("enumTable")).toString().isEmpty());
     if (meta.typeName == u"LEDIndicator") {
         const bool multi = usesMultiStateLed(m_item->properties());
         for (const auto *key : {"color", "on", "onValue", "offValue", "blink"})
