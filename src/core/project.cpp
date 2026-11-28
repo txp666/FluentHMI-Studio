@@ -672,10 +672,11 @@ Project::Project()
     };
 }
 
-QString Project::formatVersion(const QJsonArray &widgets, const QJsonObject &logic)
+QString Project::formatVersion(const QJsonArray &widgets, const QJsonObject &logic, const QJsonObject &frameTemplates)
 {
-    if (!logic.isEmpty() || usesV13Features(widgets) || hasNewCanConfiguration(widgets) || usesStructuredRows(widgets))
-        return QStringLiteral("1.3");
+    if (!frameTemplates.isEmpty() || !logic.isEmpty() || usesV13Features(widgets) ||
+        hasNewCanConfiguration(widgets) || usesStructuredRows(widgets))
+        return QString::fromLatin1(FormatVersion);
     return usesRouting(widgets) ? QStringLiteral("1.2") : S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0");
 }
 
@@ -739,8 +740,7 @@ QJsonArray projectSendConfiguration(QJsonArray widgets, bool saving)
 QJsonObject Project::toJson() const
 {
     QJsonObject document{
-        {QStringLiteral("version"), frameTemplates.isEmpty() ? formatVersion(widgets, logic)
-                                                            : QString::fromLatin1(FormatVersion)},
+        {QStringLiteral("version"), formatVersion(widgets, logic, frameTemplates)},
         {QStringLiteral("appName"), appName},
         {QStringLiteral("canvas"), QJsonObject{{QStringLiteral("width"), canvasWidth},
                                                {QStringLiteral("height"), canvasHeight},
@@ -956,10 +956,14 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
 }
 } // namespace
 
-bool Project::validate(const QJsonObject &document, QString *error, bool allowExternalReferences)
+bool Project::validate(const QJsonObject &document, QString *error, bool allowExternalReferences, Project *validated)
 {
     auto data = document;
-    return prepareProject(data, error, allowExternalReferences, true);
+    if (!prepareProject(data, error, allowExternalReferences, true))
+        return false;
+    if (validated)
+        *validated = fromTrustedJson(data);
+    return true;
 }
 
 bool Project::fromJson(const QJsonObject &document, Project *out, QString *error, bool allowExternalReferences)

@@ -50,12 +50,14 @@ class Project
     QHash<QString, QStringList> recentEndpoints; // Runtime preview suggestions for this open project.
     QHash<QString, Message> recentTextSamples;
 
-    static QString formatVersion(const QJsonArray &widgets, const QJsonObject &logic = {});
+    static QString formatVersion(const QJsonArray &widgets, const QJsonObject &logic = {},
+                                 const QJsonObject &frameTemplates = {});
     QJsonObject toJson() const;
 
     // Rejects invalid documents before anything replaces the current project.
     // A clipboard selection may refer to a connection card outside that selection. Saved projects always require it.
-    static bool validate(const QJsonObject &document, QString *error, bool allowExternalReferences = false);
+    static bool validate(const QJsonObject &document, QString *error, bool allowExternalReferences = false,
+                         Project *validated = nullptr);
     static bool fromJson(const QJsonObject &document, Project *out, QString *error, bool allowExternalReferences = false);
     // A document toJson() wrote, unchecked: the designer's undo history holds edits in progress, such as a
     // separator cleared to be retyped, which fromJson() would refuse.

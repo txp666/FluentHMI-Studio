@@ -147,7 +147,8 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
 #endif
     layout->addWidget(appearance);
 
-    m_aiTestService = new AiService(this);
+    auto *connectionTest = new AiService(this);
+    auto *modelList = new AiService(this);
     auto *aiGroup = new FluentQt::SettingCardGroup(tr("AI 助手"), content);
     aiGroup->setObjectName(QStringLiteral("aiSettingGroup"));
     const AiConfig initialAi = AiConfig::load();
@@ -220,9 +221,6 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
         AiConfig cfg;
         cfg.provider = providerCombo->currentData().toString();
         cfg.baseUrl = baseUrlEdit->text().trimmed();
-        if (cfg.baseUrl.isEmpty()) {
-            cfg.baseUrl = AiConfig::presetBaseUrl(cfg.provider);
-        }
         cfg.apiKey = apiKeyEdit->text().trimmed();
         cfg.model = modelCombo->currentText().trimmed();
         if (cfg.model.isEmpty()) {
@@ -232,44 +230,56 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
     };
 
     const auto persistAiConfig = [currentAiConfig]() { AiConfig::save(currentAiConfig()); };
+    const auto cancelRequests = [connectionTest, modelList, testBtn, refreshModelsBtn]() {
+        connectionTest->abort();
+        modelList->abort();
+        testBtn->setEnabled(true);
+        testBtn->setText(SettingsPage::tr("测试连接"));
+        refreshModelsBtn->setEnabled(true);
+    };
 
     connect(providerCombo, &FluentQt::ComboBox::currentIndexChanged, this,
-            [providerCombo, baseUrlEdit, apiKeyEdit, modelCombo, persistAiConfig]() {
+            [providerCombo, baseUrlEdit, apiKeyEdit, modelCombo, cancelRequests, persistAiConfig]() {
+                cancelRequests();
                 const QString provider = providerCombo->currentData().toString();
+                const AiConfig saved = AiConfig::loadProvider(provider);
                 const QSignalBlocker b1(baseUrlEdit);
                 const QSignalBlocker b2(apiKeyEdit);
                 const QSignalBlocker b3(modelCombo);
-                baseUrlEdit->setText(AiConfig::presetBaseUrl(provider));
+                baseUrlEdit->setText(saved.baseUrl);
                 baseUrlEdit->setPlaceholderText(AiConfig::presetBaseUrl(provider));
                 modelCombo->clear();
                 modelCombo->addItems(AiConfig::presetModels(provider));
-                modelCombo->setCurrentText(AiConfig::presetModel(provider));
+                modelCombo->setCurrentIndex(modelCombo->findText(saved.model));
+                modelCombo->setCurrentText(saved.model);
                 modelCombo->setPlaceholderText(AiConfig::presetModel(provider));
-                apiKeyEdit->setText(AiConfig::loadProviderApiKey(provider));
+                apiKeyEdit->setText(saved.apiKey);
                 apiKeyEdit->setPlaceholderText(!AiConfig::requiresApiKey(provider)
                                                    ? SettingsPage::tr("本地模型服务无需密钥")
                                                    : QStringLiteral("sk-..."));
                 persistAiConfig();
             });
-    connect(baseUrlEdit, &QLineEdit::editingFinished, this, persistAiConfig);
+    connect(baseUrlEdit, &QLineEdit::textChanged, this, cancelRequests);
+    connect(baseUrlEdit, &QLineEdit::textChanged, this, persistAiConfig);
+    connect(apiKeyEdit, &QLineEdit::textChanged, this, cancelRequests);
     connect(apiKeyEdit, &QLineEdit::textChanged, this, persistAiConfig);
     connect(modelCombo, &FluentQt::EditableComboBox::currentTextChanged, this, persistAiConfig);
     connect(modelCombo, &QLineEdit::editingFinished, this, persistAiConfig);
 
-    connect(testBtn, &QPushButton::clicked, this, [this, testBtn, currentAiConfig]() {
+    connect(testBtn, &QPushButton::clicked, this, [connectionTest, testBtn, currentAiConfig]() {
         const AiConfig cfg = currentAiConfig();
         AiConfig::save(cfg);
         testBtn->setEnabled(false);
         testBtn->setText(tr("测试中…"));
-        m_aiTestService->testConnection(cfg);
+        connectionTest->testConnection(cfg);
     });
-    connect(refreshModelsBtn, &QToolButton::clicked, this, [this, refreshModelsBtn, currentAiConfig]() {
+    connect(refreshModelsBtn, &QToolButton::clicked, this, [modelList, refreshModelsBtn, currentAiConfig]() {
         const AiConfig cfg = currentAiConfig();
         AiConfig::save(cfg);
         refreshModelsBtn->setEnabled(false);
-        m_aiTestService->fetchModels(cfg);
+        modelList->fetchModels(cfg);
     });
-    connect(m_aiTestService, &AiService::modelsFetched, this,
+    connect(modelList, &AiService::modelsFetched, this,
             [this, refreshModelsBtn, modelCombo, persistAiConfig](bool ok, const QStringList &models, const QString &message) {
                 refreshModelsBtn->setEnabled(true);
                 if (ok && !models.isEmpty()) {
@@ -286,7 +296,7 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent)
                                              FluentQt::InfoBarPosition::Top, window());
                 }
             });
-    connect(m_aiTestService, &AiService::testFinished, this, [this, testBtn](bool ok, const QString &message) {
+    connect(connectionTest, &AiService::testFinished, this, [this, testBtn](bool ok, const QString &message) {
         testBtn->setEnabled(true);
         testBtn->setText(tr("测试连接"));
         if (ok) {

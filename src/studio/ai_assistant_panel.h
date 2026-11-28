@@ -36,6 +36,7 @@ class AiAssistantPanel : public QWidget
     void setProjectProvider(std::function<Project()> provider);
     void setSelectedItems(const QList<CanvasItem *> &items);
     void refreshModelIndicator();
+    void clearConversation();
 
   signals:
     void applyProjectRequested(const fhmi::Project &patchedProject, const QStringList &selectIds);
@@ -52,7 +53,6 @@ class AiAssistantPanel : public QWidget
     bool addAttachmentFile(const QString &filePath);
     void rebuildAttachmentBar();
     void sendPrompt(const QString &text);
-    void clearConversation();
     void updateBusyState(bool busy);
     void scrollToBottom();
     void appendUserBubble(const QString &text, const QList<AiAttachment> &attachments);
@@ -62,6 +62,7 @@ class AiAssistantPanel : public QWidget
 
     AiService *m_service = nullptr;
     std::function<Project()> m_projectProvider;
+    Project m_requestProject;
     QStringList m_selectedIds;
     QStringList m_selectedSummaries;
     QList<AiChatMessage> m_history;

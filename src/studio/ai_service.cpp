@@ -35,13 +35,43 @@ constexpr int ChatTimeoutMs = 90000;
 constexpr int TestTimeoutMs = 15000;
 
 const QString ProviderKey = QStringLiteral("ai/provider");
-const QString BaseUrlKey = QStringLiteral("ai/baseUrl");
-const QString ModelKey = QStringLiteral("ai/model");
-const QString LegacyApiKey = QStringLiteral("ai/apiKey");
 
 QString providerKeyPath(const QString &provider, const QString &field)
 {
     return QStringLiteral("ai/%1/%2").arg(provider, field);
+}
+
+void migrateLegacyAiSettings(QSettings &settings)
+{
+    const QString provider = settings.value(ProviderKey, QStringLiteral("deepseek")).toString();
+    for (const QString &field : {QStringLiteral("baseUrl"), QStringLiteral("model"), QStringLiteral("apiKey")}) {
+        const QString legacy = QStringLiteral("ai/") + field;
+        if (settings.contains(legacy)) {
+            const QString scoped = providerKeyPath(provider, field);
+            if (!settings.contains(scoped)) {
+                settings.setValue(scoped, settings.value(legacy));
+            }
+            settings.remove(legacy);
+        }
+    }
+}
+
+QJsonArray promptWidgets(QJsonArray widgets)
+{
+    for (qsizetype i = 0; i < widgets.size(); ++i) {
+        auto widget = widgets.at(i).toObject();
+        if (widget.value(QStringLiteral("type")) == QLatin1String("MqttConfigCard")) {
+            auto props = widget.value(QStringLiteral("properties")).toObject();
+            props.remove(QStringLiteral("defaultUsername"));
+            props.remove(QStringLiteral("defaultPassword"));
+            widget.insert(QStringLiteral("properties"), props);
+        }
+        if (widget.contains(QStringLiteral("children"))) {
+            widget.insert(QStringLiteral("children"), promptWidgets(widget.value(QStringLiteral("children")).toArray()));
+        }
+        widgets[i] = widget;
+    }
+    return widgets;
 }
 
 void collectWidgetIds(const QJsonArray &widgets, QSet<QString> *ids)
@@ -113,6 +143,56 @@ QString normalizeParseMode(const QString &rawMode)
     return mode;
 }
 
+// Compare intervening edits by widget ID or logic point name, so inserting a sibling doesn't invalidate a proposal.
+bool overwritesEdit(const QJsonValue &before, const QJsonValue &current, const QJsonValue &after,
+                    const QString &field = {})
+{
+    if (before == current || current == after) {
+        return false;
+    }
+    if (current.isObject() && after.isObject() && (before.isObject() || before.isUndefined())) {
+        const auto old = before.toObject(), now = current.toObject(), next = after.toObject();
+        for (auto it = now.begin(); it != now.end(); ++it) {
+            if (overwritesEdit(old.value(it.key()), it.value(), next.value(it.key()), it.key())) {
+                return true;
+            }
+        }
+        for (auto it = old.begin(); it != old.end(); ++it) {
+            if (!now.contains(it.key()) && next.contains(it.key())) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (current.isArray() && after.isArray() && (before.isArray() || before.isUndefined()) &&
+        (field == QLatin1String("widgets") || field == QLatin1String("children") ||
+         field == QLatin1String("points") || field == QLatin1String("alarms"))) {
+        const QString key = field == QLatin1String("points") ? QStringLiteral("name") : QStringLiteral("id");
+        const auto index = [&key](const QJsonArray &items, QStringList &order) {
+            QJsonObject byId;
+            for (const auto &item : items) {
+                const QString id = item.toObject().value(key).toString();
+                order.append(id);
+                byId.insert(id, item);
+            }
+            return byId;
+        };
+        QStringList oldOrder, currentOrder, newOrder;
+        const auto old = index(before.toArray(), oldOrder);
+        const auto now = index(current.toArray(), currentOrder);
+        const auto next = index(after.toArray(), newOrder);
+        if (currentOrder != oldOrder) {
+            currentOrder.removeIf([&next](const QString &id) { return !next.contains(id); });
+            newOrder.removeIf([&now](const QString &id) { return !now.contains(id); });
+            if (currentOrder != newOrder) {
+                return true;
+            }
+        }
+        return overwritesEdit(old, now, next);
+    }
+    return true;
+}
+
 QString normalizeSingleBindingExpression(const QString &rawExpr)
 {
     QString expr = rawExpr.trimmed();
@@ -124,8 +204,27 @@ QString normalizeSingleBindingExpression(const QString &rawExpr)
     return expr;
 }
 
-QJsonObject normalizeBindingObject(QJsonObject binding)
+QJsonObject mergeBindingObject(const QJsonObject &existing, QJsonObject patch)
 {
+    if (patch.contains(QStringLiteral("regIndex"))) {
+        const auto index = patch.take(QStringLiteral("regIndex"));
+        if (!patch.contains(QStringLiteral("mbRegIndex"))) {
+            patch.insert(QStringLiteral("mbRegIndex"), index);
+        }
+    }
+    const auto s7 = patch.value(QStringLiteral("s7"));
+    if (s7.isString() || s7.isObject() || patch.contains(QStringLiteral("s7DataType"))) {
+        auto point = s7.toObject();
+        if (s7.isString()) {
+            point.insert(QStringLiteral("address"), s7);
+        }
+        const auto dataType = patch.take(QStringLiteral("s7DataType"));
+        if (!dataType.isUndefined() && !point.contains(QStringLiteral("dataType"))) {
+            point.insert(QStringLiteral("dataType"), dataType);
+        }
+        patch.insert(QStringLiteral("s7"), mergeJsonObjects(existing.value(QStringLiteral("s7")).toObject(), point));
+    }
+    QJsonObject binding = mergeJsonObjects(existing, patch);
     if (binding.isEmpty()) {
         return binding;
     }
@@ -134,7 +233,7 @@ QJsonObject normalizeBindingObject(QJsonObject binding)
         mode = ParseMode::JsonPath;
     } else if (binding.contains(QStringLiteral("byteOffset")) && !binding.contains(QStringLiteral("parseMode"))) {
         mode = ParseMode::HexBytes;
-    } else if (binding.contains(QStringLiteral("regIndex")) && !binding.contains(QStringLiteral("parseMode"))) {
+    } else if (binding.contains(QStringLiteral("mbRegIndex")) && !binding.contains(QStringLiteral("parseMode"))) {
         mode = ParseMode::Modbus;
     } else if (binding.contains(QStringLiteral("s7")) && !binding.contains(QStringLiteral("parseMode"))) {
         mode = ParseMode::S7;
@@ -184,17 +283,17 @@ QJsonObject normalizeCurveProperties(const QString &type, QJsonObject props)
     return props;
 }
 
-QJsonObject normalizePointObject(QJsonObject pt)
+QJsonObject mergePointObject(const QJsonObject &existing, QJsonObject pt)
 {
     const QString name = pt.value(QStringLiteral("name")).toString().trimmed();
-    if (pt.contains(QStringLiteral("initialValue")) || !pt.value(QStringLiteral("expression")).toString().trimmed().isEmpty()) {
-        return pt;
-    }
     QJsonObject binding = pt.value(QStringLiteral("binding")).toObject();
     for (const QString &field : {QStringLiteral("parseMode"), QStringLiteral("sourceCardId"), QStringLiteral("sourceEndpoint"),
                                  QStringLiteral("key"), QStringLiteral("jsonPath"), QStringLiteral("byteOffset"),
                                  QStringLiteral("dataType"), QStringLiteral("byteOrder"), QStringLiteral("regIndex"),
-                                 QStringLiteral("mbArea"), QStringLiteral("s7")}) {
+                                 QStringLiteral("mbRegIndex"), QStringLiteral("mbDataType"), QStringLiteral("mbRegOrder"),
+                                 QStringLiteral("mbArea"), QStringLiteral("mbBit"), QStringLiteral("mbPeriod"),
+                                 QStringLiteral("mbSlaveFilter"), QStringLiteral("mbFcFilter"),
+                                 QStringLiteral("s7"), QStringLiteral("s7DataType")}) {
         if (pt.contains(field)) {
             if (!binding.contains(field)) {
                 binding.insert(field, pt.value(field));
@@ -202,13 +301,15 @@ QJsonObject normalizePointObject(QJsonObject pt)
             pt.remove(field);
         }
     }
-    binding = normalizeBindingObject(binding);
-    if (binding.value(QStringLiteral("parseMode")).toString() == ParseMode::KeyValue &&
-        binding.value(QStringLiteral("key")).toString().trimmed().isEmpty() && !name.isEmpty()) {
-        binding.insert(QStringLiteral("key"), name);
+    if (!binding.isEmpty() || pt.value(QStringLiteral("binding")).isObject()) {
+        binding = mergeBindingObject(existing.value(QStringLiteral("binding")).toObject(), binding);
+        if (binding.value(QStringLiteral("parseMode")).toString() == ParseMode::KeyValue &&
+            binding.value(QStringLiteral("key")).toString().trimmed().isEmpty() && !name.isEmpty()) {
+            binding.insert(QStringLiteral("key"), name);
+        }
+        pt.insert(QStringLiteral("binding"), binding);
     }
-    pt.insert(QStringLiteral("binding"), binding);
-    return pt;
+    return mergeJsonObjects(existing, pt);
 }
 
 QJsonObject normalizeAlarmObject(QJsonObject al, const QSet<QString> &pointNames)
@@ -234,7 +335,7 @@ QJsonObject normalizeAlarmObject(QJsonObject al, const QSet<QString> &pointNames
                                ? 1
                                : 2;
         al.insert(QStringLiteral("level"), mapped);
-    } else {
+    } else if (al.contains(QStringLiteral("level"))) {
         al.insert(QStringLiteral("level"), std::clamp(al.value(QStringLiteral("level")).toInt(2), 1, 3));
     }
 
@@ -262,7 +363,9 @@ QJsonObject normalizeAlarmObject(QJsonObject al, const QSet<QString> &pointNames
     }
     static const QRegularExpression singleQuoteT(QStringLiteral("T\\['([^']+)'\\]"));
     cond.replace(singleQuoteT, QStringLiteral("T[\"\\1\"]"));
-    al.insert(QStringLiteral("condition"), cond);
+    if (!cond.isEmpty() || al.contains(QStringLiteral("condition"))) {
+        al.insert(QStringLiteral("condition"), cond);
+    }
     return al;
 }
 
@@ -294,9 +397,8 @@ bool updateExistingWidgetInTree(QJsonArray &widgets, const QString &id, const QJ
                 if (patchWidget.value(QStringLiteral("binding")).isNull()) {
                     existing.remove(QStringLiteral("binding"));
                 } else if (patchWidget.value(QStringLiteral("binding")).isObject()) {
-                    const QJsonObject mergedBind = normalizeBindingObject(
-                        mergeJsonObjects(existing.value(QStringLiteral("binding")).toObject(),
-                                         patchWidget.value(QStringLiteral("binding")).toObject()));
+                    const QJsonObject mergedBind = mergeBindingObject(existing.value(QStringLiteral("binding")).toObject(),
+                                                                     patchWidget.value(QStringLiteral("binding")).toObject());
                     existing.insert(QStringLiteral("binding"), mergedBind);
                 }
             }
@@ -394,7 +496,7 @@ QJsonObject normalizeNewWidgetTree(const QJsonObject &raw, QSet<QString> *usedId
     built.insert(QStringLiteral("properties"), props);
 
     if (raw.value(QStringLiteral("binding")).isObject()) {
-        built.insert(QStringLiteral("binding"), normalizeBindingObject(raw.value(QStringLiteral("binding")).toObject()));
+        built.insert(QStringLiteral("binding"), mergeBindingObject({}, raw.value(QStringLiteral("binding")).toObject()));
     }
     if (raw.contains(QStringLiteral("tabIndex"))) {
         built.insert(QStringLiteral("tabIndex"), raw.value(QStringLiteral("tabIndex")).toInt(0));
@@ -725,7 +827,7 @@ QString AiConfig::presetBaseUrl(const QString &provider)
     if (provider == QLatin1String("lmstudio")) {
         return QStringLiteral("http://127.0.0.1:1234/v1");
     }
-    return QStringLiteral("https://api.deepseek.com/v1");
+    return {};
 }
 
 QStringList AiConfig::presetModels(const QString &provider)
@@ -857,7 +959,7 @@ QUrl AiConfig::chatCompletionsUrl(const QString &baseUrl)
         trimmed.chop(1);
     }
     if (trimmed.isEmpty()) {
-        trimmed = presetBaseUrl(QStringLiteral("deepseek"));
+        return {};
     }
     if (trimmed.endsWith(QLatin1String("/chat/completions"), Qt::CaseInsensitive)) {
         return QUrl(trimmed);
@@ -878,7 +980,7 @@ QUrl AiConfig::modelsUrl(const QString &baseUrl)
         trimmed.chop(1);
     }
     if (trimmed.isEmpty()) {
-        trimmed = presetBaseUrl(QStringLiteral("deepseek"));
+        return {};
     }
     if (trimmed.endsWith(QLatin1String("/chat/completions"), Qt::CaseInsensitive)) {
         trimmed.chop(int(sizeof("/chat/completions") - 1));
@@ -896,59 +998,36 @@ QUrl AiConfig::modelsUrl(const QString &baseUrl)
     return QUrl(trimmed + QStringLiteral("/v1/models"));
 }
 
-QString AiConfig::loadProviderApiKey(const QString &provider)
-{
-    QSettings settings;
-    const QString key = settings.value(providerKeyPath(provider, QStringLiteral("apiKey"))).toString();
-    if (!key.isEmpty()) {
-        return key;
-    }
-    return settings.value(LegacyApiKey).toString();
-}
-
-void AiConfig::saveProviderApiKey(const QString &provider, const QString &apiKey)
-{
-    QSettings settings;
-    settings.setValue(providerKeyPath(provider, QStringLiteral("apiKey")), apiKey);
-}
-
 AiConfig AiConfig::load()
 {
+    const QString provider = QSettings().value(ProviderKey, QStringLiteral("deepseek")).toString();
+    AiConfig config = loadProvider(provider);
+    if (!providerIds().contains(provider)) {
+        config.provider = QStringLiteral("custom");
+    }
+    return config;
+}
+
+AiConfig AiConfig::loadProvider(const QString &provider)
+{
     QSettings settings;
+    migrateLegacyAiSettings(settings);
     AiConfig config;
-    config.provider = settings.value(ProviderKey, QStringLiteral("deepseek")).toString();
-    if (!providerIds().contains(config.provider)) {
-        config.provider = QStringLiteral("deepseek");
-    }
-    config.baseUrl = settings
-                         .value(providerKeyPath(config.provider, QStringLiteral("baseUrl")),
-                                settings.value(BaseUrlKey, presetBaseUrl(config.provider)))
-                         .toString()
-                         .trimmed();
-    if (config.baseUrl.isEmpty()) {
-        config.baseUrl = presetBaseUrl(config.provider);
-    }
-    config.model = settings
-                       .value(providerKeyPath(config.provider, QStringLiteral("model")),
-                              settings.value(ModelKey, presetModel(config.provider)))
-                       .toString()
-                       .trimmed();
-    if (config.model.isEmpty()) {
-        config.model = presetModel(config.provider);
-    }
-    config.apiKey = loadProviderApiKey(config.provider);
+    config.provider = provider;
+    config.baseUrl = settings.value(providerKeyPath(provider, QStringLiteral("baseUrl")), presetBaseUrl(provider)).toString();
+    config.model = settings.value(providerKeyPath(provider, QStringLiteral("model")), presetModel(provider)).toString();
+    config.apiKey = settings.value(providerKeyPath(provider, QStringLiteral("apiKey"))).toString();
     return config;
 }
 
 void AiConfig::save(const AiConfig &config)
 {
     QSettings settings;
+    migrateLegacyAiSettings(settings);
     settings.setValue(ProviderKey, config.provider);
-    settings.setValue(BaseUrlKey, config.baseUrl.trimmed());
-    settings.setValue(ModelKey, config.model.trimmed());
     settings.setValue(providerKeyPath(config.provider, QStringLiteral("baseUrl")), config.baseUrl.trimmed());
     settings.setValue(providerKeyPath(config.provider, QStringLiteral("model")), config.model.trimmed());
-    saveProviderApiKey(config.provider, config.apiKey);
+    settings.setValue(providerKeyPath(config.provider, QStringLiteral("apiKey")), config.apiKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -1334,7 +1413,9 @@ QString AiService::buildSystemPrompt(const Project &project, const QStringList &
                                         propSpecs.join(QStringLiteral(", "))));
     }
 
-    const QString projectJson = QString::fromUtf8(QJsonDocument(project.toJson()).toJson(QJsonDocument::Compact));
+    auto context = project.toJson();
+    context.insert(QStringLiteral("widgets"), promptWidgets(project.widgets));
+    const QString projectJson = QString::fromUtf8(QJsonDocument(context).toJson(QJsonDocument::Compact));
     const QString selectedText = selectedWidgetIds.isEmpty() ? QStringLiteral("none") : selectedWidgetIds.join(QStringLiteral(", "));
 
     // i18n: ignore
@@ -1369,7 +1450,7 @@ QString AiService::buildSystemPrompt(const Project &project, const QStringList &
                "}\n" // i18n: ignore
                "```\n" // i18n: ignore
                "4. 修改已有控件时，在 `upsertWidgets` 中指定该控件的 `id`，只填写需要修改的 `properties`、`geometry` 或 `binding` 字段即可（系统会自动与现有属性合并）。新增控件时必须指定 `type`（来自下方控件目录）与合理的 `geometry`（避免与已有控件重叠，坐标对齐 10px 网格）。将控件放入容器（GroupBox/CardContainer/TabWidget）可附加 `\"parentId\": \"容器id\"`。\n" // i18n: ignore
-               "5. 绑定字段 `binding.parseMode` 严格使用以下枚举值：`\"键值匹配\"`（配 `key`）、`\"JSON路径\"`（配 `jsonPath`）、`\"HEX字节提取\"`（配 `byteOffset`、`dataType`、`byteOrder`、`frameHeader`、`frameTail`）、`\"Modbus\"`（配 `mbArea`、`regIndex`、`mbDataType`、`mbRegOrder`、`mbBit`、`mbPeriod`）、`\"S7\"`（配 `s7` 地址如 `DB1.DBD0`、`s7DataType` 如 `REAL`）、`\"工程数据点\"`（配 `key` 指向工程数据点 `name`）、`\"CAN信号\"`（配 `canId`、`canStartBit`、`canBitLength`、`canByteOrder` 取 `Intel`/`Motorola MSB`/`Motorola LSB`、`canSigned`、`canFactor`、`canOffset`）、`\"CAN 信号名称\"`（配 `key` 如 `Msg.Sig`）。单点绑定换算公式 `binding.expression` 中用 `value` 表示原始值（例如 `\"value * 0.1\"`）。\n" // i18n: ignore
+               "5. 绑定字段 `binding.parseMode` 严格使用以下枚举值：`\"键值匹配\"`（配 `key`）、`\"JSON路径\"`（配 `jsonPath`）、`\"HEX字节提取\"`（配 `byteOffset`、`dataType`、`byteOrder`、`frameHeader`、`frameTail`）、`\"Modbus\"`（配 `mbArea`、`mbRegIndex`、`mbDataType`、`mbRegOrder`、`mbBit`、`mbPeriod`）、`\"S7\"`（配嵌套的 `\"s7\":{\"address\":\"DB1.DBD0\",\"dataType\":\"REAL\"}`）、`\"工程数据点\"`（配 `key` 指向工程数据点 `name`）、`\"CAN信号\"`（配 `canId`、`canStartBit`、`canBitLength`、`canByteOrder` 取 `Intel`/`Motorola MSB`/`Motorola LSB`、`canSigned`、`canFactor`、`canOffset`）、`\"CAN 信号名称\"`（配 `key` 如 `Msg.Sig`）。单点绑定换算公式 `binding.expression` 中用 `value` 表示原始值（例如 `\"value * 0.1\"`）。\n" // i18n: ignore
                "6. `RealtimeChart` 多条曲线在 `properties` 中配置：`\"curveCount\": 2`、`\"_curve_0_name\": \"电压\"`、`\"_curve_0_parseMode\": \"键值匹配\"`、`\"_curve_0_key\": \"voltage\"`、`\"_curve_1_name\": \"电流\"`、`\"_curve_1_parseMode\": \"键值匹配\"`、`\"_curve_1_key\": \"current\"`。\n" // i18n: ignore
                "7. 工程数据点 `points` 每项格式：设备采集点为 `{\"name\": \"点名\", \"binding\": {\"parseMode\": \"键值匹配\", \"key\": \"字段名\"}}`；计算点为 `{\"name\": \"点名\", \"expression\": \"T[\\\"其他点名\\\"] * 2\"}`；工程参数为 `{\"name\": \"参数名\", \"initialValue\": 100}`。报警 `alarms` 每项格式：`{\"id\": \"报警名称\", \"condition\": \"T[\\\"点名\\\"] > 1500\", \"level\": 3, \"ackRequired\": true, \"text\": \"报警文本\"}`（`level` 取整数 1、2 或 3，3 为最高紧急级别；条件表达式必须用 `T[\"点名\"]` 引用工程数据点）。\n" // i18n: ignore
                "\n" // i18n: ignore
@@ -1385,16 +1466,18 @@ QString AiService::buildSystemPrompt(const Project &project, const QStringList &
 }
 
 bool AiService::applyPatchObject(const Project &currentProject, const QJsonObject &patch, Project *outProject,
-                                 QStringList *summaryLines, QStringList *touchedWidgetIds, QString *error)
+                                 QStringList *summaryLines, QStringList *touchedWidgetIds, QString *error,
+                                 const Project *previewBase)
 {
     QJsonObject doc = currentProject.toJson();
     QStringList summaries;
     QStringList touched;
 
-    // If the patch itself is a full UIDP document with "widgets" array and no "upsertWidgets"
+    // Edit the same properties as the designer. Saved UIDP wraps some send targets for older readers.
+    QJsonArray widgets = currentProject.widgets;
     if (patch.contains(QStringLiteral("widgets")) && patch.value(QStringLiteral("widgets")).isArray() &&
         !patch.contains(QStringLiteral("upsertWidgets"))) {
-        doc.insert(QStringLiteral("widgets"), patch.value(QStringLiteral("widgets")).toArray());
+        widgets = Project::fromTrustedJson(patch).widgets;
         summaries.append(tr("更新全部画布控件 (%1 个)").arg(patch.value(QStringLiteral("widgets")).toArray().size()));
     }
 
@@ -1407,8 +1490,6 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
                              .arg(canvas.value(QStringLiteral("width")).toInt(currentProject.canvasWidth))
                              .arg(canvas.value(QStringLiteral("height")).toInt(currentProject.canvasHeight)));
     }
-
-    QJsonArray widgets = doc.value(QStringLiteral("widgets")).toArray();
 
     if (patch.value(QStringLiteral("removeWidgetIds")).isArray()) {
         for (const QJsonValue &idVal : patch.value(QStringLiteral("removeWidgetIds")).toArray()) {
@@ -1493,7 +1574,7 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
             if (!ptVal.isObject()) {
                 continue;
             }
-            const QJsonObject pt = normalizePointObject(ptVal.toObject());
+            const QJsonObject pt = ptVal.toObject();
             const QString name = pt.value(QStringLiteral("name")).toString().trimmed();
             if (name.isEmpty()) {
                 continue;
@@ -1501,13 +1582,13 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
             bool updated = false;
             for (qsizetype i = 0; i < points.size(); ++i) {
                 if (points.at(i).toObject().value(QStringLiteral("name")).toString() == name) {
-                    points[i] = normalizePointObject(mergeJsonObjects(points.at(i).toObject(), pt));
+                    points[i] = mergePointObject(points.at(i).toObject(), pt);
                     updated = true;
                     break;
                 }
             }
             if (!updated) {
-                points.append(pt);
+                points.append(mergePointObject({}, pt));
             }
             summaries.append(updated ? tr("更新数据点：%1").arg(name) : tr("新增数据点：%1").arg(name));
         }
@@ -1536,7 +1617,7 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
             bool updated = false;
             for (qsizetype i = 0; i < alarms.size(); ++i) {
                 if (alarms.at(i).toObject().value(QStringLiteral("id")).toString() == id) {
-                    alarms[i] = normalizeAlarmObject(mergeJsonObjects(alarms.at(i).toObject(), al), knownPoints);
+                    alarms[i] = mergeJsonObjects(alarms.at(i).toObject(), al);
                     updated = true;
                     break;
                 }
@@ -1553,17 +1634,31 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
         doc.insert(QStringLiteral("logic"), logic);
     }
 
-    doc.insert(QStringLiteral("version"),
-               Project::formatVersion(doc.value(QStringLiteral("widgets")).toArray(),
-                                      doc.value(QStringLiteral("logic")).toObject()));
+    doc.insert(QStringLiteral("version"), Project::formatVersion(widgets, logic, doc.value(QStringLiteral("frameTemplates")).toObject()));
 
     Project validated;
     QString validationError;
-    if (!Project::fromJson(doc, &validated, &validationError)) {
+    if (!Project::validate(doc, &validationError, false, &validated)) {
         if (error) {
             *error = validationError;
         }
         return false;
+    }
+    if (previewBase) {
+        // Version is derived. Compare only project content that this patch can change.
+        const auto state = [](const Project &p) {
+            return QJsonObject{{QStringLiteral("widgets"), p.widgets}, {QStringLiteral("logic"), p.logic},
+                               {QStringLiteral("frameTemplates"), p.frameTemplates},
+                               {QStringLiteral("canvas"), QJsonObject{{QStringLiteral("width"), p.canvasWidth},
+                                                                      {QStringLiteral("height"), p.canvasHeight},
+                                                                      {QStringLiteral("gridSize"), p.gridSize}}}};
+        };
+        if (overwritesEdit(state(*previewBase), state(currentProject), state(validated))) {
+            if (error) {
+                *error = tr("此方案与刚才的工程修改冲突，请根据当前工程重新生成。");
+            }
+            return false;
+        }
     }
     validated.filePath = currentProject.filePath;
     validated.recentEndpoints = currentProject.recentEndpoints;
@@ -1616,7 +1711,6 @@ AiPatchProposal AiService::extractPatch(const QString &responseText, const Proje
     }
 
     result.hasPatch = true;
-    const QString rawBlock = match.captured(0);
     const QByteArray jsonBytes = match.captured(1).trimmed().toUtf8();
     result.cleanText = responseText.left(match.capturedStart()) + responseText.mid(match.capturedEnd());
     result.cleanText = result.cleanText.trimmed();
@@ -1630,6 +1724,7 @@ AiPatchProposal AiService::extractPatch(const QString &responseText, const Proje
     }
 
     const QJsonObject patchObj = doc.object();
+    result.patch = patchObj;
     result.title = patchObj.value(QStringLiteral("title")).toString().trimmed();
     if (result.title.isEmpty()) {
         result.title = tr("AI 工程变更建议");

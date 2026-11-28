@@ -8,8 +8,6 @@ class PushSettingCard;
 
 namespace fhmi {
 
-class AiService;
-
 class SettingsPage : public QWidget
 {
     Q_OBJECT
@@ -25,7 +23,6 @@ class SettingsPage : public QWidget
 
   private:
     FluentQt::PushSettingCard *m_checkUpdate = nullptr;
-    AiService *m_aiTestService = nullptr;
 };
 
 } // namespace fhmi

@@ -759,6 +759,7 @@ void DesignerPage::load(const Project &project)
     m_project = project;
     m_properties->showItem(nullptr);
     m_properties->setProject(&m_project);
+    m_aiAssistant->clearConversation();
     m_aiAssistant->setSelectedItems({});
     applyProjectSettings();
     m_outline->rebuild();

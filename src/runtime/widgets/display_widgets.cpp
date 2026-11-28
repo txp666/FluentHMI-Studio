@@ -181,10 +181,10 @@ qreal LedWidget::lampDiameter() const
     const bool hasText = pos != QStringLiteral("隐藏") && !m_label->text().isEmpty(); // i18n: value
     const int labelH = m_label->fontMetrics().height();
 
-    qreal maxW = std::max<qreal>(8, width() - 6);
-    qreal maxH = std::max<qreal>(8, height() - 6);
+    qreal maxW = std::max<qreal>(0, width() - 6);
+    qreal maxH = std::max<qreal>(0, height() - 6);
     if (hasText && pos == QStringLiteral("底部")) { // i18n: value
-        maxH = std::max<qreal>(8, height() - labelH - 8);
+        maxH = std::max<qreal>(0, height() - labelH - 2);
     } else if (hasText && (pos.isEmpty() || pos == QStringLiteral("右侧"))) { // i18n: value
         maxW = std::max<qreal>(8, width() * 0.65);
     }
@@ -203,10 +203,9 @@ qreal LedWidget::lampDiameter() const
         return std::min<qreal>(44, maxBox);
     }
     // 随控件缩放 (default): at default 140x30 gives 18px, and scales up smoothly when the widget is enlarged.
-    if (hasText && (pos.isEmpty() || pos == QStringLiteral("右侧"))) { // i18n: value
-        return std::clamp<qreal>((height() - 6) * 0.75, 12, maxBox);
-    }
-    return std::clamp<qreal>(maxBox * 0.78, 12, maxBox);
+    const qreal scaled = hasText && (pos.isEmpty() || pos == QStringLiteral("右侧")) // i18n: value
+                             ? (height() - 6) * 0.75 : maxBox * 0.78;
+    return std::min(maxBox, std::max<qreal>(12, scaled));
 }
 
 void LedWidget::updateLayoutGeometry()
@@ -229,7 +228,7 @@ void LedWidget::updateLayoutGeometry()
     }
     const qreal d = lampDiameter();
     if (pos == QStringLiteral("底部")) { // i18n: value
-        const int topSpace = std::max(0, int(d + 6));
+        const int topSpace = std::min(int(d + 6), std::max(0, height() - m_label->fontMetrics().height() - 2));
         layout()->setContentsMargins(4, topSpace, 4, 2);
         m_label->setAlignment(Qt::AlignHCenter | Qt::AlignBottom);
         return;
@@ -269,14 +268,17 @@ void LedWidget::paintEvent(QPaintEvent *)
     }
 
     const qreal d = lampDiameter();
+    if (d <= 0) {
+        return;
+    }
     const qreal glowRadius = std::min<qreal>(d * 0.78, std::min(width(), height()) / 2.0);
     QPointF center;
     if (pos == QStringLiteral("隐藏") || pos == QStringLiteral("内部居中") || m_label->text().isEmpty()) { // i18n: value
         center = QRectF(rect()).center();
     } else if (pos == QStringLiteral("底部")) { // i18n: value
         const int labelH = m_label->fontMetrics().height();
-        const qreal availH = std::max<qreal>(d, height() - labelH - 4);
-        center = QPointF(width() / 2.0, availH / 2.0 + 2);
+        const qreal availH = std::max(0, height() - labelH - 2);
+        center = QPointF(width() / 2.0, availH / 2.0);
     } else {
         const qreal cx = std::max<qreal>(d / 2.0 + 3, glowRadius + 1);
         center = QPointF(cx, height() / 2.0);

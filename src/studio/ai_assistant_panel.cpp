@@ -169,6 +169,9 @@ AiAssistantPanel::AiAssistantPanel(QWidget *parent) : QWidget(parent), m_service
         if (m_activeTextLabel && m_streamingText.isEmpty()) {
             m_activeTextLabel->setText(tr("已取消生成"));
         }
+        m_activeBubble = nullptr;
+        m_activeTextLabel = nullptr;
+        m_activeBubbleLayout = nullptr;
     });
     connect(m_sendButton, &QPushButton::clicked, this, [this]() {
         sendPrompt(m_input->toPlainText());
@@ -374,8 +377,11 @@ void AiAssistantPanel::clearConversation()
 {
     m_service->abort();
     updateBusyState(false);
+    m_input->clear();
+    m_requestProject = {};
     m_history.clear();
     m_pendingAttachments.clear();
+    m_clipboardImageCounter = 0;
     rebuildAttachmentBar();
     m_activeBubble = nullptr;
     m_activeTextLabel = nullptr;
@@ -384,9 +390,7 @@ void AiAssistantPanel::clearConversation()
 
     while (m_messagesLayout->count() > 2) {
         QLayoutItem *item = m_messagesLayout->takeAt(1);
-        if (QWidget *w = item->widget()) {
-            w->deleteLater();
-        }
+        delete item->widget();
         delete item;
     }
     m_welcomeCard->show();
@@ -477,9 +481,9 @@ void AiAssistantPanel::sendPrompt(const QString &rawText)
     startAssistantBubble();
     updateBusyState(true);
 
-    const Project currentProject = m_projectProvider ? m_projectProvider() : Project{};
+    m_requestProject = m_projectProvider ? m_projectProvider() : Project{};
     QList<AiChatMessage> payload;
-    payload.append({QStringLiteral("system"), AiService::buildSystemPrompt(currentProject, m_selectedIds), {}});
+    payload.append({QStringLiteral("system"), AiService::buildSystemPrompt(m_requestProject, m_selectedIds), {}});
     // Keep up to the last 8 turns of history so context stays focused and token-efficient
     const qsizetype startIdx = std::max<qsizetype>(0, m_history.size() - 8);
     for (qsizetype i = startIdx; i < m_history.size(); ++i) {
@@ -493,15 +497,12 @@ void AiAssistantPanel::sendPrompt(const QString &rawText)
 
 void AiAssistantPanel::finalizeAssistantBubble(const QString &fullText)
 {
-    const QString response = fullText.isEmpty() ? m_streamingText : fullText;
-    m_history.append({QStringLiteral("assistant"), response, {}});
-
     if (!m_activeBubble || !m_activeTextLabel || !m_activeBubbleLayout) {
         return;
     }
-
-    const Project currentProject = m_projectProvider ? m_projectProvider() : Project{};
-    const AiPatchProposal proposal = AiService::extractPatch(response, currentProject);
+    const QString response = fullText.isEmpty() ? m_streamingText : fullText;
+    m_history.append({QStringLiteral("assistant"), response, {}});
+    const AiPatchProposal proposal = AiService::extractPatch(response, m_requestProject);
 
     const QString shownText = proposal.cleanText.isEmpty()
                                   ? (proposal.hasPatch ? tr("已为你生成如下工程变更方案：") : tr("（无文本回复）"))
@@ -530,18 +531,18 @@ void AiAssistantPanel::finalizeAssistantBubble(const QString &fullText)
 
             auto *applyBtn = new FluentQt::PrimaryPushButton(FluentQt::icon(FluentQt::FluentIcon::Accept), tr("应用到工程"), patchCard);
             applyBtn->setObjectName(QStringLiteral("aiApplyPatchButton"));
-            const QJsonObject patchSnapshot = proposal.patchedProject.toJson();
-            const QStringList touchedIds = proposal.touchedWidgetIds;
-            connect(applyBtn, &QPushButton::clicked, this, [this, applyBtn, patchSnapshot, touchedIds]() {
-                // Re-apply on top of the latest project snapshot if needed, or load the validated patched project
-                Project latest = m_projectProvider ? m_projectProvider() : Project{};
-                Project target = Project::fromTrustedJson(patchSnapshot);
-                target.filePath = latest.filePath;
-                target.recentEndpoints = latest.recentEndpoints;
-                target.recentTextSamples = latest.recentTextSamples;
-                emit applyProjectRequested(target, touchedIds);
+            connect(applyBtn, &QPushButton::clicked, this, [this, applyBtn, patch = proposal.patch, base = m_requestProject]() {
+                const Project latest = m_projectProvider ? m_projectProvider() : Project{};
+                Project target;
+                QStringList touchedIds;
+                QString error;
+                if (!AiService::applyPatchObject(latest, patch, &target, nullptr, &touchedIds, &error, &base)) {
+                    emit notify(tr("无法应用 AI 变更"), error, true);
+                    return;
+                }
                 applyBtn->setText(tr("已应用（可 Ctrl+Z 撤销）"));
                 applyBtn->setEnabled(false);
+                emit applyProjectRequested(target, touchedIds);
             });
             patchLayout->addWidget(applyBtn);
         } else {

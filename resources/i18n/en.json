@@ -2580,6 +2580,7 @@
   "新增控件：%1 (%2)": "Add widget: %1 (%2)",
   "新增数据点：%1": "Add data point: %1",
   "无法应用 AI 变更": "Cannot apply AI changes",
+  "此方案与刚才的工程修改冲突，请根据当前工程重新生成。": "This proposal conflicts with recent project edits. Generate a new proposal for the current project.",
   "智谱清言 (GLM)": "Zhipu AI (GLM)",
   "更新全部画布控件 (%1 个)": "Update all canvas widgets (%1)",
   "更新报警规则：%1": "Update alarm rule: %1",

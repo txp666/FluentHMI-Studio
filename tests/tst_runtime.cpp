@@ -6526,25 +6526,50 @@ class TestRuntime : public QObject
             "  ]\n"
             "}\n"
             "```");
-        const AiPatchProposal updateProposal = AiService::extractPatch(replyUpdate, page.snapshot());
-        QVERIFY(updateProposal.hasPatch && updateProposal.valid);
-        emit aiPanel->applyProjectRequested(updateProposal.patchedProject, updateProposal.touchedWidgetIds);
+        const auto previous = AiConfig::load();
+        const auto local = AiConfig::loadProvider("ollama");
+        const auto restoreSettings = qScopeGuard([&] {
+            AiConfig::save(local);
+            AiConfig::save(previous);
+        });
+        AiConfig::save({"ollama", "http://127.0.0.1:1/v1", {}, "test"});
+        auto *input = aiPanel->findChild<QPlainTextEdit *>("aiPromptInput");
+        auto *send = aiPanel->findChild<QPushButton *>("aiSendButton");
+        auto *service = aiPanel->findChild<AiService *>();
+        QVERIFY(input && send && service);
+        input->setPlainText("Update gauge");
+        send->click();
+        service->abort(); // Supply the provider reply locally.
+        emit service->finished(replyUpdate);
+        QPointer<QPushButton> apply = aiPanel->findChild<QPushButton *>("aiApplyPatchButton");
+        QVERIFY(apply);
+        auto *manual = scene->createItem("Label", {300, 40});
+        QVERIFY(manual);
+        const QString manualId = manual->widgetId();
+        apply->click();
         QApplication::processEvents();
+        QVERIFY(scene->findItem(manualId));
         gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
         QVERIFY(gauge);
         QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), 0.0);
         QCOMPARE(gauge->propertyValue(QStringLiteral("maximum")).toDouble(), 2000.0);
 
-        // 3. Undo both AI steps via DesignerPage::undo()
+        // 3. Undo the proposal, the manual edit, then the original gauge.
         page.undo();
         QApplication::processEvents();
         gauge = scene->findItem(QStringLiteral("gaugeMeter1"));
         QVERIFY(gauge);
         QCOMPARE(gauge->propertyValue(QStringLiteral("minimum")).toDouble(), -2000.0);
-
+        QVERIFY(scene->findItem(manualId));
+        page.undo();
+        QVERIFY(!scene->findItem(manualId));
         page.undo();
         QApplication::processEvents();
         QCOMPARE(page.snapshot().widgets.size(), 0);
+        input->setPlainText("Draft from previous project");
+        QVERIFY(page.newProject());
+        QVERIFY(input->toPlainText().isEmpty());
+        QVERIFY(apply.isNull());
 
         // 4. Patch with shorthand parseMode ("键值"), data points, alarms, and RealtimeChart curves
         const QString replyComplex = QStringLiteral(
@@ -6574,6 +6599,56 @@ class TestRuntime : public QObject
         QCOMPARE(complexProposal.patchedProject.widgets.size(), 4);
         QCOMPARE(complexProposal.patchedProject.logic.value(QStringLiteral("points")).toArray().size(), 1);
         QCOMPARE(complexProposal.patchedProject.logic.value(QStringLiteral("alarms")).toArray().size(), 1);
+        const auto &base = complexProposal.patchedProject;
+        const auto patch = jsonObject(R"({"points":[{"name":"current","staleAfterMs":2000}],
+                                         "alarms":[{"id":"过流报警","message":"Updated"}]})");
+        Project updated;
+        QString error;
+        QVERIFY2(AiService::applyPatchObject(base, patch, &updated, nullptr, nullptr, &error), qPrintable(error));
+        QCOMPARE(updated.logic["points"].toArray().first().toObject()["binding"],
+                 base.logic["points"].toArray().first().toObject()["binding"]);
+        const auto alarm = updated.logic["alarms"].toArray().first().toObject();
+        QCOMPARE(alarm["condition"], base.logic["alarms"].toArray().first().toObject()["condition"]);
+        QCOMPARE(alarm["level"].toInt(), 3);
+        QCOMPARE(alarm["text"].toString(), QStringLiteral("Updated"));
+        const auto conflict = jsonObject(R"({"alarms":[{"id":"过流报警","message":"Another change"}]})");
+        QVERIFY(!AiService::applyPatchObject(updated, conflict, nullptr, nullptr, nullptr, &error, &base));
+    }
+
+    void aiCredentialsStayScoped()
+    {
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        const QString previousName = QCoreApplication::applicationName();
+        QCoreApplication::setApplicationName(QFileInfo(temporary.path()).fileName());
+        const auto restore = qScopeGuard([&] {
+            QSettings().clear();
+            QCoreApplication::setApplicationName(previousName);
+        });
+        QSettings settings;
+        settings.setValue("ai/provider", "custom");
+        settings.setValue("ai/baseUrl", "https://example.invalid/v1");
+        settings.setValue("ai/model", "private-model");
+        settings.setValue("ai/apiKey", "test-only-key");
+
+        const auto other = AiConfig::loadProvider("deepseek");
+        QVERIFY(other.apiKey.isEmpty());
+        AiConfig::save(other);
+        const auto custom = AiConfig::loadProvider("custom");
+        QCOMPARE(custom.baseUrl, QStringLiteral("https://example.invalid/v1"));
+        QCOMPARE(custom.model, QStringLiteral("private-model"));
+        QCOMPARE(custom.apiKey, QStringLiteral("test-only-key"));
+        QVERIFY(!settings.contains("ai/apiKey"));
+        QVERIFY(AiConfig::chatCompletionsUrl(AiConfig::presetBaseUrl("custom")).isEmpty());
+        QVERIFY(AiConfig::modelsUrl({}).isEmpty());
+
+        Project project;
+        project.widgets.append(jsonObject(R"({"type":"GroupBox","children":[{"type":"MqttConfigCard","id":"broker",
+            "properties":{"defaultUsername":"private-user","defaultPassword":"private-password"}}]})"));
+        const auto prompt = AiService::buildSystemPrompt(project, {});
+        QVERIFY(prompt.contains(QStringLiteral("broker")));
+        QVERIFY(!prompt.contains(QStringLiteral("private-user")));
+        QVERIFY(!prompt.contains(QStringLiteral("private-password")));
     }
 };
 

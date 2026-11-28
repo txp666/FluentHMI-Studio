@@ -32,9 +32,8 @@ struct AiConfig
     static QUrl modelsUrl(const QString &baseUrl);
 
     static AiConfig load();
+    static AiConfig loadProvider(const QString &provider);
     static void save(const AiConfig &config);
-    static QString loadProviderApiKey(const QString &provider);
-    static void saveProviderApiKey(const QString &provider, const QString &apiKey);
 };
 
 struct AiAttachment
@@ -70,6 +69,7 @@ struct AiPatchProposal
     QString title;
     QStringList summaryLines;
     QStringList touchedWidgetIds;
+    QJsonObject patch;
     Project patchedProject;
     QString error;
     QString cleanText;
@@ -93,7 +93,8 @@ class AiService : public QObject
     static QString buildSystemPrompt(const Project &project, const QStringList &selectedWidgetIds);
     static AiPatchProposal extractPatch(const QString &responseText, const Project &currentProject);
     static bool applyPatchObject(const Project &currentProject, const QJsonObject &patch, Project *outProject,
-                                 QStringList *summaryLines, QStringList *touchedWidgetIds, QString *error);
+                                 QStringList *summaryLines, QStringList *touchedWidgetIds, QString *error,
+                                 const Project *previewBase = nullptr);
 
   signals:
     void chunkReceived(const QString &delta);
