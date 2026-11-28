@@ -279,6 +279,8 @@ add_library(fhmi_designer STATIC
     src/designer/transmit_frame_editor.cpp
     src/designer/transmit_frame_editor.h
     src/designer/property_editor.cpp
+    src/designer/enum_mapping_editor.cpp
+    src/designer/enum_mapping_editor.h
     src/designer/property_editor.h
     src/designer/can_signal_editor.cpp
     src/designer/can_signal_editor.h

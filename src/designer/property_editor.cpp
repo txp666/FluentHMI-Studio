@@ -2,6 +2,7 @@
 #include "designer/can_signal_editor.h"
 #include "designer/command_preview.h"
 #include "designer/connection_source_edit.h"
+#include "designer/enum_mapping_editor.h"
 #include "designer/frame_template_editor.h"
 #include "designer/project_can_signals.h"
 #include "designer/project_logic_dialog.h"
@@ -22,6 +23,7 @@
 #include "core/i18n.h"
 #include "core/protocol_parser.h"
 #include "core/project_logic.h"
+#include "core/value_text.h"
 #include "designer/canvas_item.h"
 #include "designer/design_scene.h"
 #include "runtime/app_dialog.h"
@@ -2817,10 +2819,42 @@ void PropertyEditor::addItemProperties(QFormLayout *form, const QList<const Prop
     for (const PropDef *def : properties) {
         const QString &name = def->name;
         if (name == QLatin1String("currentTab") || name == QLatin1String("bitProfile") ||
+            name == u"enumTable" || name == u"ledEffects" ||
             name.startsWith(QLatin1String("curveCan")))
             continue;
         if (name == QLatin1String("tabNames")) {
             addPageRows(form);
+        } else if (name == u"textList") {
+            auto *edit = new FluentQt::PushButton(m_content);
+            edit->setObjectName(QStringLiteral("editEnumMapping"));
+            const auto refresh = [this, edit] {
+                const auto table = m_item->propertyValue(QStringLiteral("enumTable")).toString();
+                edit->setText(table.isEmpty() ? tr("编辑枚举…") : tr("编辑枚举 · %1").arg(table));
+            };
+            refresh();
+            addRow(form, name, translated(def->label), edit, def->helpKey);
+            connect(edit, &QPushButton::clicked, this, [this, refresh] {
+                const QPointer<CanvasItem> item = m_item;
+                const QJsonObject tables = m_project ? m_project->enumTables : QJsonObject();
+                const auto result = editEnumMapping(item->typeName(), item->properties(), tables, m_project != nullptr, window());
+                if (!result || !item || item != m_item)
+                    return;
+                const auto set = [item](const QString &key, const QJsonValue &value) {
+                    if (item->propertyValue(key) != value)
+                        item->setPropertyValue(key, value);
+                };
+                set(QStringLiteral("textList"), result->localMapping);
+                set(QStringLiteral("enumTable"), result->tableName);
+                if (item->typeName() == u"LEDIndicator")
+                    set(QStringLiteral("ledEffects"), result->effects);
+                if (m_project && result->tables != tables) {
+                    m_project->enumTables = result->tables;
+                    emit projectSettingsChanged({});
+                } else {
+                    emit modified({});
+                }
+                refresh();
+            });
         } else if (name == QLatin1String("canSignals")) {
             auto *edit = new FluentQt::PushButton(tr("可视化编辑…"), m_content);
             edit->setObjectName(QStringLiteral("editCanSignals"));
@@ -3612,6 +3646,13 @@ void PropertyEditor::updateVisibility()
     }
     const QString format = m_item->propertyValue(QStringLiteral("displayFormat")).toString();
     const bool automatic = format == QStringLiteral("自动"); // i18n: value
+    if (meta.typeName == u"LEDIndicator") {
+        const bool multi = usesMultiStateLed(m_item->properties());
+        for (const auto *key : {"color", "on", "onValue", "offValue", "blink"})
+            setRowVisible(QLatin1String(key), !multi);
+        setRowVisible(QStringLiteral("textList"), multi);
+        setRowVisible(QStringLiteral("stateValue"), multi);
+    }
     if (meta.typeName == QLatin1String("Label")) {
         const auto binding = m_item->binding();
         const bool bound = !binding.isEmpty() && binding.value(QStringLiteral("parseMode")).toString() != ParseMode::None;

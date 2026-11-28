@@ -39,6 +39,7 @@ class HmiWidget : public QWidget
 
     // Stores the properties and refreshes the widget from them.
     void setProperties(const QJsonObject &props);
+    void setEnumTables(const QJsonObject &tables);
     void setAssetBaseDir(const QString &dir);
     QString assetBaseDir() const { return m_assetBaseDir; }
 
@@ -98,6 +99,7 @@ class HmiWidget : public QWidget
 
     bool confirmsSend() const { return flag("confirmBeforeSend"); }
     const QJsonObject &frameTemplates() const;
+    const QJsonObject &enumTables() const { return m_enumTables; }
     void requestSend(const CommandResult &command, std::function<void()> onSent = {}, const QString &mode = {},
                      int intervalMs = 0, CommandReader readInputs = {});
     bool isPeriodicSending() const;
@@ -111,6 +113,7 @@ class HmiWidget : public QWidget
     void positionBindingBadge();
     const WidgetMeta *m_meta;
     QJsonObject m_props;
+    QJsonObject m_enumTables;
     QString m_assetBaseDir;
     QPointer<RuntimeContext> m_context;
     QList<QMetaObject::Connection> m_liveConnections;

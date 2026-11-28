@@ -6467,6 +6467,24 @@ class TestRuntime : public QObject
         QVERIFY(!first || !first->isVisible());
     }
 
+    void aiEditsOneLedEffect()
+    {
+        Project original;
+        original.enumTables = {{"Pump", "0=Stopped\n2=Warning\n3=Fault"}};
+        const QJsonObject props{{"stateMode", "多状态"}, {"enumTable", "Pump"},
+                                {"ledEffects", QJsonObject{{"0", "off"}, {"2.0", "slow"}, {"3", "fast"}}}};
+        original.widgets = {QJsonObject{{"id", "lamp"}, {"type", "LEDIndicator"}, {"properties", props}}};
+        const QJsonObject edit{{"id", "lamp"}, {"properties", QJsonObject{{"ledEffects", QJsonObject{{"2", "steady"}}}}}};
+        Project result;
+        QString error;
+        QVERIFY2(AiService::applyPatchObject(original, {{"upsertWidgets", QJsonArray{edit}}}, &result, nullptr,
+                                             nullptr, &error), qPrintable(error));
+        const auto effects = result.widgets.first().toObject().value("properties").toObject().value("ledEffects").toObject();
+        const QJsonObject expected{{"0", "off"}, {"2", "steady"}, {"3", "fast"}};
+        QCOMPARE(effects, expected);
+        QCOMPARE(result.enumTables, original.enumTables);
+    }
+
     void aiAssistantPatchExtractApplyAndUndo()
     {
         DesignerPage page;

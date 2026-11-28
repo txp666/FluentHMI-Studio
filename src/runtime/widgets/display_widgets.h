@@ -38,9 +38,17 @@ class LedWidget : public HmiWidget
     qreal lampDiameter() const;
     void updateLayoutGeometry();
     void updateBlinkTimer();
+    void showEnumValue(const QVariant &value);
 
     FluentQt::BodyLabel *m_label = nullptr;
     QTimer m_blinkTimer;
+    QHash<QString, ValueText> m_entries;
+    QHash<QString, QString> m_effects;
+    QVariant m_reading;
+    QString m_stateLabel;
+    QColor m_stateColor;
+    int m_halfPeriod = 0;
+    bool m_multiState = false;
     bool m_blinkVisible = true;
     bool m_on = true;
     bool m_known = true;

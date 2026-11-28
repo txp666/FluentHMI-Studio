@@ -248,6 +248,7 @@ void DesignScene::setBitProfiles(const QJsonObject &profiles)
 void DesignScene::adopt(CanvasItem *item)
 {
     item->setGridSize(m_gridSize);
+    item->widget()->setEnumTables(m_enumTables);
     applyBitProfiles(item, m_bitProfiles);
     connect(item, &CanvasItem::changed, this, [this](CanvasItem *changed, bool resized) {
         if (resized) {
@@ -278,6 +279,15 @@ void DesignScene::adopt(CanvasItem *item)
     for (CanvasItem *child : item->containerChildren()) {
         adopt(child);
     }
+}
+
+void DesignScene::setEnumTables(const QJsonObject &tables)
+{
+    if (m_enumTables == tables)
+        return;
+    m_enumTables = tables;
+    for (auto *item : allItems())
+        item->widget()->setEnumTables(tables);
 }
 
 QList<CanvasItem *> DesignScene::movableTopSelection() const

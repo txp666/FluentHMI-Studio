@@ -3,6 +3,7 @@
 #include "core/binding.h"
 #include "core/frame_templates.h"
 #include "core/i18n.h"
+#include "core/value_text.h"
 #include "core/widget_meta.h"
 
 #include <QtCore/QBuffer>
@@ -387,8 +388,22 @@ bool updateExistingWidgetInTree(QJsonArray &widgets, const QString &id, const QJ
                 existing.insert(QStringLiteral("geometry"), mergedGeo);
             }
             if (patchWidget.contains(QStringLiteral("properties")) && patchWidget.value(QStringLiteral("properties")).isObject()) {
-                QJsonObject mergedProps = mergeJsonObjects(existing.value(QStringLiteral("properties")).toObject(),
-                                                           patchWidget.value(QStringLiteral("properties")).toObject());
+                const auto previous = existing.value(QStringLiteral("properties")).toObject();
+                const auto changes = patchWidget.value(QStringLiteral("properties")).toObject();
+                QJsonObject mergedProps = mergeJsonObjects(previous, changes);
+                const auto effects = changes.value(QStringLiteral("ledEffects"));
+                if (type == u"LEDIndicator" && effects.isObject()) {
+                    auto kept = previous.value(QStringLiteral("ledEffects")).toObject();
+                    const auto updates = effects.toObject();
+                    QSet<QString> changedValues;
+                    for (const auto &key : updates.keys())
+                        changedValues.insert(valueTextKey(key));
+                    for (const auto &key : kept.keys()) {
+                        if (changedValues.contains(valueTextKey(key)))
+                            kept.remove(key);
+                    }
+                    mergedProps.insert(QStringLiteral("ledEffects"), mergeJsonObjects(kept, updates));
+                }
                 mergedProps = normalizeCurveProperties(type, mergedProps);
                 mergedProps = normalizedWidgetProperties(type, mergedProps);
                 existing.insert(QStringLiteral("properties"), mergedProps);
@@ -1441,6 +1456,7 @@ QString AiService::buildSystemPrompt(const Project &project, const QStringList &
                "  ],\n" // i18n: ignore
                "  \"removeWidgetIds\": [],\n" // i18n: ignore
                "  \"frameTemplates\": {},\n" // i18n: ignore
+               "  \"enumTables\": {},\n"
                "  \"points\": [\n" // i18n: ignore
                "    {\"name\": \"总电流\", \"binding\": {\"parseMode\": \"键值匹配\", \"key\": \"current\"}}\n" // i18n: ignore
                "  ],\n" // i18n: ignore
@@ -1454,6 +1470,7 @@ QString AiService::buildSystemPrompt(const Project &project, const QStringList &
                "6. `RealtimeChart` 多条曲线在 `properties` 中配置：`\"curveCount\": 2`、`\"_curve_0_name\": \"电压\"`、`\"_curve_0_parseMode\": \"键值匹配\"`、`\"_curve_0_key\": \"voltage\"`、`\"_curve_1_name\": \"电流\"`、`\"_curve_1_parseMode\": \"键值匹配\"`、`\"_curve_1_key\": \"current\"`。\n" // i18n: ignore
                "7. 工程数据点 `points` 每项格式：设备采集点为 `{\"name\": \"点名\", \"binding\": {\"parseMode\": \"键值匹配\", \"key\": \"字段名\"}}`；计算点为 `{\"name\": \"点名\", \"expression\": \"T[\\\"其他点名\\\"] * 2\"}`；工程参数为 `{\"name\": \"参数名\", \"initialValue\": 100}`。报警 `alarms` 每项格式：`{\"id\": \"报警名称\", \"condition\": \"T[\\\"点名\\\"] > 1500\", \"level\": 3, \"ackRequired\": true, \"text\": \"报警文本\"}`（`level` 取整数 1、2 或 3，3 为最高紧急级别；条件表达式必须用 `T[\"点名\"]` 引用工程数据点）。\n" // i18n: ignore
                "\n" // i18n: ignore
+               "8. 多状态灯和枚举徽标应绑定同一个完整数值。多控件共用时，用补丁顶层 enumTables 定义命名枚举，值是按换行分隔的字符串，如 {\"泵状态\":\"0=停止|#808080\\n1=运行|#008040\\n2=预警|#e0a000\\n3=故障|#d13438\"}。两控件 properties.enumTable 填同一个名称。LEDIndicator 设置 stateMode=\"多状态\"，ledEffects 是本灯按数值键配置的对象，如 {\"0\":\"off\",\"1\":\"steady\",\"2\":\"slow\",\"3\":\"fast\"}。慢闪和快闪整周期为 1 秒和 0.5 秒。NumericDisplay 设置 displayFormat=\"枚举\"、displayStyle=\"状态徽标\"。单控件也可只写本地 textList（同样的字符串格式）。\n" // i18n: ignore
                "## 可用控件目录 (type, 名称, 默认尺寸, 绑定属性: 属性列表)\n" // i18n: ignore
                "%1\n" // i18n: ignore
                "\n" // i18n: ignore
@@ -1543,6 +1560,28 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
         }
     }
     doc.insert(QStringLiteral("widgets"), widgets);
+
+    auto tables = currentProject.enumTables;
+    const auto enumPatch = patch.value(QStringLiteral("enumTables"));
+    if (!enumPatch.isUndefined() && !enumPatch.isObject()) {
+        if (error)
+            *error = tr("工程枚举表必须是对象");
+        return false;
+    }
+    const auto changes = enumPatch.toObject();
+    for (auto it = changes.begin(); it != changes.end(); ++it) {
+        if (it.value().isNull()) {
+            tables.remove(it.key());
+            summaries.append(tr("删除枚举表：%1").arg(it.key()));
+        } else {
+            tables.insert(it.key(), it.value());
+            summaries.append(tr("配置枚举表：%1").arg(it.key()));
+        }
+    }
+    if (tables.isEmpty())
+        doc.remove(QStringLiteral("enumTables"));
+    else
+        doc.insert(QStringLiteral("enumTables"), tables);
 
     if (patch.value(QStringLiteral("frameTemplates")).isObject()) {
         QJsonObject templates = doc.value(QStringLiteral("frameTemplates")).toObject();
@@ -1634,7 +1673,7 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
         doc.insert(QStringLiteral("logic"), logic);
     }
 
-    doc.insert(QStringLiteral("version"), Project::formatVersion(widgets, logic, doc.value(QStringLiteral("frameTemplates")).toObject()));
+    doc.insert(QStringLiteral("version"), Project::formatVersion(widgets, logic, doc.value(QStringLiteral("frameTemplates")).toObject(), tables));
 
     Project validated;
     QString validationError;
@@ -1648,6 +1687,7 @@ bool AiService::applyPatchObject(const Project &currentProject, const QJsonObjec
         // Version is derived. Compare only project content that this patch can change.
         const auto state = [](const Project &p) {
             return QJsonObject{{QStringLiteral("widgets"), p.widgets}, {QStringLiteral("logic"), p.logic},
+                               {QStringLiteral("enumTables"), p.enumTables},
                                {QStringLiteral("frameTemplates"), p.frameTemplates},
                                {QStringLiteral("canvas"), QJsonObject{{QStringLiteral("width"), p.canvasWidth},
                                                                       {QStringLiteral("height"), p.canvasHeight},
@@ -1699,7 +1739,7 @@ AiPatchProposal AiService::extractPatch(const QString &responseText, const Proje
                 const QJsonObject obj = doc.object();
                 if (obj.contains(QStringLiteral("upsertWidgets")) || obj.contains(QStringLiteral("removeWidgetIds")) ||
                     obj.contains(QStringLiteral("frameTemplates")) || obj.contains(QStringLiteral("points")) ||
-                    obj.contains(QStringLiteral("alarms"))) {
+                    obj.contains(QStringLiteral("alarms")) || obj.contains(QStringLiteral("enumTables"))) {
                     match = candidate;
                 }
             }

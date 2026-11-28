@@ -35,4 +35,40 @@ QHash<QString, ValueText> parseValueText(const QString &text, QString *error)
     }
     return result;
 }
+
+QString enumMapping(const QJsonObject &properties, const QJsonObject &tables)
+{
+    const auto name = properties.value(QStringLiteral("enumTable")).toString();
+    return name.isEmpty() ? properties.value(QStringLiteral("textList")).toString() : tables.value(name).toString();
+}
+
+bool usesMultiStateLed(const QJsonObject &properties)
+{
+    return properties.value(QStringLiteral("stateMode")).toString() == QStringLiteral("多状态"); // i18n: value
+}
+
+QHash<QString, QString> parseLedEffects(const QJsonValue &effects, QString *error)
+{
+    QHash<QString, QString> result;
+    if (effects.isUndefined())
+        return result;
+    const auto object = effects.toObject();
+    bool valid = effects.isObject();
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        const auto key = valueTextKey(it.key());
+        const auto effect = it.value().toString();
+        if (key.isEmpty() || result.contains(key) ||
+            (effect != u"off" && effect != u"steady" && effect != u"slow" && effect != u"fast")) {
+            valid = false;
+            break;
+        }
+        result.insert(key, effect);
+    }
+    if (!valid) {
+        if (error)
+            *error = QCoreApplication::translate("fhmi", "灯效需要唯一数值键，取值为 off、steady、slow 或 fast");
+        return {};
+    }
+    return result;
+}
 } // namespace fhmi

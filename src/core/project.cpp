@@ -245,6 +245,15 @@ bool usesModbusBitWrite(const QString &type, const QJsonObject &props)
            CommandEncoder::modbusBit(props) != CommandEncoder::WholeRegister;
 }
 
+bool usesMultiStateDisplays(const QJsonArray &widgets)
+{
+    return !visitWidgets(widgets, [](const QJsonObject &widget) {
+        const auto props = widget.value(QStringLiteral("properties")).toObject();
+        return props.value(QStringLiteral("enumTable")).toString().isEmpty() &&
+               !(widget.value(QStringLiteral("type")).toString() == u"LEDIndicator" && usesMultiStateLed(props));
+    });
+}
+
 bool usesV13Features(const QJsonArray &widgets)
 {
     const auto versionedBinding = [](const QJsonObject &binding) {
@@ -672,11 +681,14 @@ Project::Project()
     };
 }
 
-QString Project::formatVersion(const QJsonArray &widgets, const QJsonObject &logic, const QJsonObject &frameTemplates)
+QString Project::formatVersion(const QJsonArray &widgets, const QJsonObject &logic, const QJsonObject &frameTemplates,
+                               const QJsonObject &enumTables)
 {
+    if (!enumTables.isEmpty() || usesMultiStateDisplays(widgets))
+        return QString::fromLatin1(FormatVersion);
     if (!frameTemplates.isEmpty() || !logic.isEmpty() || usesV13Features(widgets) ||
         hasNewCanConfiguration(widgets) || usesStructuredRows(widgets))
-        return QString::fromLatin1(FormatVersion);
+        return QStringLiteral("1.3");
     return usesRouting(widgets) ? QStringLiteral("1.2") : S7::usesS7(widgets) ? QStringLiteral("1.1") : QStringLiteral("1.0");
 }
 
@@ -740,7 +752,7 @@ QJsonArray projectSendConfiguration(QJsonArray widgets, bool saving)
 QJsonObject Project::toJson() const
 {
     QJsonObject document{
-        {QStringLiteral("version"), formatVersion(widgets, logic, frameTemplates)},
+        {QStringLiteral("version"), formatVersion(widgets, logic, frameTemplates, enumTables)},
         {QStringLiteral("appName"), appName},
         {QStringLiteral("canvas"), QJsonObject{{QStringLiteral("width"), canvasWidth},
                                                {QStringLiteral("height"), canvasHeight},
@@ -752,6 +764,8 @@ QJsonObject Project::toJson() const
         document.insert(QStringLiteral("logic"), logic);
     if (!frameTemplates.isEmpty())
         document.insert(QStringLiteral("frameTemplates"), frameTemplates);
+    if (!enumTables.isEmpty())
+        document.insert(QStringLiteral("enumTables"), enumTables);
     if (!bitProfiles.isEmpty()) document.insert(QStringLiteral("bitProfiles"), bitProfiles);
     if (!icon.isEmpty()) {
         document.insert(QStringLiteral("icon"), icon);
@@ -795,7 +809,7 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
 {
     const QString version = data.value(QStringLiteral("version")).toString(QStringLiteral("1.0"));
     if (version != QLatin1String("1.0") && version != QLatin1String("1.1") && version != QLatin1String("1.2") &&
-        version != QLatin1String("1.3")) {
+        version != QLatin1String("1.3") && version != QLatin1String("1.4")) {
         return fail(error, QCoreApplication::translate("fhmi", "不支持的项目版本"));
     }
     const QJsonValue appName = data.value(QStringLiteral("appName"));
@@ -870,12 +884,26 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
     if (usesRouting(widgets) && legacy)
         return fail(error, QCoreApplication::translate("fhmi", "多通道配置需要使用 1.2 格式"));
     const auto logic = data.value(QStringLiteral("logic"));
+    const auto tablesValue = data.value(QStringLiteral("enumTables"));
+    const auto tables = tablesValue.toObject();
+    if (!tablesValue.isUndefined() && !tablesValue.isObject())
+        return fail(error, QCoreApplication::translate("fhmi", "工程枚举表必须是对象"));
+    if ((!tables.isEmpty() || usesMultiStateDisplays(widgets)) && version != QLatin1String("1.4"))
+        return fail(error, QCoreApplication::translate("fhmi", "多状态小灯和工程枚举表需要 UIDP 1.4 格式"));
+    for (auto it = tables.begin(); it != tables.end(); ++it) {
+        if (it.key().isEmpty() || it.key() != it.key().trimmed() || !it.value().isString())
+            return fail(error, QCoreApplication::translate("fhmi", "枚举表需要有效的名称和映射文本"));
+        QString problem;
+        parseValueText(it.value().toString(), &problem);
+        if (!problem.isEmpty())
+            return fail(error, it.key() + QStringLiteral(" · ") + problem);
+    }
     if (!logic.isUndefined() && !logic.isObject())
         return fail(error, QCoreApplication::translate("fhmi", "工程数据与报警配置必须是对象"));
-    if ((!logic.toObject().isEmpty() || !protocol.frameTemplates.isEmpty() || usesV13Features(widgets)) &&
-        version != QLatin1String("1.3"))
+    const bool beforeV13 = legacy || version == u"1.2";
+    if (beforeV13 && (!logic.toObject().isEmpty() || !protocol.frameTemplates.isEmpty() || usesV13Features(widgets)))
         return fail(error, QCoreApplication::translate("fhmi", "此工程需要使用 UIDP 1.3 格式"));
-    if (version != QLatin1String("1.3") && hasNewCanConfiguration(widgets))
+    if (beforeV13 && hasNewCanConfiguration(widgets))
         return fail(error, QCoreApplication::translate("fhmi", "CAN 发送初值或 ZLG 自定义时序需要使用 1.3 格式"));
     const auto logicProblem = projectLogicProblem(logic.toObject());
     if (!logicProblem.isEmpty())
@@ -913,9 +941,25 @@ bool prepareProject(QJsonObject &data, QString *error, bool allowExternalReferen
     }
     if (!visitWidgets(widgets, [&](const QJsonObject &widget) {
             const auto props = widget.value(QStringLiteral("properties")).toObject();
-            if (props.value(QStringLiteral("displayFormat")).toString() == QStringLiteral("枚举")) { // i18n: value
+            const auto table = props.value(QStringLiteral("enumTable"));
+            if (!table.isUndefined() &&
+                (!table.isString() || (!table.toString().isEmpty() && !tables.contains(table.toString()))))
+                return fail(error, QCoreApplication::translate("fhmi", "枚举表引用无效：%1").arg(table.toString()));
+            const bool led = widget.value(QStringLiteral("type")).toString() == u"LEDIndicator";
+            if (led && props.contains(QStringLiteral("stateMode")) && !usesMultiStateLed(props) &&
+                props.value(QStringLiteral("stateMode")).toString() != QStringLiteral("开关量")) // i18n: value
+                return fail(error, QCoreApplication::translate("fhmi", "小灯状态模式无效"));
+            if ((led && usesMultiStateLed(props)) ||
+                props.value(QStringLiteral("displayFormat")).toString() == QStringLiteral("枚举")) { // i18n: value
                 QString problem;
-                parseValueText(props.value(QStringLiteral("textList")).toString(), &problem);
+                if (table.toString().isEmpty()) {
+                    const auto mapping = props.value(QStringLiteral("textList"));
+                    if (!mapping.isUndefined() && !mapping.isString())
+                        return fail(error, QCoreApplication::translate("fhmi", "枚举映射必须是文本"));
+                    parseValueText(mapping.toString(), &problem);
+                }
+                if (led && problem.isEmpty())
+                    parseLedEffects(props.value(QStringLiteral("ledEffects")), &problem);
                 if (!problem.isEmpty())
                     return fail(error, problem);
             }
@@ -988,6 +1032,7 @@ Project Project::fromTrustedJson(const QJsonObject &data)
     project.logic = data.value(QStringLiteral("logic")).toObject();
     project.bitProfiles = data.value(QStringLiteral("bitProfiles")).toObject();
     project.frameTemplates = data.value(QStringLiteral("frameTemplates")).toObject();
+    project.enumTables = data.value(QStringLiteral("enumTables")).toObject();
     const QJsonObject serialObject = data.value(QStringLiteral("serial")).toObject();
     for (auto it = serialObject.begin(); it != serialObject.end(); ++it) {
         project.serial.insert(it.key(), it.value());

@@ -29,7 +29,7 @@ struct Format;
 class Project
 {
   public:
-    static constexpr const char *FormatVersion = "1.3";
+    static constexpr const char *FormatVersion = "1.4";
     static constexpr const char *FileSuffix = "uidp";
 
     Project();
@@ -46,12 +46,13 @@ class Project
     QJsonObject bitProfiles;
     QJsonObject logic;
     QJsonObject frameTemplates;
+    QJsonObject enumTables;
     QString filePath; // empty until saved or loaded
     QHash<QString, QStringList> recentEndpoints; // Runtime preview suggestions for this open project.
     QHash<QString, Message> recentTextSamples;
 
     static QString formatVersion(const QJsonArray &widgets, const QJsonObject &logic = {},
-                                 const QJsonObject &frameTemplates = {});
+                                 const QJsonObject &frameTemplates = {}, const QJsonObject &enumTables = {});
     QJsonObject toJson() const;
 
     // Rejects invalid documents before anything replaces the current project.

@@ -452,6 +452,12 @@ QList<WidgetMeta> displayWidgets()
         meta(QStringLiteral("LEDIndicator"), QT_TR_NOOP("LED指示灯"), WidgetCategory::Display, QStringLiteral("led"),
              140, 30,
              {str(QStringLiteral("label"), QT_TR_NOOP("标签"), QT_TR_NOOP("状态")),
+              choice(QStringLiteral("stateMode"), QT_TR_NOOP("状态显示"), QStringLiteral("开关量"), // i18n: value
+                     {QStringLiteral("开关量"), QStringLiteral("多状态")}).withHelp("display.enum"), // i18n: value
+              text(QStringLiteral("textList"), QT_TR_NOOP("枚举映射"), QString()).withHelp("display.enum"),
+              str(QStringLiteral("enumTable"), QT_TR_NOOP("工程枚举表"), QString()),
+              PropDef{QStringLiteral("ledEffects"), QT_TR_NOOP("灯效"), PropType::Object, QJsonObject(), {}, {}, {}, false, {}},
+              str(QStringLiteral("stateValue"), QT_TR_NOOP("预览值"), QStringLiteral("0")),
               choice(QStringLiteral("color"), QT_TR_NOOP("颜色"), QStringLiteral("green"),
                      {QStringLiteral("green"), QStringLiteral("red"), QStringLiteral("yellow"), QStringLiteral("blue"),
                       QStringLiteral("orange"), QStringLiteral("cyan"), QStringLiteral("purple"),
@@ -485,6 +491,7 @@ QList<WidgetMeta> displayWidgets()
                      kDisplayFormats + QStringList{QStringLiteral("枚举")}),                          // i18n: value
               text(QStringLiteral("textList"), QT_TR_NOOP("枚举映射"), QString()).withHelp("display.enum"),
               str(QStringLiteral("unknownText"), QT_TR_NOOP("未匹配文字"), QString()),
+              str(QStringLiteral("enumTable"), QT_TR_NOOP("工程枚举表"), QString()),
               color(QStringLiteral("unknownColor"), QT_TR_NOOP("未匹配颜色"), QStringLiteral("#d13438")),
               choice(QStringLiteral("decimals"), QT_TR_NOOP("小数位数"),
                      QStringLiteral("自动"), // i18n: value

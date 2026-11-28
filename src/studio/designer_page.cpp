@@ -264,10 +264,50 @@ std::optional<QJsonObject> clipboardDocument(const QByteArray &content, bool pla
     QJsonObject selection{{QStringLiteral("widgets"), widgets}};
     selection.insert(QStringLiteral("version"), object.contains(QStringLiteral("version"))
                                                     ? object.value(QStringLiteral("version"))
-                                                    : QJsonValue(Project::formatVersion(widgets)));
+                                                    : QJsonValue(Project::formatVersion(widgets, {}, {}, object.value(QStringLiteral("enumTables")).toObject())));
     if (object.contains(QStringLiteral("frameTemplates")))
         selection.insert(QStringLiteral("frameTemplates"), object.value(QStringLiteral("frameTemplates")));
+    if (object.contains(QStringLiteral("enumTables")))
+        selection.insert(QStringLiteral("enumTables"), object.value(QStringLiteral("enumTables")));
     return selection;
+}
+
+QJsonObject referencedEnums(const QJsonObject &tables, const QJsonArray &widgets)
+{
+    QJsonObject used;
+    visitWidgets(widgets, [&](const QJsonObject &widget) {
+        const auto name = widget.value(QStringLiteral("properties")).toObject().value(QStringLiteral("enumTable")).toString();
+        if (tables.contains(name))
+            used.insert(name, tables.value(name));
+        return true;
+    });
+    return used;
+}
+
+// Bring each referenced table with the pasted widgets. A conflicting name in the destination keeps its meaning.
+QJsonArray importEnumReferences(QJsonArray widgets, const QJsonObject &source, QJsonObject &destination)
+{
+    for (qsizetype i = 0; i < widgets.size(); ++i) {
+        auto widget = widgets.at(i).toObject();
+        auto props = widget.value(QStringLiteral("properties")).toObject();
+        const auto original = props.value(QStringLiteral("enumTable")).toString();
+        if (source.contains(original)) {
+            const auto mapping = source.value(original);
+            QString name = original;
+            for (int n = 2; (destination.contains(name) && destination.value(name) != mapping) ||
+                            (source.contains(name) && source.value(name) != mapping); ++n)
+                name = QStringLiteral("%1 (%2)").arg(original).arg(n);
+            destination.insert(name, mapping);
+            if (name != original) {
+                props.insert(QStringLiteral("enumTable"), name);
+                widget.insert(QStringLiteral("properties"), props);
+            }
+        }
+        if (widget.contains(QStringLiteral("children")))
+            widget.insert(QStringLiteral("children"), importEnumReferences(widget.value(QStringLiteral("children")).toArray(), source, destination));
+        widgets[i] = widget;
+    }
+    return widgets;
 }
 
 QJsonObject referencedFrameTemplates(const QJsonObject &library, const QJsonArray &widgets)
@@ -609,6 +649,7 @@ void DesignerPage::applyProjectSettings()
     m_scene->setCanvasSize(QSize(m_project.canvasWidth, m_project.canvasHeight));
     m_scene->setProjectParser(m_project.parserType());
     m_scene->setBitProfiles(m_project.bitProfiles);
+    m_scene->setEnumTables(m_project.enumTables);
     m_scene->setGridSize(m_project.gridSize);
 }
 
@@ -920,6 +961,9 @@ void DesignerPage::copy()
     const auto templates = referencedFrameTemplates(m_project.frameTemplates, widgets);
     if (!templates.isEmpty())
         document.insert(QStringLiteral("frameTemplates"), templates);
+    const auto tables = referencedEnums(m_project.enumTables, widgets);
+    if (!tables.isEmpty())
+        document.insert(QStringLiteral("enumTables"), tables);
     const QByteArray json = QJsonDocument(document).toJson(QJsonDocument::Compact);
     auto *mime = new QMimeData;
     mime->setData(QLatin1String(WidgetsClipboardType), json);
@@ -942,6 +986,15 @@ void DesignerPage::paste()
     }
     // Checked as opening a project checks them; a link card's frame format against this project's mode.
     if (document) {
+        const auto enums = document->value(QStringLiteral("enumTables"));
+        if (enums.isUndefined() || enums.isObject()) {
+            auto definitions = referencedEnums(m_project.enumTables, document->value(QStringLiteral("widgets")).toArray());
+            const auto incoming = enums.toObject();
+            for (auto it = incoming.begin(); it != incoming.end(); ++it)
+                definitions.insert(it.key(), it.value());
+            if (!definitions.isEmpty())
+                document->insert(QStringLiteral("enumTables"), definitions);
+        }
         document->insert(QStringLiteral("serial"), QJsonObject{{QStringLiteral("parser"), m_project.parserType()},
                                                                {QStringLiteral("parserConfig"), m_project.parserConfig()}});
         const auto library = document->value(QStringLiteral("frameTemplates"));
@@ -969,9 +1022,15 @@ void DesignerPage::paste()
     m_pasteContent = content;
     m_pasteTarget = target;
     const auto previous = m_project.frameTemplates;
+    const auto previousEnums = m_project.enumTables;
+    clipboard.widgets = importEnumReferences(clipboard.widgets, clipboard.enumTables, m_project.enumTables);
+    m_scene->setEnumTables(m_project.enumTables);
     m_project.frameTemplates = importClipboardFrameTemplates(clipboard, previous);
-    if (m_scene->paste(clipboard.widgets, container, m_pasteCount).isEmpty())
+    if (m_scene->paste(clipboard.widgets, container, m_pasteCount).isEmpty()) {
         m_project.frameTemplates = previous;
+        m_project.enumTables = previousEnums;
+        m_scene->setEnumTables(previousEnums);
+    }
 }
 
 bool DesignerPage::maybeSave()

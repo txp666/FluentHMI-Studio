@@ -99,7 +99,7 @@ LedWidget::LedWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, 
     layout->setContentsMargins(34, 0, 4, 0);
     m_label = new FluentQt::BodyLabel(this);
     layout->addWidget(m_label);
-    m_blinkTimer.setInterval(450);
+    m_blinkTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_blinkTimer, &QTimer::timeout, this, [this]() {
         m_blinkVisible = !m_blinkVisible;
         update();
@@ -109,18 +109,33 @@ LedWidget::LedWidget(const WidgetMeta &meta, QWidget *parent) : HmiWidget(meta, 
 
 void LedWidget::apply()
 {
-    if (!isBound()) {
-        m_on = flag("on");
-        m_known = true;
+    m_multiState = usesMultiStateLed(properties());
+    if (m_multiState) {
+        m_entries = parseValueText(enumMapping(properties(), enumTables()));
+        m_effects = parseLedEffects(prop("ledEffects"));
+        showEnumValue(isBound() ? m_reading : prop("stateValue").toVariant());
+    } else {
+        m_stateLabel.clear();
+        m_halfPeriod = flag("blink") ? 450 : 0;
+        if (!isBound()) {
+            m_on = flag("on");
+            m_known = true;
+        }
     }
     m_label->setPixelFontSize(std::clamp(integer("fontSize") > 0 ? integer("fontSize") : 14, 10, 64));
-    updateBlinkTimer();
     bindingStatusChanged(bindingStatus());
-    updateLayoutGeometry();
 }
 
 void LedWidget::applyBoundValue(const QVariant &value, const BindingEntry &binding)
 {
+    if (m_multiState) {
+        if (m_reading != value || m_reading.metaType() != value.metaType()) {
+            showEnumValue(value);
+            bindingStatusChanged(bindingStatus());
+        }
+        return;
+    }
+    m_reading = value;
     const auto on = bindingLed(value, binding.ledOnValue, binding.ledOffValue);
     const bool knownChanged = m_known != on.has_value();
     m_known = on.has_value();
@@ -134,13 +149,29 @@ void LedWidget::applyBoundValue(const QVariant &value, const BindingEntry &bindi
     }
 }
 
+void LedWidget::showEnumValue(const QVariant &value)
+{
+    m_reading = value;
+    const auto key = valueTextKey(value);
+    const auto entry = m_entries.constFind(key);
+    m_known = entry != m_entries.cend();
+    if (m_known)
+        m_stateLabel = entry->text;
+    else
+        m_stateLabel = value.isValid() ? tr("未知状态（%1）").arg(displayString(value)) : tr("数据未知");
+    m_stateColor = m_known ? QColor(entry->color) : QColor();
+    const auto effect = m_effects.value(key);
+    m_on = m_known && effect != u"off";
+    m_halfPeriod = effect == u"slow" ? 500 : effect == u"fast" ? 250 : 0;
+}
+
 void LedWidget::updateBlinkTimer()
 {
     const bool available = !isBound() || bindingStatus() == BindingStatus::Live;
-    if (flag("blink") && available && m_known && m_on) {
-        if (!m_blinkTimer.isActive()) {
+    if (m_halfPeriod > 0 && available && m_known && m_on) {
+        if (!m_blinkTimer.isActive() || m_blinkTimer.interval() != m_halfPeriod) {
             m_blinkVisible = true;
-            m_blinkTimer.start();
+            m_blinkTimer.start(m_halfPeriod);
         }
     } else {
         m_blinkTimer.stop();
@@ -155,6 +186,8 @@ void LedWidget::bindingStatusChanged(BindingStatus status)
         detail = tr("待采集");
     } else if (status == BindingStatus::Stale) {
         detail = tr("数据已过期");
+    } else if (m_multiState) {
+        detail = m_stateLabel;
     } else if (!m_known) {
         detail = tr("数据未知");
     }
@@ -162,6 +195,7 @@ void LedWidget::bindingStatusChanged(BindingStatus status)
     if (!detail.isEmpty())
         label = label.isEmpty() ? detail : QStringLiteral("%1 · %2").arg(label, detail);
     m_label->setText(label);
+    setToolTip(m_multiState ? label : QString());
     setAccessibleDescription(detail);
     updateBlinkTimer();
     updateLayoutGeometry();
@@ -224,20 +258,26 @@ void LedWidget::updateLayoutGeometry()
     if (shape == QStringLiteral("胶囊灯牌") || pos == QStringLiteral("内部居中")) { // i18n: value
         layout()->setContentsMargins(8, 2, 8, 2);
         m_label->setAlignment(Qt::AlignCenter);
-        return;
-    }
-    const qreal d = lampDiameter();
-    if (pos == QStringLiteral("底部")) { // i18n: value
+    } else if (pos == QStringLiteral("底部")) { // i18n: value
+        const qreal d = lampDiameter();
         const int topSpace = std::min(int(d + 6), std::max(0, height() - m_label->fontMetrics().height() - 2));
         layout()->setContentsMargins(4, topSpace, 4, 2);
         m_label->setAlignment(Qt::AlignHCenter | Qt::AlignBottom);
-        return;
+    } else {
+        const qreal d = lampDiameter();
+        const qreal glowRadius = std::min<qreal>(d * 0.75, std::min(width(), height()) / 2.0);
+        const int leftMargin = std::max(28, int(std::max(d, glowRadius * 2) + 8));
+        layout()->setContentsMargins(leftMargin, 0, 4, 0);
+        m_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     }
-    // Default: 右侧
-    const qreal glowRadius = std::min<qreal>(d * 0.75, std::min(width(), height()) / 2.0);
-    const int leftMargin = std::max(28, int(std::max(d, glowRadius * 2) + 8));
-    layout()->setContentsMargins(leftMargin, 0, 4, 0);
-    m_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    if (m_multiState) {
+        // A compact lamp still needs to show the state code when its fixed caption does not fit.
+        const auto margins = layout()->contentsMargins();
+        const int available = std::max(0, width() - margins.left() - margins.right());
+        const auto metrics = m_label->fontMetrics();
+        m_label->setText(metrics.horizontalAdvance(toolTip()) <= available ? toolTip()
+                         : metrics.elidedText(accessibleDescription(), Qt::ElideMiddle, available));
+    }
 }
 
 void LedWidget::paintEvent(QPaintEvent *)
@@ -246,7 +286,7 @@ void LedWidget::paintEvent(QPaintEvent *)
     painter.setRenderHint(QPainter::Antialiasing);
     const QString shape = text("ledShape");
     const QString pos = text("labelPosition");
-    const QColor color = ledColor(text("color"));
+    const QColor color = m_multiState ? (m_stateColor.isValid() ? m_stateColor : accentColor()) : ledColor(text("color"));
     const bool available = !isBound() || bindingStatus() == BindingStatus::Live;
     const bool lit = available && m_known && m_on && m_blinkVisible;
     const bool dark = isDarkTheme();
@@ -388,7 +428,7 @@ void NumericDisplayWidget::apply()
     m_unit->setMinimumHeight(m_unit->fontMetrics().height());
     if (!isLive())
         m_reading = formatDisplayValue(prop("value").toVariant(), text("displayFormat"), text("decimals"));
-    m_enumEntries = enumeration ? parseValueText(text("textList")) : QHash<QString, ValueText>();
+    m_enumEntries = enumeration ? parseValueText(enumMapping(properties(), enumTables())) : QHash<QString, ValueText>();
     m_value->setPixelFontSize(std::max(8, integer("fontSize"))); // pixels, like the Python designer
     QFont font = m_value->font();
     font.setBold(true);
@@ -421,6 +461,8 @@ void NumericDisplayWidget::showValue(const QVariant &value)
         } else {
             if (!text("unknownText").isEmpty())
                 label = text("unknownText");
+            else if (!text("enumTable").isEmpty())
+                label = tr("未知状态（%1）").arg(label);
             if (QColor(text("unknownColor")).isValid())
                 color = QColor(text("unknownColor"));
         }
@@ -428,6 +470,8 @@ void NumericDisplayWidget::showValue(const QVariant &value)
     const bool mutedState = bindingStatus() == BindingStatus::Waiting || bindingStatus() == BindingStatus::Stale;
     if (mutedState) {
         color = isDarkTheme() ? QColor(QStringLiteral("#8a8a8a")) : QColor(QStringLiteral("#909090"));
+        if (!text("enumTable").isEmpty() && text("displayFormat") == QStringLiteral("枚举")) // i18n: value
+            label = bindingStatus() == BindingStatus::Waiting ? tr("待采集") : tr("数据已过期");
     }
     m_value->setText(label);
     m_value->setTextColor(color, color);

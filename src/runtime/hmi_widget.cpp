@@ -55,6 +55,14 @@ void HmiWidget::setAssetBaseDir(const QString &dir)
     apply();
 }
 
+void HmiWidget::setEnumTables(const QJsonObject &tables)
+{
+    if (m_enumTables == tables || !meta().prop(QStringLiteral("enumTable")))
+        return;
+    m_enumTables = tables;
+    apply();
+}
+
 void HmiWidget::applyBoundValue(const QVariant &, const BindingEntry &) {}
 
 void HmiWidget::setBindingStatus(BindingStatus status)
