@@ -209,6 +209,68 @@ bool movePath(const QString &from, const QString &to)
     return info.isDir() && !info.isSymLink() ? QDir().rename(from, to) : QFile::rename(from, to);
 }
 
+bool projectUsesCanCard(const QJsonArray &widgets)
+{
+    return !visitWidgets(widgets, [](const QJsonObject &widget) {
+        return widget.value(QStringLiteral("type")).toString() != QLatin1String("CanConfigCard");
+    });
+}
+
+// Copies vendor CAN driver files and folders (ZLG's zlgcan.dll + kerneldlls/ or zlgcan/, PEAK's PCANBasic.dll,
+// ControlCAN.dll) placed beside Studio or the runtime into `targetDir` so exported applications work out of the box.
+[[maybe_unused]] bool bundleCanDrivers(const QList<QDir> &sourceDirs, const QString &targetDir, QString *error)
+{
+    static const QStringList kDriverFilePatterns{
+        QStringLiteral("zlgcan.dll"),
+        QStringLiteral("PCANBasic.dll"),
+        QStringLiteral("ControlCAN.dll"),
+    };
+    static const QStringList kDriverDirNames{
+        QStringLiteral("kerneldlls"),
+        QStringLiteral("zlgcan"),
+    };
+
+    for (const QDir &dir : sourceDirs) {
+        if (!dir.exists()) {
+            continue;
+        }
+        QStringList entries = dir.entryList(kDriverFilePatterns, QDir::Files);
+        for (const QString &subDir : dir.entryList(kDriverDirNames, QDir::Dirs | QDir::NoDotAndDotDot)) {
+            entries.append(subDir);
+        }
+        // If kerneldlls/dll_cfg.ini names companion kernel DLLs that were placed directly in `dir`, include them too.
+        QFile ini(dir.filePath(QStringLiteral("kerneldlls/dll_cfg.ini")));
+        if (ini.open(QIODevice::ReadOnly)) {
+            const QStringList lines = QString::fromLocal8Bit(ini.readAll()).split(QLatin1Char('\n'));
+            for (const QString &raw : lines) {
+                const QString line = raw.trimmed();
+                const qsizetype eq = line.indexOf(QLatin1Char('='));
+                if (eq < 0 || line.startsWith(QLatin1Char(';')) || line.startsWith(QLatin1Char('#'))) {
+                    continue;
+                }
+                const QStringList fields = line.mid(eq + 1).simplified().split(QLatin1Char(' '));
+                if (!fields.isEmpty() && !fields.first().isEmpty()) {
+                    for (const QString &matched : dir.entryList({fields.first()}, QDir::Files)) {
+                        if (!entries.contains(matched)) {
+                            entries.append(matched);
+                        }
+                    }
+                }
+            }
+        }
+        for (const QString &entry : std::as_const(entries)) {
+            const QString dst = QDir(targetDir).filePath(entry);
+            if (QFileInfo::exists(dst)) {
+                continue;
+            }
+            if (!copyTree(dir.filePath(entry), dst, error)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 #ifdef Q_OS_MACOS
 QString plistEscape(const QString &text)
 {
@@ -716,6 +778,25 @@ QString ExportService::exportApplication(const Project &project, const QString &
     if (!copyTree(runtime, staging, error)) {
         return abort(QString());
     }
+    if (projectUsesCanCard(widgets)) {
+        const QString stagedFrameworks = QDir(staging).filePath(QStringLiteral("Contents/Frameworks"));
+        const QString targetPcan = QDir(stagedFrameworks).filePath(QStringLiteral("libPCBUSB.dylib"));
+        if (!QFileInfo::exists(targetPcan)) {
+            const QStringList pcanSources{
+                QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Frameworks/libPCBUSB.dylib")),
+                QStringLiteral("/usr/local/lib/libPCBUSB.dylib"),
+            };
+            for (const QString &src : pcanSources) {
+                if (QFileInfo(src).isReadable()) {
+                    QDir().mkpath(stagedFrameworks);
+                    if (!copyTree(src, targetPcan, error)) {
+                        return abort(QString());
+                    }
+                    break;
+                }
+            }
+        }
+    }
     const QString stagedResources = QDir(staging).filePath(QStringLiteral("Contents/Resources"));
     const QString icnsName = QStringLiteral("AppIcon.icns");
     if (!rebrandInfoPlist(QDir(staging).filePath(QStringLiteral("Contents/Info.plist")), project.appName,
@@ -779,6 +860,9 @@ QString ExportService::exportApplication(const Project &project, const QString &
         if (!copyTree(runtimeDir.filePath(file), target, error)) {
             return abort(QString());
         }
+    }
+    if (!bundleCanDrivers({runtimeDir, QDir(QCoreApplication::applicationDirPath())}, appDir, error)) {
+        return abort(QString());
     }
     const QString stagedResources = appDir;
     const QString exe = QDir(appDir).filePath(runtimeInfo.fileName());

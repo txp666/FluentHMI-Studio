@@ -3,6 +3,8 @@
 
 #include "core/can_timing.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
 #include <QtCore/QLibrary>
 
 #include <algorithm>
@@ -62,11 +64,14 @@ bool loadApi(QString *error)
         return true;
     }
 #ifdef Q_OS_WIN
-    const QStringList candidates{QStringLiteral("PCANBasic")};
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates{QDir(appDir).filePath(QStringLiteral("PCANBasic.dll")), QStringLiteral("PCANBasic")};
     const QString missing = PcanBackend::tr("找不到 PCANBasic.dll：请安装 PEAK 的设备驱动（包含 PCAN-Basic）");
 #else
-    // MacCAN's installer puts the library in /usr/local/lib, which the loader does not search by itself.
-    const QStringList candidates{QStringLiteral("/usr/local/lib/libPCBUSB.dylib"), QStringLiteral("PCBUSB")};
+    // Look inside the app bundle's Frameworks first (if bundled on export), then MacCAN's /usr/local/lib location.
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates{QDir(appDir).filePath(QStringLiteral("../Frameworks/libPCBUSB.dylib")),
+                                 QStringLiteral("/usr/local/lib/libPCBUSB.dylib"), QStringLiteral("PCBUSB")};
     const QString missing =
         PcanBackend::tr("找不到 libPCBUSB.dylib：请从 mac-can.com 下载并安装 PCBUSB 库（安装到 /usr/local/lib）");
 #endif
